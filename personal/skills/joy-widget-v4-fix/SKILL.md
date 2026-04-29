@@ -137,8 +137,13 @@ Format: `fix(widget-v4): [layer] — [root cause] — [fix]`
 
 ## References
 
-- `.claude/skills/frontend-fix/SKILL.md` — base 3-layer workflow
-- `.claude/skills/playwright-cli/references/shadow-dom.md` — `__joyDebug` API
-- `.claude/skills/web-components/references/css-variable-map.md` — CSS var pipeline
-- `packages/web-components/src/components/widget/joy-loyalty-widget.ts` — main widget logic
-- Personal notes: bug-fix-workflow-notes.md section 11
+### Local references (in this skill folder)
+- `references/shadow-dom.md` — `__joyDebug` API full guide for shadow DOM inspection
+- `references/css-variable-map.md` — CSS variable pipeline: editor setting → attribute → CSS var → component
+
+### External references
+- `~/.claude/skills/joy-frontend-fix/SKILL.md` — full 3-layer workflow (personal v2)
+- `~/.claude/commands/joy-batch-fix.md` — batch fix multiple bugs from Notion
+- `<joy-repo>/.claude/skills/frontend-fix/SKILL.md` — team base skill
+- `<joy-repo>/packages/web-components/src/components/widget/joy-loyalty-widget.ts` — main widget logic
+- Personal notes: `bug-fix-workflow-notes.md` section 11
