@@ -17,3 +17,7 @@ extension/.auth.json
 .env.*
 !.env.example
 supabase/.temp/
+
+# Personal
+.idea/
+.DS_Store
