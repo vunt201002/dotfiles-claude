@@ -8,6 +8,7 @@ Skill, command, và reference cá nhân, build trên top của gstack.
 personal/
 ├── skills/              # SKILL.md folders, symlink riêng từng skill vào ~/.claude/skills/
 │   ├── my-bug-hunter/   # Cross-project: hypothesis-first debug workflow
+│   ├── notion-task-personal/    # Cross-project: Joy Notion task board CLI (standalone)
 │   ├── joy-frontend-fix/        # Joy-specific: frontend-fix v2 with __joyDebug
 │   └── joy-widget-v4-fix/       # Joy-specific: widget v4 4-layer playbook
 │       └── references/
