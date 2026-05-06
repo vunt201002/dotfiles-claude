@@ -15,6 +15,7 @@ personal/
 │           ├── shadow-dom.md
 │           └── css-variable-map.md
 ├── commands/            # Slash commands, symlink vào ~/.claude/commands/
+│   ├── my-commit.md             # Cross-project: commit only session changes, split by type
 │   └── joy-batch-fix.md         # Joy-specific: batch fix from Notion
 └── docs/                # Reference docs (KHÔNG symlink, đọc khi cần)
     ├── frontend-fix-workflow.md
