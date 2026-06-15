@@ -1,6 +1,6 @@
 ---
 name: merge-branch
-description: Cross-project skill to assemble many feature branches into one merge branch for shared-staging testing. From any branch, it detects the repo's true main branch, checks it out, pulls latest, creates a fresh merge branch (default merge/task-DD-MM-YYYY), then merges each requested branch from remote (origin) one at a time — every branch becomes exactly one commit. On conflict it stops, resolves carefully in context, reports what it did, commits, then continues to the next branch. Does NOT push. Use when asked to "merge these branches", "gộp các nhánh để test", "merge-branch", "combine branches for staging", or "build a merge branch".
+description: Cross-project skill to assemble many feature branches into one merge branch for shared-staging testing. From any branch, it detects the repo's true main branch, checks it out, pulls latest, creates a fresh merge branch (default merge/task-DD-MM-YYYY), then merges each requested branch from remote (origin) one at a time — every branch becomes exactly one commit. On conflict it stops, resolves carefully in context, reports what it did, commits, then continues to the next branch. As the final step it asks for a staging number and hands off to /deploy-staging to push and deploy (nothing is pushed before that question). Use when asked to "merge these branches", "gộp các nhánh để test", "merge-branch", "combine branches for staging", or "build a merge branch".
 ---
 
 # /merge-branch — Assemble feature branches into one merge branch
@@ -27,9 +27,10 @@ history reads cleanly: one merge commit per branch, in the order requested.
 - **Working tree must be clean before starting.** If `git status --porcelain` shows
   any changes, STOP and tell the user to commit/stash first. Never merge on top of a
   dirty tree.
-- **Never push.** This skill only builds the merge branch locally. The user does the
-  next action (deploy/test) themselves. Do not `git push` unless explicitly asked in
-  a later message.
+- **The merge assembly never pushes on its own.** Building the merge branch is purely
+  local. The only push happens in the final deploy step (Step 7), and only after the
+  user gives a staging number — pushing is delegated to `/deploy-staging`, never done
+  directly here.
 - **Always merge from remote.** Every branch in the list is merged from
   `origin/<branch>` after a fresh fetch — never from a possibly-stale local branch.
 - **One commit per branch.** Use `git merge --no-ff` so even fast-forwardable
@@ -225,11 +226,32 @@ Merged:  N branches, in order
   ✓ branch-a    clean
   ✓ branch-b    conflict resolved (2 files: routes.ts, config.json)
 ────────────────────────────────
-Not pushed (by design). Next: deploy/test this branch in staging.
+Local only, not pushed yet. Next: pick a staging slot to deploy to.
 ```
 
 Show `git log --oneline <main>..HEAD` so the user sees exactly one commit per branch.
-Remind them the branch is local-only and not pushed.
+Remind them the branch is local-only and not pushed — pushing happens in Step 7.
+
+---
+
+## Step 7 — Deploy to a staging slot (asks first, then hands off)
+
+The whole point of the merge branch is to test everything in one shared staging slot.
+So the final step deploys it — but **never push without asking which slot first**.
+
+1. **Ask the user for the staging number** (AskUserQuestion). This is required before
+   anything is pushed. Offer:
+   - A number (the staging slot to claim, e.g. `9`).
+   - "Skip / I'll deploy later" — if chosen, stop here. The branch stays local; tell
+     the user they can run `/deploy-staging <N>` themselves anytime.
+2. **Hand off to `/deploy-staging <N>`** with the number the user gave, while still on
+   the merge branch. That skill does the rest: rewrites the staging jobs' branch ref
+   in `.gitlab-ci.yml` to this merge branch, commits `deploy: staging <N>`, and pushes
+   the merge branch (which carries all the merge commits) to trigger the pipeline.
+
+Do not reimplement the CI-ref editing or the push here — delegate to `/deploy-staging`
+so there's a single source of truth for how a staging deploy works. The only thing
+this step owns is **asking for the slot before any push happens**.
 
 ---
 
@@ -242,5 +264,8 @@ Remind them the branch is local-only and not pushed.
 - **Resolve-then-continue** keeps the whole assembly in one pass — the point is to get
   every branch into one slot, so stopping dead on the first conflict would defeat it.
   But unconfident conflicts still escalate to the user; correctness over speed.
-- **No push** because the user's next move (deploy, run, test) is deliberately a
-  separate, explicit action.
+- **Deploy is a handoff, gated on a question.** Assembling the branch and deploying it
+  are one workflow (build a slot, test it), so Step 7 chains into `/deploy-staging`
+  rather than leaving the user to remember it. But the push only happens after the user
+  names a staging slot — no silent deploy. The CI-ref logic lives in `/deploy-staging`,
+  not duplicated here.
