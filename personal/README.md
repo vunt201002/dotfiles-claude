@@ -7,6 +7,7 @@ Skill, command, và reference cá nhân, build trên top của gstack.
 ```
 personal/
 ├── skills/              # SKILL.md folders, symlink riêng từng skill vào ~/.claude/skills/
+│   ├── deploy-staging/  # Cross-project: trỏ staging slot N (GitLab CI) vào branch hiện tại + push
 │   ├── merge-branch/    # Cross-project: gộp nhiều nhánh vào 1 merge branch để test chung staging
 │   ├── my-bug-hunter/   # Cross-project: hypothesis-first debug workflow
 │   ├── notion-task-personal/    # Cross-project: Joy Notion task board CLI (standalone)
