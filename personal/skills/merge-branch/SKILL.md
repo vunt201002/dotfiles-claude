@@ -1,6 +1,6 @@
 ---
 name: merge-branch
-description: Cross-project skill to assemble many feature branches into one merge branch for shared-staging testing. From any branch, it detects the repo's true main branch, checks it out, pulls latest, creates a fresh merge branch (default merge/task-DD-MM-YYYY), then merges each requested branch from remote (origin) one at a time — every branch becomes exactly one commit. On conflict it stops, resolves carefully in context, reports what it did, commits, then continues to the next branch. As the final step it asks for a staging number and hands off to /deploy-staging to push and deploy (nothing is pushed before that question). Use when asked to "merge these branches", "gộp các nhánh để test", "merge-branch", "combine branches for staging", or "build a merge branch".
+description: Cross-project skill to assemble many feature branches into one merge branch for shared-staging testing. From any branch, it detects the repo's true main branch. It first brings every requested feature branch up to date with main (merging main into each, resolving conflicts carefully) and — after an explicit confirmation — pushes those updated branches back to remote. Then it checks out main, pulls latest, creates a fresh merge branch (default merge/task-DD-MM-YYYY), and merges each requested branch from remote (origin) one at a time — every branch becomes exactly one commit. On conflict it stops, resolves carefully in context, reports what it did, commits, then continues. As the final step it asks for a staging number and hands off to /deploy-staging to push and deploy. Use when asked to "merge these branches", "gộp các nhánh để test", "merge-branch", "combine branches for staging", or "build a merge branch".
 ---
 
 # /merge-branch — Assemble feature branches into one merge branch
@@ -20,6 +20,11 @@ today's date in `DD-MM-YYYY`, e.g. on 2026-06-15 the default is `merge/task-15-0
 **Each merged branch becomes exactly one commit** (a `--no-ff` merge commit), so the
 history reads cleanly: one merge commit per branch, in the order requested.
 
+**Before assembling, each feature branch is updated with main** (Step 2.5): main is
+merged into branch-a, branch-b, ... so they're current and conflict less when combined.
+Those updated branches are pushed back to remote, but only after you confirm — pushing
+shared branches changes their PRs and teammates' work, so it's gated.
+
 ---
 
 ## HARD GATES
@@ -27,12 +32,17 @@ history reads cleanly: one merge commit per branch, in the order requested.
 - **Working tree must be clean before starting.** If `git status --porcelain` shows
   any changes, STOP and tell the user to commit/stash first. Never merge on top of a
   dirty tree.
-- **The merge assembly never pushes on its own.** Building the merge branch is purely
-  local. The only push happens in the final deploy step (Step 7), and only after the
-  user gives a staging number — pushing is delegated to `/deploy-staging`, never done
-  directly here.
+- **The merge-branch assembly itself never pushes.** Building the merge branch
+  (Steps 3-6) is purely local. The merge branch is only pushed in the final deploy
+  step (Step 7), after the user gives a staging number — delegated to
+  `/deploy-staging`, never pushed directly here.
+- **The only other push is the feature-branch update (Step 2.5), and it is gated.**
+  Updating each feature branch with main and pushing it back changes shared branches
+  on the remote, so it happens ONLY after an explicit confirmation listing exactly
+  which branches will be pushed. Never force-push; a rejected push stops and reports.
 - **Always merge from remote.** Every branch in the list is merged from
   `origin/<branch>` after a fresh fetch — never from a possibly-stale local branch.
+  (Step 2.5 pushes the updated branches first precisely so this remote ref is current.)
 - **One commit per branch.** Use `git merge --no-ff` so even fast-forwardable
   branches produce a distinct merge commit. On conflict, resolve then commit — still
   one commit for that branch.
@@ -130,6 +140,84 @@ to reconcile their local main first; don't force anything.
 
 ---
 
+## Step 2.5 — Update each feature branch with main first (then push)
+
+Before assembling the merge branch, bring **every feature branch up to date with
+main**, so each one is tested against current main and produces fewer conflicts when
+combined. For each branch in the list: check it out from remote, merge main into it,
+resolve any conflicts, and **push it back to remote** (the assembly in Step 4 merges
+from `origin/<branch>`, so the update only counts once it's pushed).
+
+**This step pushes to shared feature branches — that changes them on the remote**
+(affecting their PRs and anyone else working on them). So it is gated: nothing is
+pushed until the user confirms the list.
+
+### 2.5a — Validate the whole list exists on remote (before touching anything)
+
+```bash
+# After the Step 2 fetch. For each NAME in the list:
+git show-ref --verify --quiet "refs/remotes/origin/<NAME>" && echo "OK <NAME>" || echo "MISSING <NAME>"
+```
+
+If any are `MISSING`, STOP and report which — do not start updating a partial set.
+Ask the user whether to proceed with the ones that exist or fix the names first.
+(Validating up front means we never push half the branches and then hit a bad name.)
+
+### 2.5b — For each branch, in the listed order
+
+Substitute the real names for `<main>` and `<NAME>`:
+
+```bash
+git checkout -B <NAME> "origin/<NAME>"   # local <NAME> tracking the remote tip
+git merge --no-ff <main> -m "merge: <main> into <NAME>"
+```
+
+Then check the result:
+
+- **Already up to date** (merge says "Already up to date") → main is already in this
+  branch. **Skip it — do not push** (an empty push is noise). Note `<NAME> — already
+  current` for the report and move to the next branch.
+- **Merged cleanly** (a merge commit was created) → proceed to push (2.5c).
+- **Conflict** → resolve it carefully, exactly the way Step 5 describes (list
+  conflicts with `git diff --name-only --diff-filter=U`, understand both sides, keep
+  both when independent, STOP and ask when a true incompatible conflict you're not
+  confident about, stage **resolved files by name** — never `git add -A` — then
+  `git commit --no-edit`). Then proceed to push (2.5c).
+
+Never start the next branch while the current one's merge/conflict is unresolved.
+
+### 2.5c — Confirm, then push the updated branches
+
+Updating a shared branch on the remote is outward-facing, so confirm before pushing.
+After all branches are merged locally, show what will be pushed and ask
+(AskUserQuestion):
+
+```
+UPDATE-MAIN PLAN — push these updated branches to origin?
+────────────────────────────────
+  branch-a   merged main (1 conflict resolved: routes.ts)  → will push
+  branch-b   already current                                → skip (no push)
+────────────────────────────────
+These pushes change the branches on the remote (their PRs, teammates' work).
+```
+
+- Offer: **A) Push the updated branches** / **B) Skip pushing — keep updates local
+  only** (then Step 4 will merge stale remote refs, so warn it makes this step moot)
+  / **C) Cancel**.
+- On **A**, push each branch that actually changed (skip the "already current" ones),
+  one at a time, without force:
+
+  ```bash
+  git push origin <NAME>          # plain push, never --force
+  ```
+
+  If a push is **rejected** (e.g. the remote branch moved under you), STOP and report
+  that branch — do **not** force-push. The user decides how to reconcile.
+
+Only after this step do we build the merge branch (Step 3).
+
+---
+
 ## Step 3 — Create the merge branch
 
 Create a fresh branch off the just-updated main. Substitute the chosen name for
@@ -148,16 +236,14 @@ fresh off main, (B) pick a different name. Only delete with explicit consent:
 
 ## Step 4 — Merge each branch, one at a time
 
-First validate every requested branch exists on remote (after the Step 2 fetch):
+Existence on remote was already validated in Step 2.5a, so no need to re-check names.
+But Step 2.5 just pushed updated branches, so refresh the remote refs first to be sure
+you merge the **updated** `origin/<NAME>` (the one that now contains main), not a stale
+cached ref:
 
 ```bash
-# For each NAME in the list:
-git show-ref --verify --quiet "refs/remotes/origin/<NAME>" && echo "OK <NAME>" || echo "MISSING <NAME>"
+git fetch origin --prune
 ```
-
-If any are `MISSING`, stop and report which — don't start merging a partial set
-without telling the user. Ask whether to proceed with the ones that exist or fix the
-names first.
 
 Then, **in the listed order**, merge each branch from remote with `--no-ff`:
 
@@ -233,12 +319,14 @@ MERGE BRANCH READY
 ────────────────────────────────
 Main:    <main>  (detected; note if both main/master existed)
 Branch:  <merge-name>
-Merged:  N branches, in order
+Updated with main + pushed:  branch-a (1 conflict resolved) · branch-b skipped (already current)
+Merged into merge branch:    N branches, in order
 ────────────────────────────────
   ✓ branch-a    clean
   ✓ branch-b    conflict resolved (2 files: routes.ts, config.json)
 ────────────────────────────────
-Local only, not pushed yet. Next: pick a staging slot to deploy to.
+Merge branch is local-only, not pushed yet. (Feature branches WERE pushed in Step 2.5.)
+Next: pick a staging slot to deploy to.
 ```
 
 Show `git log --oneline <main>..HEAD` so the user sees exactly one commit per branch.
@@ -269,8 +357,15 @@ this step owns is **asking for the slot before any push happens**.
 
 ## Why this design
 
+- **Update each feature branch with main first (Step 2.5).** A branch that's behind
+  main gets tested against stale code and fights more conflicts when combined. Merging
+  main into each branch up front means the staging build reflects how each branch
+  behaves on *current* main, and the Step 4 assembly hits fewer conflicts. It's pushed
+  back so the work persists on the real branch — but gated, because pushing a shared
+  branch is outward-facing (PRs, teammates), never silent.
 - **Remote-sourced merges** guarantee the staging build reflects what's actually on
-  origin, not a teammate's stale local copy.
+  origin, not a teammate's stale local copy. (Step 2.5 pushes the updated branches
+  first, so "remote" is current.)
 - **`--no-ff` everywhere** makes the history legible: one merge commit per branch,
   trivially revertable if one branch turns out to break staging.
 - **Resolve-then-continue** keeps the whole assembly in one pass — the point is to get
