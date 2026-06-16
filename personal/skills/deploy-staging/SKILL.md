@@ -22,8 +22,9 @@ pushes — that's what makes the deploy actually happen.
 ## HARD GATES
 
 - **Only edit `.gitlab-ci.yml`.** This skill rewrites branch refs in that one file
-  and nothing else. Never stage other files. If the working tree has unrelated
-  changes, leave them alone (commit only `.gitlab-ci.yml`).
+  and nothing else. Never stage other files, never `git add -A`. If the working tree
+  has unrelated changes, leave them dirty — the commit must contain `.gitlab-ci.yml`
+  alone (Step 6 commits by path to guarantee this even if something else is staged).
 - **Only touch the requested staging's jobs.** Never modify production jobs (`tags`,
   `master`, `main`, `name: production`) or jobs belonging to a different staging
   number. When unsure whether a job belongs to staging N, ask — don't guess.
@@ -200,16 +201,31 @@ Confirm the diff shows ONLY branch-ref changes inside staging N's jobs (no varia
 conditions, no other jobs, no other files). If anything extra changed, fix it before
 committing.
 
-Then commit just the CI file and push the current branch to trigger the pipeline:
+Then commit **only** the CI file and push the current branch to trigger the pipeline.
+Pass the path straight to `git commit` so the commit captures `.gitlab-ci.yml` and
+nothing else — even if other files happen to be staged already, they stay out:
 
 ```bash
-git add .gitlab-ci.yml
-git commit -m "deploy: staging N"      # exact message, e.g. "deploy: staging 9"
+# Belt-and-suspenders: unstage anything that may already be staged, so the
+# commit can only contain .gitlab-ci.yml.
+git reset -q                                    # clears the index; working tree untouched
+git commit .gitlab-ci.yml -m "deploy: staging N"  # commits ONLY this path, exact message
 git push origin "$(git rev-parse --abbrev-ref HEAD)"
 ```
 
+Why `git commit <path>` instead of `git add` + bare `git commit`: a bare commit
+captures the **whole** staging area, so any pre-staged unrelated file would ride
+along. Naming the path commits only that file's changes, regardless of index state.
+The `git reset -q` first makes doubly sure nothing else is staged. Never `git add -A`.
+
 The commit message is literally `deploy: staging <N>` — no scope, no body, matching
 the example `deploy: staging 9`.
+
+Before committing, sanity-check that only the intended file is in play:
+
+```bash
+git status --short    # expect just " M .gitlab-ci.yml" (other dirty files stay dirty)
+```
 
 ---
 
