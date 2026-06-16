@@ -145,7 +145,8 @@ to reconcile their local main first; don't force anything.
 Before assembling the merge branch, bring **every feature branch up to date with
 main**, so each one is tested against current main and produces fewer conflicts when
 combined. For each branch in the list: check it out from remote, merge main into it,
-resolve any conflicts, and **push it back to remote** (the assembly in Step 4 merges
+resolve any conflicts, **add an empty `[skip ci]` commit so the branch's own deploy
+pipeline doesn't fire**, and **push it back to remote** (the assembly in Step 4 merges
 from `origin/<branch>`, so the update only counts once it's pushed).
 
 **This step pushes to shared feature branches — that changes them on the remote**
@@ -177,12 +178,30 @@ Then check the result:
 - **Already up to date** (merge says "Already up to date") → main is already in this
   branch. **Skip it — do not push** (an empty push is noise). Note `<NAME> — already
   current` for the report and move to the next branch.
-- **Merged cleanly** (a merge commit was created) → proceed to push (2.5c).
+- **Merged cleanly** (a merge commit was created) → add the skip-CI commit (below),
+  then proceed to push (2.5c).
 - **Conflict** → resolve it carefully, exactly the way Step 5 describes (list
   conflicts with `git diff --name-only --diff-filter=U`, understand both sides, keep
   both when independent, STOP and ask when a true incompatible conflict you're not
   confident about, stage **resolved files by name** — never `git add -A` — then
-  `git commit --no-edit`). Then proceed to push (2.5c).
+  `git commit --no-edit`). Then add the skip-CI commit (below) and proceed to push.
+
+### 2.5b-skip — Add an empty `[skip ci]` commit (on every branch that got updated)
+
+These feature branches must NOT trigger their own deploy pipeline — only the merge
+branch gets deployed. So on each branch that actually received a merge (NOT the
+"already current" ones), add an empty commit whose message tells GitLab CI to skip:
+
+```bash
+git commit --allow-empty -m "[skip ci] update branch with <main> (no deploy)"
+```
+
+- The commit changes nothing (`--allow-empty`); its only job is the `[skip ci]` token.
+- **Exact token matters: `[skip ci]` or `[ci skip]`** (with a space) — GitLab only
+  recognizes these. `[skip-ci]` (hyphen) does NOT work and the pipeline would still run.
+- This commit is pushed together with the merge commit in 2.5c, so when the branch
+  lands on the remote, GitLab sees `[skip ci]` on the tip commit and skips the pipeline.
+- Skip this for "already current" branches — there's nothing being pushed for them.
 
 Never start the next branch while the current one's merge/conflict is unresolved.
 
@@ -195,9 +214,11 @@ After all branches are merged locally, show what will be pushed and ask
 ```
 UPDATE-MAIN PLAN — push these updated branches to origin?
 ────────────────────────────────
-  branch-a   merged main (1 conflict resolved: routes.ts)  → will push
-  branch-b   already current                                → skip (no push)
+  branch-a   merged main (1 conflict resolved: routes.ts) + [skip ci]  → will push
+  branch-b   already current                                            → skip (no push)
 ────────────────────────────────
+Each pushed branch gets the merge commit + an empty [skip ci] commit, so its own
+deploy pipeline won't run (only the merge branch deploys).
 These pushes change the branches on the remote (their PRs, teammates' work).
 ```
 
@@ -363,6 +384,11 @@ this step owns is **asking for the slot before any push happens**.
   behaves on *current* main, and the Step 4 assembly hits fewer conflicts. It's pushed
   back so the work persists on the real branch — but gated, because pushing a shared
   branch is outward-facing (PRs, teammates), never silent.
+- **Empty `[skip ci]` commit on the updated feature branches.** Pushing the updated
+  branch would otherwise trigger that branch's own deploy pipeline, but only the merge
+  branch is meant to deploy. An empty commit carrying GitLab's `[skip ci]` token on the
+  tip suppresses the pipeline without changing any code. (Token must be `[skip ci]` /
+  `[ci skip]` with a space — the hyphenated form GitLab doesn't recognize.)
 - **Remote-sourced merges** guarantee the staging build reflects what's actually on
   origin, not a teammate's stale local copy. (Step 2.5 pushes the updated branches
   first, so "remote" is current.)
