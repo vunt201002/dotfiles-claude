@@ -192,12 +192,24 @@ way the user chose:
    the same logic in incompatible ways and you're not confident, STOP and ask the
    user rather than guessing.
 
-3. **Stage and commit** — this is the one commit for this branch:
+3. **Stage and commit** — this is the one commit for this branch. Stage **only the
+   files you just resolved** (the ones `--diff-filter=U` listed in step 1) — never
+   `git add -A`, which would sweep in unrelated dirty files like tracked build
+   artifacts (`browse/dist/`, `design/dist/`):
 
    ```bash
-   git add -A
-   git commit --no-edit   # keeps the "merge: <NAME> ..." message
+   # Stage exactly the conflicted files you resolved. Re-list them to be safe:
+   git add $(git diff --name-only --diff-filter=U)
+   # If a resolution required touching a file that wasn't in the conflict set,
+   # add that one explicitly by name too — still never `-A`.
+   git status --short        # sanity-check ONLY intended files are staged
+   git commit --no-edit      # keeps the "merge: <NAME> ..." message
    ```
+
+   `git diff --name-only --diff-filter=U` returns the unmerged paths; once you've
+   removed the conflict markers and saved each, that same list is exactly what to
+   stage. After staging, `git status --short` should show only those files as staged
+   (`M`/`A`) — if anything unexpected is staged, `git restore --staged <file>` it.
 
 4. **Report what you resolved**: for each file, one line on how you reconciled it
    (e.g. `routes.ts — kept both new routes`, `config.json — took incoming value for
@@ -205,10 +217,10 @@ way the user chose:
 
 Then continue with the next branch in the list.
 
-> Note on staging: avoid `git add .` / `git add -A` in repos that track build
-> artifacts you shouldn't commit. In this gstack repo specifically, never stage
-> `browse/dist/` or `design/dist/`. If conflicts are limited to known files, prefer
-> `git add <file1> <file2>` over `-A`.
+> Staging rule (applies to every commit this skill makes): never `git add -A` /
+> `git add .` — stage resolved files by name (see Step 5.3). Repos that track build
+> artifacts get them swept in otherwise; in this gstack repo specifically, never
+> stage `browse/dist/` or `design/dist/`.
 
 ---
 
