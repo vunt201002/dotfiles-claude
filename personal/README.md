@@ -26,6 +26,10 @@ personal/
 
 ## Symlink mới
 
+> Mẹo: sau lần bootstrap đầu trên máy (đã link `/sync-skills`), chỉ cần gõ
+> `/sync-skills` trong Claude để tự dò + link skill/command mới — khỏi chạy tay.
+> Các lệnh dưới đây là cách thủ công / bootstrap lần đầu trên máy trắng.
+
 ### Skill
 ```bash
 ln -s ~/Project/github/dotfiles-claude/personal/skills/<skill-name> \
