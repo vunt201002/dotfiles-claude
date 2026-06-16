@@ -1,6 +1,6 @@
 ---
 name: merge-branch
-description: Cross-project skill to assemble many feature branches into one merge branch for shared-staging testing. From any branch, it detects the repo's true main branch. It first brings every requested feature branch up to date with main (merging main into each, resolving conflicts carefully) and — after an explicit confirmation — pushes those updated branches back to remote. Then it checks out main, pulls latest, creates a fresh merge branch (default merge/task-DD-MM-YYYY), and merges each requested branch from remote (origin) one at a time — every branch becomes exactly one commit. On conflict it stops, resolves carefully in context, reports what it did, commits, then continues. As the final step it asks for a staging number and hands off to /deploy-staging to push and deploy. Use when asked to "merge these branches", "gộp các nhánh để test", "merge-branch", "combine branches for staging", or "build a merge branch".
+description: Cross-project skill to assemble many feature branches into one merge branch for shared-staging testing. From any branch, it detects the repo's true main branch. It first brings every requested feature branch up to date with main (merging main into each, resolving conflicts carefully, adding an empty [skip ci] commit) and — after an explicit confirmation — pushes those updated branches back to remote. Then it either creates a fresh merge branch (default merge/task-DD-MM-YYYY) OR, if that merge branch already exists, folds the newly-listed branches into the existing one (second-run flow), merging each from origin one at a time so every branch becomes exactly one commit. On conflict it stops, resolves carefully, reports, commits, then continues. As the final step it reads the merge branch's history for a prior deploy slot, asks for a staging number (pre-filling the previous one on a re-run), and hands off to /deploy-staging. Use when asked to "merge these branches", "gộp các nhánh để test", "merge-branch", "combine branches for staging", "build a merge branch", or to fold an updated branch into an existing merge branch.
 ---
 
 # /merge-branch — Assemble feature branches into one merge branch
@@ -9,13 +9,20 @@ You combine several feature branches into a single **merge branch** so they can 
 be tested together in one shared staging slot (staging is limited). The user runs:
 
 ```
-/merge-branch [branch-a, branch-b]              # name defaults to merge/task-DD-MM-YYYY
+/merge-branch [branch-a, branch-b]              # first run — name defaults to merge/task-DD-MM-YYYY
 /merge-branch <merge-name> [branch-a, branch-b] # explicit merge branch name
+/merge-branch <existing-name> [branch-a]        # second run — fold branch-a into an existing merge branch
 ```
 
 The list of branches to merge is grouped inside `[ ... ]`, comma-separated. An
 optional merge branch name may appear **before** the `[`. The default name uses
 today's date in `DD-MM-YYYY`, e.g. on 2026-06-15 the default is `merge/task-15-06-2026`.
+
+**Two flows, same command.** If the named merge branch doesn't exist yet, it's built
+fresh (first run). If it already exists, you're re-using it (second run): the branches
+you list this time are folded into the existing merge branch, branches merged earlier
+are kept, and the deploy step re-uses the slot this merge branch last went to. Step 3
+detects which case you're in and confirms before doing anything destructive.
 
 **Each merged branch becomes exactly one commit** (a `--no-ff` merge commit), so the
 history reads cleanly: one merge commit per branch, in the order requested.
@@ -239,19 +246,53 @@ Only after this step do we build the merge branch (Step 3).
 
 ---
 
-## Step 3 — Create the merge branch
+## Step 3 — Create OR re-open the merge branch
 
-Create a fresh branch off the just-updated main. Substitute the chosen name for
-`<merge-name>`:
+First check whether the merge branch already exists (locally or on the remote):
 
 ```bash
-# If the merge branch already exists locally, this fails loudly — that's intended.
+git show-ref --verify --quiet "refs/heads/<merge-name>"        && echo "LOCAL exists"
+git show-ref --verify --quiet "refs/remotes/origin/<merge-name>" && echo "REMOTE exists"
+```
+
+### Case 1 — it does NOT exist yet (first run for this merge branch)
+
+Create a fresh branch off the just-updated main:
+
+```bash
 git checkout -b <merge-name>
 ```
 
-If it already exists, ask the user (AskUserQuestion): (A) delete and recreate it
-fresh off main, (B) pick a different name. Only delete with explicit consent:
-`git branch -D <merge-name>` then recreate.
+Then go to Step 4 and merge the listed branches into it.
+
+### Case 2 — it ALREADY exists (second+ run — re-using a merge branch)
+
+This is the "I changed a branch and want it folded into the existing merge branch"
+flow. Ask the user (AskUserQuestion) which they want:
+
+```
+Merge branch <merge-name> already exists (local/remote). What do you want?
+A) Merge INTO it (default) — fold the branches you listed this run into the existing
+   merge branch. Branches already merged before are kept as-is.
+B) Recreate from scratch — delete it and rebuild off the latest main, re-merging
+   everything from your list (use when you want a clean, fully-fresh merge branch).
+C) Different name — use a new merge-branch name instead (the first-run flow).
+```
+
+- **A) Merge into it (default for a second run).** Check out the existing merge branch
+  and bring it to the remote tip; do NOT recreate from main, do NOT delete anything:
+  ```bash
+  # Prefer the local branch if present; otherwise track the remote one.
+  git checkout <merge-name> 2>/dev/null || git checkout -B <merge-name> "origin/<merge-name>"
+  git pull --ff-only origin <merge-name> 2>/dev/null || true   # get latest if it's ahead on remote
+  ```
+  Then go to Step 4 and merge ONLY the branches in this run's list into it. Previously-
+  merged branches stay (they're already in this branch's history) — you are adding, not
+  rebuilding.
+- **B) Recreate from scratch.** Only with explicit consent: `git branch -D <merge-name>`
+  (and delete the remote one only if the user says so), then `git checkout -b <merge-name>`
+  off the updated main, and Step 4 merges the full list again.
+- **C) Different name.** Treat the new name as a first-run merge branch (Case 1).
 
 ---
 
@@ -339,9 +380,9 @@ Summarize:
 MERGE BRANCH READY
 ────────────────────────────────
 Main:    <main>  (detected; note if both main/master existed)
-Branch:  <merge-name>
+Branch:  <merge-name>  (created fresh  |  re-used existing — folded in this run's branches)
 Updated with main + pushed:  branch-a (1 conflict resolved) · branch-b skipped (already current)
-Merged into merge branch:    N branches, in order
+Merged into merge branch:    N branches this run, in order
 ────────────────────────────────
   ✓ branch-a    clean
   ✓ branch-b    conflict resolved (2 files: routes.ts, config.json)
@@ -349,6 +390,10 @@ Merged into merge branch:    N branches, in order
 Merge branch is local-only, not pushed yet. (Feature branches WERE pushed in Step 2.5.)
 Next: pick a staging slot to deploy to.
 ```
+
+State explicitly whether you **created the merge branch fresh** or **re-used an existing
+one** (folding in only this run's branches). On a re-use, note that earlier-merged
+branches remain part of the merge branch.
 
 Show `git log --oneline <main>..HEAD` so the user sees exactly one commit per branch.
 Remind them the branch is local-only and not pushed — pushing happens in Step 7.
@@ -360,9 +405,23 @@ Remind them the branch is local-only and not pushed — pushing happens in Step 
 The whole point of the merge branch is to test everything in one shared staging slot.
 So the final step deploys it — but **never push without asking which slot first**.
 
+**First, check if this merge branch was deployed before** (so a second run can re-use the
+same slot). Read the most recent deploy commit from its history:
+
+```bash
+# Latest "deploy: staging N" on this merge branch (local, or remote if local lacks it).
+git log --oneline -50 <merge-name> 2>/dev/null      | grep -m1 -iE 'deploy: staging [0-9]+' \
+  || git log --oneline -50 origin/<merge-name> 2>/dev/null | grep -m1 -iE 'deploy: staging [0-9]+'
+```
+
+Extract the number (e.g. `staging 9` → `9`). This is the previously-used slot, if any.
+
 1. **Ask the user for the staging number** (AskUserQuestion). This is required before
-   anything is pushed. Offer:
-   - A number (the staging slot to claim, e.g. `9`).
+   anything is pushed.
+   - **If a previous slot was found:** pre-fill it — "This merge branch last deployed to
+     **staging {N}**. Re-deploy to {N}?" Offer: A) Yes, staging {N} / B) A different number
+     / C) Skip. (Default A — the second-run case is usually "same slot again".)
+   - **If none found (first deploy):** just ask which slot.
    - "Skip / I'll deploy later" — if chosen, stop here. The branch stays local; tell
      the user they can run `/deploy-staging <N>` themselves anytime.
 2. **Hand off to `/deploy-staging <N>`** with the number the user gave, while still on
@@ -397,6 +456,13 @@ this step owns is **asking for the slot before any push happens**.
 - **Resolve-then-continue** keeps the whole assembly in one pass — the point is to get
   every branch into one slot, so stopping dead on the first conflict would defeat it.
   But unconfident conflicts still escalate to the user; correctness over speed.
+- **Re-using an existing merge branch (second run).** When you tweak one branch after the
+  first assembly, you don't want to rebuild the whole slot — Step 3 folds the changed
+  branch into the existing merge branch and keeps the rest. The previous deploy slot is
+  recovered by reading the merge branch's own history (`deploy: staging N`) rather than a
+  side file — git is the single source of truth, so it works across machines with no
+  extra state to sync. Recreating-from-scratch stays available for when you want a clean
+  rebuild off the latest main.
 - **Deploy is a handoff, gated on a question.** Assembling the branch and deploying it
   are one workflow (build a slot, test it), so Step 7 chains into `/deploy-staging`
   rather than leaving the user to remember it. But the push only happens after the user
