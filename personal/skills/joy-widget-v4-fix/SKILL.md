@@ -131,8 +131,8 @@ Format: `fix(widget-v4): [layer] — [root cause] — [fix]`
 
 ## Combine với skill khác
 
-- **Trước fix**: `my-bug-hunter` (Phase 1-3 hypothesis) → skill này (Step 1-6 widget v4 specific)
-- **Verify visual**: `frontend-fix` (Playwright screenshot loop)
+- **Trước fix**: `my-bug-hunter` (Phase 1-3 — chứng minh root cause) → skill này (Step 1-6 widget v4 specific)
+- **Verify visual**: `my-frontend-fix` (quy trình verify chung; skill này là Joy adapter của nó)
 - **Test thật**: `qa` skill từ gstack/aov-lab
 
 ## References
@@ -142,7 +142,7 @@ Format: `fix(widget-v4): [layer] — [root cause] — [fix]`
 - `references/css-variable-map.md` — CSS variable pipeline: editor setting → attribute → CSS var → component
 
 ### External references
-- `~/.claude/skills/joy-frontend-fix/SKILL.md` — full 3-layer workflow (personal v2)
+- `~/.claude/skills/my-frontend-fix/SKILL.md` — generic frontend verify workflow (skill này là adapter Joy)
 - `~/.claude/commands/joy-batch-fix.md` — batch fix multiple bugs from Notion
 - `<joy-repo>/.claude/skills/frontend-fix/SKILL.md` — team base skill
 - `<joy-repo>/packages/web-components/src/components/widget/joy-loyalty-widget.ts` — main widget logic
