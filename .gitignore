@@ -40,3 +40,8 @@ docs/throughput-*.json
 # Personal
 .idea/
 .DS_Store
+
+# Google service-account keys — never commit
+xenon-*.json
+*-service-account*.json
+personal/tmp/
