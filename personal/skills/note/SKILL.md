@@ -25,13 +25,23 @@ Script: `python ~/.claude/skills/note/scripts/note.py`
 | `links:` | — | comma list of `[[...]]` targets | none |
 
 Topics: Frontend, Backend, System Design, DSA, Databases, DevOps & Infra, Security,
-AI & LLM, CS Fundamentals, Career & Soft Skills, Tools. Unmatched → `Inbox/`.
+AI & LLM, CS Fundamentals, Career & Soft Skills, Tools (run `note.py list` for the live set).
+
+**Creating a new topic:** if the note belongs to an area that isn't a topic yet (e.g. SEO,
+Mobile, Game Dev), pass a clean new `--topic "Name"` (optionally `--topic-desc "..."`) — the
+script CREATES the topic folder + `_MOC` + `raw/` and files the note there (prints `[new topic] created ...`).
+Reuse an existing topic when it's close: the script fuzzy-matches (case/partial/token-overlap),
+so `--topic seo` won't duplicate an existing `SEO`. Only the AUTO path (no `--topic`) falls back to
+`Inbox` — it never invents a topic; YOU decide when a new topic is warranted and name it.
 
 ## When invoked
 1. **Parse params** from the args; use what's given, infer the rest.
 2. **Get content** — from the args, or summarize the thing just learned/discussed; if nothing, ask "Học được gì, mảng nào?".
 3. **Classify type:** `til` (quick "today I learned"), `concept` (an explanation, default), `gotcha` (a trap), `question` (open question → auto-listed in ❓ Questions), `snippet` (code), `resource` (a link to read), `raw` (dump for later).
-4. **Topic auto-detects** — omit `--topic` and the script keyword-detects + prints `[auto] topic = ...`; pass `--topic` only to override. Preview: `note.py detect "<text>"`.
+4. **Topic** — omit `--topic` to keyword-detect among EXISTING topics (`[auto] topic = ...`, else Inbox).
+   If the note is about a NEW area (no fitting topic), pass a clean `--topic "Name"` (+ `--topic-desc`)
+   and the script creates that topic. Check `note.py list` if unsure what exists; reuse a close one
+   rather than spawning near-duplicates. Preview detection: `note.py detect "<text>"`.
 5. **Title** = concise concept name. **Body** in Vietnamese (keep terms/code in English), faithful to what was actually learned — don't invent; for new/version-specific tech prefer linking the real source (like /learn does).
 6. **Run** (body via stdin heredoc; omit topic to auto):
    ```bash

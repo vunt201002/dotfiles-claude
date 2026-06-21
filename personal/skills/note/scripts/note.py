@@ -71,9 +71,56 @@ def detect_topic(text):
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     return (ranked[0][0] if ranked else None), ranked
 
-def resolve_folder(ntype, topic):
-    m = fuzzy(topic, topics())
-    base = os.path.join("Topics", m) if m else "Inbox"
+def topic_moc(name, desc):
+    DV, END = "```dataview", "```"
+    return f"""---
+type: moc
+tags: [learn, moc]
+---
+# {name}
+
+> {desc or 'Mảng kiến thức.'}
+
+## 📒 Notes
+{DV}
+TABLE WITHOUT ID file.link AS Note, type AS "Loại", status AS "TT", updated AS "Cập nhật"
+WHERE file.folder = this.file.folder AND file.name != "_MOC" AND type != "raw"
+SORT type ASC, file.name ASC
+{END}
+
+## ❓ Câu hỏi mở ở mảng này
+{DV}
+TABLE WITHOUT ID file.link AS Note, created AS "Ngày"
+WHERE file.folder = this.file.folder AND type = "question" AND status != "answered"
+SORT created DESC
+{END}
+
+## 🗃 raw (ghi nhanh, chưa xử lý)
+{DV}
+LIST
+WHERE file.folder = this.file.folder + "/raw"
+{END}
+"""
+
+def ensure_topic(name, desc=""):
+    """Return an existing topic (fuzzy) or CREATE a new topic folder (+_MOC +raw)."""
+    safe = (re.sub(r'[\\/:*?"<>|]', "-", name).strip())[:60]
+    folder = os.path.join(VAULT, "Topics", safe)
+    if not os.path.isdir(folder):
+        os.makedirs(os.path.join(folder, "raw"), exist_ok=True)
+        open(os.path.join(folder, "raw", ".gitkeep"), "w").close()
+        with open(os.path.join(folder, "_MOC.md"), "w", encoding="utf-8") as f:
+            f.write(topic_moc(safe, desc))
+        print(f"[new topic] created Topics/{safe}")
+    return safe
+
+def resolve_folder(ntype, topic, desc=""):
+    if topic:
+        m = fuzzy(topic, topics())
+        name = m if m else ensure_topic(topic, desc)   # create when genuinely new
+        base = os.path.join("Topics", name)
+    else:
+        base = "Inbox"
     return os.path.join(base, "raw") if ntype == "raw" else base
 
 def build_frontmatter(ntype, status):
@@ -93,6 +140,7 @@ def main():
     a.add_argument("--title", required=True)
     a.add_argument("--type", default="concept", choices=TYPES)
     a.add_argument("--topic", "--area", dest="topic", default="")
+    a.add_argument("--topic-desc", dest="topic_desc", default="")  # used when creating a new topic
     a.add_argument("--status", default="")
     a.add_argument("--body", default=None)
     a.add_argument("--links", default="")
@@ -120,7 +168,7 @@ def main():
         if best: print(f"[auto] topic = {best}"); args.topic = best
         else: print("[auto] topic chưa rõ -> Inbox"); args.topic = ""
 
-    rel = resolve_folder(args.type, args.topic)
+    rel = resolve_folder(args.type, args.topic, args.topic_desc)
     folder = os.path.join(VAULT, rel)
     path = os.path.join(folder, slug_filename(args.title) + ".md")
 
