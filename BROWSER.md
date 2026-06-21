@@ -49,7 +49,7 @@ $B connect                       # headed Chromium + Side Panel extension
 5. [Snapshot system + ref-based selection](#snapshot-system)
 6. [Browser-skills runtime](#browser-skills-runtime)
 7. [Domain-skills (per-site agent notes)](#domain-skills)
-8. [Real-browser mode (`$B connect`)](#real-browser-mode)
+8. [Real-browser mode (`$B connect`)](#real-browser-mode) — including [`--headed` + `--proxy` + `--navigate` (v1.28.0.0)](#headed-mode--proxy--browser-native-downloads-v12800)
 9. [Side Panel + sidebar agent](#side-panel--sidebar-agent)
 10. [Pair-agent — remote agents over an ngrok tunnel](#pair-agent)
 11. [Authentication + tokens](#authentication)
@@ -212,8 +212,8 @@ from `snapshot`, or `@c` refs from `snapshot -C`. Full table:
 
 | Command | Description |
 |---------|-------------|
-| `js <expr>` | Run inline JavaScript expression in page context, return as string |
-| `eval <file>` | Run JS from a file (path under /tmp or cwd; same sandbox as `js`) |
+| `js <expr> [--out <file>] [--raw]` | Run inline JavaScript expression in page context, return as string. With `--out <file>` the result is written to disk instead of returned (a `data:*;base64,...` result is decoded to raw bytes unless `--raw`). `--out` makes the invocation a WRITE (needs `write` scope, never allowed over the tunnel). |
+| `eval <file> [--out <file>] [--raw]` | Run JS from a file (path under /tmp or cwd; same sandbox as `js`). `--out`/`--raw` behave as for `js`. |
 | `css <sel> <prop>` | Computed CSS value |
 | `attrs <sel\|@ref>` | Element attributes as JSON |
 | `is <prop> <sel\|@ref>` | State check: visible, hidden, enabled, disabled, checked, editable, focused |
@@ -317,6 +317,7 @@ from `snapshot`, or `@c` refs from `snapshot -C`. Full table:
 | `disconnect` | Close headed Chrome, return to headless |
 | `focus [@ref]` | Bring headed Chrome to foreground (macOS); `@ref` also scrolls into view |
 | `state save\|load <name>` | Save or load browser state (cookies + URLs) |
+| `memory [--json]` | Snapshot Bun heap + per-tab JS heap + Chromium process tree + bounded buffer sizes. Use `--json` for programmatic consumers; text mode renders sorted top-10 tabs with "and N more" tail. |
 
 ### Handoff
 
@@ -526,10 +527,16 @@ window is being controlled.
 ### What "GStack Browser" means
 
 Not your daily Chrome — a Playwright-managed Chromium with custom branding
-in the Dock and menu bar, anti-bot stealth (sites like Google and NYTimes
-work without captchas), a custom user agent, and the gstack extension
-pre-loaded via `launchPersistentContext`. Your regular Chrome with your tabs
-and bookmarks stays untouched.
+in the Dock and menu bar (the `.app` name, Dock icon, and tray, NOT the UA
+string), always-on Layer C anti-bot stealth (most JS-observable automation
+tells are masked, so many anti-bot-protected sites load cleanly), a
+stock-Chrome user agent that reports the underlying Chromium version, and the
+gstack extension pre-loaded via `launchPersistentContext`. The UA no longer
+carries a `GStackBrowser` suffix — that branding string was itself a
+high-entropy tell, so the browser now reports a plain `Chrome/<version>` UA.
+Deepest-layer CDP-protocol detection still gets through (Google can still
+trigger captchas; see the CDP-patch item in `TODOS.md`). Your regular Chrome
+with your tabs and bookmarks stays untouched.
 
 ### When to use headed mode
 
@@ -544,6 +551,92 @@ and bookmarks stays untouched.
 When in real-browser mode, `/qa` and `/design-review` automatically skip
 cookie import prompts and headless workarounds — the headed browser already
 has whatever session you logged into.
+
+### Headed mode + proxy + browser-native downloads (v1.28.0.0)
+
+Three coordinated flags for sites that block headless browsers, fingerprint
+Playwright defaults, or sit behind authenticated upstream proxies:
+
+```bash
+# Visible Chromium. Auto-spawns Xvfb on Linux containers without DISPLAY.
+$B --headed goto https://example.com
+
+# SOCKS5 with auth — Chromium can't prompt for SOCKS5 creds, so $B runs a
+# local 127.0.0.1 bridge that handles the auth handshake.
+$B --proxy socks5://user:pass@residential.proxy.host:1080 goto https://example.com
+
+# HTTP/HTTPS proxy passes through to Chromium directly.
+$B --proxy http://corp-proxy:3128 goto https://example.com
+
+# Browser-native download for Content-Disposition, redirect chains, anti-bot
+# CDNs where page.request.fetch() falls over.
+$B download "https://protected.example.com/file" /tmp/file.bin --navigate
+
+# Combined.
+$B --headed --proxy socks5://user:pass@host:1080 \
+   download "https://protected.example.com/file" /tmp/file.bin --navigate
+```
+
+**Credential policy.** Pass creds via the URL (`socks5://user:pass@host`) OR
+the env vars `BROWSE_PROXY_USER` / `BROWSE_PROXY_PASS` — never both. `$B`
+refuses with a clear hint when both are set; silent override created
+"works on my machine" debugging traps.
+
+**Daemon discipline.** `--proxy` and `--headed` are daemon-startup config.
+A running daemon with config A meeting a new invocation with config B exits
+1 with a `browse disconnect` hint instead of silently restarting and dropping
+tab state, cookies, or sessions.
+
+**Stealth scope (Layer C, always on).** Every context — headless `launch`,
+`--headed`/`--proxy`, `handoff`, and the `useragent`/`viewport --scale`
+rebuild (`recreateContext`) — gets the full Layer C mask, no opt-in flag.
+Layer C masks `navigator.webdriver`, restores the `window.chrome.*` shape
+(`runtime`, `app`, `csi`, `loadTimes`), aligns `Notification.permission`
+with the Permissions API, reports a per-install
+`hardwareConcurrency`/`deviceMemory` from the host profile, sweeps the known
+Selenium/Phantom/Nightmare/Playwright globals, and installs a
+`Function.prototype.toString` proxy so every patched getter reports
+`[native code]` even under the depth-3 recursion check. It still does NOT
+fake `navigator.plugins` or `navigator.languages` — modern fingerprinters
+cross-check those for consistency, and synthesizing fixed values flags MORE
+bot-like, not less. ChromeDriver's `cdc_`/`__webdriver` runtime artifacts and
+the Permissions notifications tell are also cleaned up on every path.
+
+`GSTACK_STEALTH=extended` (also accepts `1` or `true`; off by default) layers
+six more aggressive patches on top — WebGL renderer spoof, a faked
+`navigator.plugins` PluginArray, `navigator.mediaDevices`. That mode actively
+lies and can break sites that reflect on those properties; use it only when
+the default triggers detection. For gbrowser builds with the C++ patches, the
+`GSTACK_*` host-profile env (GPU vendor/renderer, UA-CH platform/model,
+hardware) emits the Pack 1 `--gstack-gpu-vendor` / `--gstack-gpu-renderer` /
+`--gstack-ua-platform` / `--gstack-ua-model` / `--gstack-hw-concurrency` /
+`--gstack-device-memory` switches that push the GPU/UA-CH/hardware spoof down
+to native code, and `GSTACK_CDP_STEALTH=on` (or `1`/`true`) emits the Pack 2
+`--gstack-suppress-prepare-stack-trace` switch (closes the Cloudflare
+`Error.prepareStackTrace` canary). On stock Playwright Chromium every one of
+these switches is a safe no-op.
+
+`launchHeaded` / `handoff` also strip Playwright's automation-tell launch
+defaults via `ignoreDefaultArgs` (`STEALTH_IGNORE_DEFAULT_ARGS`):
+`--enable-automation` (the "Chrome is being controlled by automated test
+software" infobar), `--disable-extensions`,
+`--disable-component-extensions-with-background-pages`,
+`--disable-popup-blocking`, `--disable-component-update`, and
+`--disable-default-apps`.
+
+**Container support.** `--headed` on Linux without `DISPLAY` walks the
+display range (`:99`, `:100`, ...) until `xdpyinfo` reports a free slot,
+then spawns Xvfb. Cleanup-on-disconnect validates the recorded PID's
+`/proc/<pid>/cmdline` matches `Xvfb` AND start-time matches before sending
+any signal — no PID-reuse footguns. Skips spawn entirely when
+`WAYLAND_DISPLAY` is set (Chromium uses Wayland natively). Standard
+Debian/Ubuntu containers work out of the box; minimal images (alpine,
+distroless) may need fonts/dbus/gtk libs for headed Chromium to render.
+
+**Failure modes.** SOCKS5 upstream rejected or unreachable — fail-fast at
+startup with a redacted error after 3 retries (5s budget). Mid-stream
+upstream drop — bridge kills the affected client connection only; no
+transport retries that could corrupt browser traffic.
 
 ---
 
@@ -1106,6 +1199,11 @@ the global `~/.gstack/browser-skills/foo/` only inside project-a.
 | `GSTACK_BROWSE_MAX_HTML_BYTES` | 52428800 (50MB) | `load-html` size cap |
 | `GSTACK_SECURITY_OFF` | unset | Emergency kill switch — disable ML classifier |
 | `GSTACK_SECURITY_ENSEMBLE` | unset | Set to `deberta` for 3-classifier ensemble (721MB download) |
+| `GSTACK_STEALTH` | unset | Set to `extended` (also accepts `1`/`true`) to layer six aggressive patches (WebGL spoof, faked plugins, mediaDevices) on top of Layer C. Actively lies; can break sites. |
+| `GSTACK_CDP_STEALTH` | unset | Set to `on`/`1`/`true` to emit `--gstack-suppress-prepare-stack-trace` (gbrowser Pack 2 / B11 C++ patch only; no-op on stock Chromium) |
+| `GSTACK_GPU_VENDOR`, `GSTACK_GPU_RENDERER`, `GSTACK_GPU_CHIPSET` | unset | Per-install GPU spoof fed to the Pack 1 WebGL/UA-CH C++ patches. Set by gbd from the host profile; emitted as `--gstack-gpu-vendor` / `--gstack-gpu-renderer` / `--gstack-ua-model` cmdline switches only when present. |
+| `GSTACK_PLATFORM` | unset | Host platform classification (`MacARM`/`MacIntel` → `macOS`, `Win32` → `Windows`, `Linux*` → `Linux`) emitted as `--gstack-ua-platform` |
+| `GSTACK_HW_CONCURRENCY`, `GSTACK_DEVICE_MEMORY` | host profile (fallback 8) | Per-install `hardwareConcurrency`/`deviceMemory` reported by Layer C and emitted as `--gstack-hw-concurrency` / `--gstack-device-memory` for the worker-navigator C++ patch |
 
 ---
 
@@ -1117,6 +1215,11 @@ browse/
 │   ├── cli.ts                   # Thin client — reads state, sends HTTP, prints
 │   ├── server.ts                # Bun HTTP daemon — routes commands, dual-listener
 │   ├── browser-manager.ts       # Chromium lifecycle, tabs, ref map, crash detection
+│   ├── socks-bridge.ts          # Local 127.0.0.1 SOCKS5 bridge that handles auth handshakes Chromium can't speak
+│   ├── proxy-config.ts          # --proxy URL parsing + cred resolution (URL vs env, fail-fast on both)
+│   ├── proxy-redact.ts          # Cred-redaction helper for any proxy URL surfaced to logs/errors
+│   ├── xvfb.ts                  # Xvfb auto-spawn + orphan cleanup with PID + start-time validation
+│   ├── stealth.ts               # Layer C: webdriver mask + window.chrome.* + Notification/Permissions + per-install hardware + toString proxy + automation-global sweep; buildGStackLaunchArgs (GSTACK_* cmdline switches); GSTACK_STEALTH=extended opt-in
 │   ├── browse-client.ts         # Canonical SDK — what skills import as _lib/browse-client.ts
 │   ├── snapshot.ts              # AX tree → @e/@c refs → Locator map; -D/-a/-C handling
 │   ├── read-commands.ts         # Non-mutating: text, html, links, js, css, is, dialog, ...
