@@ -45,3 +45,6 @@ docs/throughput-*.json
 xenon-*.json
 *-service-account*.json
 personal/tmp/
+
+# Obsidian vault config + plugins (not source; vault is reproducible via README)
+.obsidian/
