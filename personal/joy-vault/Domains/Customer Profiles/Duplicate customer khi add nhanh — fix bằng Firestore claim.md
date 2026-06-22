@@ -5,7 +5,7 @@ severity: medium
 status: open
 created: 2026-06-21
 updated: 2026-06-21
-tags: [joy, wishlist]
+tags: [joy, wishlist, potential-bug]
 ---
 # Duplicate customer khi add nhanh — fix bằng Firestore claim
 
