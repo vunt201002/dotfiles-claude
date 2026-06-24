@@ -32,8 +32,9 @@ item must earn its place.
    why it's worth reading ("Postgres team giải thích vì sao DELETE không scale, chỉ
    DROP TABLE mới scale — đúng vấn đề khi dọn bảng lớn"). Banned: vague filler like
    "thú vị", "đáng chú ý", "hay" with no substance.
-4. **Read-only + save only.** Only fetch web and write under `~/.tech-digest/`. Never
-   touch repo code. Never commit.
+4. **Read-only + save only.** Only fetch web and write under the digest vault
+   (`personal/tech-digest/`, resolved in Step 0 as `$DIGEST_DIR`). Never touch repo
+   code outside that vault. Never commit (the user commits the vault when they choose).
 
 ---
 
@@ -45,15 +46,24 @@ Parse input after `/tech-digest`:
 |---|---|
 | *(nothing)* | **Default digest** — ~10-15 items, all sections |
 | `--wide` | Wider sweep — ~20-30 items (when the user wants to dig deeper one day) |
-| `list` | List saved digests in `~/.tech-digest/` (newest first), then stop |
+| `list` | List saved digests in the digest vault `$DIGEST_DIR` (newest first), then stop |
 | `<topic>` (e.g. `security`, `ai`, `frontend`) | Single-area digest — focus searches there |
 
 ---
 
 ## Step 0 — Setup
 
+The digest vault lives **inside the dotfiles repo** (`personal/tech-digest/`) so
+saved digests sync across machines via git. Resolve its path from this skill's real
+location (following the `~/.claude/skills/tech-digest` symlink back to the repo), so
+it works no matter where the repo is cloned. `$TECH_DIGEST_DIR` overrides it.
+
 ```bash
-DIGEST_DIR="$HOME/.tech-digest"
+# Resolve the skill's real dir (skills/tech-digest), then walk up to personal/tech-digest
+SKILL_LINK="$HOME/.claude/skills/tech-digest"
+SKILL_REAL="$(cd "$(dirname "$(readlink "$SKILL_LINK" || echo "$SKILL_LINK")")" 2>/dev/null && pwd)/$(basename "$(readlink "$SKILL_LINK" || echo "$SKILL_LINK")")"
+# personal/skills/tech-digest -> personal/tech-digest
+DIGEST_DIR="${TECH_DIGEST_DIR:-$(cd "$SKILL_REAL/../.." && pwd)/tech-digest}"
 mkdir -p "$DIGEST_DIR"
 TODAY=$(date +%Y-%m-%d)            # never hardcode the date
 NICE_DATE=$(date "+%A, %d/%m/%Y")  # for the header
@@ -154,7 +164,7 @@ TECH DIGEST — {NICE_DATE}
     → {tiếng Việt}
     {url}
 
-📌 {N} mục · bỏ {M} bài (trùng/đã đọc/SEO) · lưu: ~/.tech-digest/{TODAY}.md
+📌 {N} mục · bỏ {M} bài (trùng/đã đọc/SEO) · lưu: personal/tech-digest/{TODAY}.md
 ```
 
 Then append every URL you listed to `$SEEN` so tomorrow won't repeat them:
@@ -179,7 +189,8 @@ section instead of overwriting — saved files are append-only.
   product names, and tech jargon in English.
 - **Specific reasons.** Every "why" line tells the user something concrete about the
   content — enough to decide open-or-skip in 2 seconds.
-- **Read-only + save.** Web + `~/.tech-digest/` only. No repo edits, no commits.
+- **Read-only + save.** Web + the digest vault (`$DIGEST_DIR`) only. No other repo
+  edits, no commits.
 - **Honest counts.** Report how many kept / dropped. If sources were thin today, say
   so and list fewer — never pad.
 - **Future:** to run this automatically each morning, wrap it with `/schedule` (the

@@ -9,12 +9,21 @@ checkbox tasks, priority-tagged. Built for "note now, read tomorrow by priority"
   python todo.py done 2               # tick task #2 from the last `list` ordering
   python todo.py path                 # print today's file path
 
-Storage: ~/.todo/YYYY-MM-DD.md  (override with TODO_VAULT). Files are append-only;
-`done` rewrites a single checkbox in place. Carry-over = unchecked tasks from prior days.
+Storage: <repo>/personal/todo/YYYY-MM-DD.md  (override with TODO_VAULT). The vault
+lives inside the dotfiles repo so todos sync across machines via git. Path is derived
+from this script's location, so it works regardless of where the repo is cloned.
+Files are append-only; `done` rewrites a single checkbox in place. Carry-over =
+unchecked tasks from prior days.
 """
 import argparse, os, re, sys, datetime, glob
 
-DEFAULT_VAULT = os.path.expanduser("~/.todo")
+# Vault lives in the repo, three dirs up from this script:
+#   personal/skills/todo/scripts/todo.py  ->  personal/todo/
+# realpath() resolves the ~/.claude/skills/todo symlink back to the real repo path,
+# so the vault is found whether called directly or via the symlinked skill.
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+_PERSONAL_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", "..", ".."))
+DEFAULT_VAULT = os.path.join(_PERSONAL_DIR, "todo")
 VAULT = os.path.abspath(os.environ.get("TODO_VAULT", DEFAULT_VAULT))
 
 PRIOS = {"p1": 1, "p2": 2, "p3": 3}

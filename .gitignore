@@ -54,3 +54,6 @@ personal/tmp/
 .pnp.loader.mjs
 .yarn/
 yarn.lock
+
+# /todo runtime state: per-machine last-list ordering with absolute paths (not source)
+personal/todo/.last-list-order
