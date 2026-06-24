@@ -48,3 +48,9 @@ personal/tmp/
 
 # Obsidian vault config + plugins (not source; vault is reproducible via README)
 .obsidian/
+
+# Yarn PnP / Yarn 2+ artifacts (using bun, not yarn)
+.pnp.cjs
+.pnp.loader.mjs
+.yarn/
+yarn.lock
