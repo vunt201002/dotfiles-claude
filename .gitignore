@@ -57,3 +57,4 @@ yarn.lock
 
 # /todo runtime state: per-machine last-list ordering with absolute paths (not source)
 personal/todo/.last-list-order
+.aov-lab/
