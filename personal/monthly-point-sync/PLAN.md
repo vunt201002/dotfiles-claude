@@ -30,6 +30,20 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
   trong sheet** → đóng dấu ngày hiện tại → ghi vào tab tháng đó. Chính xác tới mức tháng.
 - Đã đóng dấu = **cố định tab** (point tính 1 lần). Status sau đó vẫn cập nhật live.
 
+## Quy tắc thêm / cập nhật (hard rules)
+1. **Không thêm task mới vào tháng cũ.** "Tháng cũ" = mọi tab khác tháng hiện tại.
+   Dòng mới chỉ được tạo ở tab **tháng hiện tại**. Tab tháng cũ đã chốt.
+2. **Tháng cũ vẫn được update theo Notion.** Task nằm ở tab cũ mà Notion đổi
+   Status / Point / Role → cập nhật tại chỗ ở tab cũ đó (vd Testing → Done).
+   Checkbox **Have** và cột **Note** anh chỉnh tay không bao giờ bị đè.
+3. **Trước khi thêm, verify chưa từng add ở bất kỳ tháng nào.** Khớp theo Notion
+   page id trên **tất cả** tab tháng. Đã có (cùng id) → update, **không** add lại.
+4. **Reviewer = Dev** về luật: chỉ được add khi status ≥ Ready to Test **và** chưa
+   tồn tại ở tháng nào trước đó. Trước Ready to Test → không add.
+5. **Nghi trùng (cùng tên, khác id)** → **vẫn add** vào tháng hiện tại, nhưng ghi
+   cảnh báo vào cột **Note (H)**: `⚠ Nghi trùng "<tên>" ở tab MM/YYYY`. Anh tự
+   check, nếu đúng trùng thì **xoá tay**. Ngoại lệ ưu tiên manual (rất ít case).
+
 ## KPI mỗi tab (công thức sống)
 - Tổng point task = SUM(Point)
 - **KPI (point nhận)** = SUMIF(Role,"Dev",Point) + 0.2 × SUMIF(Role,"Reviewer",Point)

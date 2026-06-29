@@ -45,8 +45,14 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
 - Quét các data source trong `WATCH_SOURCES`, lấy task anh là **Developer** hoặc **Reviewer**.
 - Task **chưa có trong sheet** mà đã đạt **Ready to Test** trở đi → ghi vào tab **tháng hiện tại**
   (Point = `Size card`, Role = Dev/Reviewer, Status live, Card link, Have = chưa tick).
-- Task **đã có** → cập nhật Status/Point/Role/tên; **giữ nguyên** Have và mọi chỉnh tay.
-- Tab tháng mới được nhân bản từ sheet ẩn `_TEMPLATE` (giữ nguyên format/KPI).
+- Task **đã có** (khớp theo Notion page id, ở **bất kỳ** tab tháng nào) → cập nhật
+  Status/Point/Role/tên ngay tại tab đó, kể cả tab tháng cũ; **giữ nguyên** Have và Note.
+- **Không bao giờ** thêm dòng mới vào tab tháng cũ — dòng mới chỉ vào tháng hiện tại.
+- **Reviewer xử như Dev**: chỉ add khi status ≥ Ready to Test và chưa có ở tháng nào trước.
+- **Nghi trùng** (cùng tên, khác id — vd task từ board cũ): vẫn add, nhưng ghi cảnh báo
+  `⚠ Nghi trùng "<tên>" ở tab MM/YYYY` vào cột **Note (H)**. Anh check rồi xoá tay nếu trùng thật.
+- Tab tháng mới được nhân bản từ sheet ẩn `_TEMPLATE` (giữ nguyên format/KPI). Cột H
+  (Note) để trống trong template, code chỉ ghi khi có nghi trùng; summary/KPI ở cột I trở đi.
 
 ## Đổi cấu hình (đầu file Code.gs)
 - `WATCH_SOURCES`: thêm data source id khi anh chuyển project khác.
