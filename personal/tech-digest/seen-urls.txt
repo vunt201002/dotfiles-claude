@@ -35,3 +35,15 @@ https://words.filippo.io/vuln-reports/
 https://swiftpackageindex.com/blog/swift-package-index-joins-apple
 https://ps.tc/pages/blog-usbliter8.html
 https://github.com/dmtrKovalenko/ffs
+https://semgrep.dev/blog/2026/we-have-mythos-at-home-glm-52-beats-claude-in-our-cyber-benchmarks/
+https://antoine.fi/mri-analysis-using-claude-code-opus
+https://english.elpais.com/education/2026-06-28/ai-fraud-at-brown-university-academic-integrity-is-at-risk.html
+https://nextjs.org/blog/next-16-3-instant-navigations
+https://nextjs.org/blog/next-16-3-ai-improvements
+https://shopify.dev/changelog
+https://github.com/openai/codex/issues/2847
+https://12gramsofcarbon.com/p/agentics-tech-things-tokenmaxxing
+https://www.helpnetsecurity.com/2026/06/05/cisco-sd-wan-cve-2026-20245-0-day-exploited/
+https://dam.stanford.edu/memory-prices.html
+https://chipsandcheese.com/p/top500-at-isc26-we-have-a-new-number
+https://alganet.github.io/blog/2026-06-28-12-POSIX-Is-Not-A-Shell.html
