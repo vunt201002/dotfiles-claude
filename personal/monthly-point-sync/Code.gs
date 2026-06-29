@@ -28,6 +28,10 @@ var COUNTED = ['Ready to Test','Testing','UAT','To review','Reviewing',
 var TEMPLATE = '_TEMPLATE';
 var STATE = '_STATE';
 var NOTION_VERSION = '2025-09-03';
+// Note column (1-based): written ONLY when a freshly-added task looks like a title
+// duplicate of a row already in another month. Col H is blank in the template; the
+// KPI summary lives at col I+, so H is safe. Data columns stay A..G (7).
+var NOTE_COL = 8; // H
 // -----------------------------------------------------
 
 function token_() {
@@ -103,16 +107,19 @@ function lastDataRow_(sh) {
   for (var i = col.length - 1; i >= 0; i--) if (col[i][0] !== '' && col[i][0] !== null) return i + 2;
   return 1;
 }
-// pageId/title -> {sheet,row}
+// pageId/title -> {sheet,row,month}. month = tab name (MM/YYYY), used to tell whether
+// a matched row sits in an OLD month tab (anything != current month) and to annotate
+// the Note column when a new task looks like a title-duplicate of an existing one.
 function buildIndex_(ss) {
   var byPid = {}, byTitle = {};
   ss.getSheets().forEach(function (sh) {
-    if (!isMonthTab_(sh.getName())) return;
+    var name = sh.getName();
+    if (!isMonthTab_(name)) return;
     var last = lastDataRow_(sh);
     if (last < 2) return;
-    var v = sh.getRange(2, 1, last - 1, 7).getValues(); // A..G
+    var v = sh.getRange(2, 1, last - 1, 7).getValues(); // A..G (Note col H is not indexed)
     for (var i = 0; i < v.length; i++) {
-      var ref = { sheet: sh, row: i + 2 };
+      var ref = { sheet: sh, row: i + 2, month: name };
       var pid = norm_(String(v[i][6]));
       var nt = normTitle_(v[i][0]);
       if (pid) byPid[pid] = ref;
@@ -157,7 +164,7 @@ function syncNow(opts) {
   var st = getState_(ss), firstRun = st.firstRun, prev = st.map, newState = {};
   var idx = buildIndex_(ss);
   var month = curMonth_();
-  var added = 0, updated = 0, baseline = 0, waiting = 0;
+  var added = 0, updated = 0, baseline = 0, waiting = 0, suspect = 0;
 
   WATCH_SOURCES.forEach(function (ds) {
     notionQuery_(ds).forEach(function (pg) {
@@ -167,40 +174,66 @@ function syncNow(opts) {
           name = title_(p), nt = normTitle_(name), url = pg.url;
       newState[pid] = status;
 
-      var ref = idx.byPid[pid] || idx.byTitle[nt];
-      if (ref) {
-        var cur = ref.sheet.getRange(ref.row, 1, 1, 7).getValues()[0]; // A..G
-        if (cur[0] !== name)   ref.sheet.getRange(ref.row, 1).setValue(name);
-        if (cur[1] !== status) ref.sheet.getRange(ref.row, 2).setValue(status);
-        if (cur[2] !== point)  ref.sheet.getRange(ref.row, 3).setValue(point);
-        if (cur[3] !== role)   ref.sheet.getRange(ref.row, 4).setValue(role);
-        if (!norm_(String(cur[6]))) ref.sheet.getRange(ref.row, 7).setValue(pid); // heal missing id
-        idx.byPid[pid] = ref; idx.byTitle[nt] = ref;
+      // RULE 2 (exact): this Notion page id already lives in SOME month tab (current
+      // OR an old, closed one) -> it is the same task. Update it in place, never add
+      // again. RULE 1: updating an old-month row is allowed (status/point/role go
+      // live); we just never create a NEW row there. Have is never touched; any Note
+      // (H) flag stays until Garry clears it by hand after checking the suspected dup.
+      var pidRef = idx.byPid[pid];
+      if (pidRef) {
+        var cur = pidRef.sheet.getRange(pidRef.row, 1, 1, 7).getValues()[0]; // A..G
+        if (cur[0] !== name)   pidRef.sheet.getRange(pidRef.row, 1).setValue(name);
+        if (cur[1] !== status) pidRef.sheet.getRange(pidRef.row, 2).setValue(status);
+        if (cur[2] !== point)  pidRef.sheet.getRange(pidRef.row, 3).setValue(point);
+        if (cur[3] !== role)   pidRef.sheet.getRange(pidRef.row, 4).setValue(role);
+        // (id already present since this is a pid match; nothing to heal)
         updated++;
-      } else if (firstRun && !backfill) {
+        return;
+      }
+
+      // No pid match anywhere -> this task (by id) has never been stamped.
+      if (firstRun && !backfill) {
         // very first auto-run only records a baseline; manual backfill ignores this
         baseline++;
-      } else if (isCounted_(status) && (backfill || !isCounted_(prev[pid]))) {
-        // stamp into the current month. Normal sync: only when we observe the task
-        // CROSS into a counted status. Backfill: any counted task missing here.
+        return;
+      }
+
+      // RULE 3a (Reviewer & Dev alike): only eligible once status reached Ready to
+      // Test or beyond. Normal sync also requires observing the CROSS (prev not yet
+      // counted); backfill stamps any counted task missing here.
+      if (isCounted_(status) && (backfill || !isCounted_(prev[pid]))) {
+        // RULE 1: new rows go ONLY into the current month tab, never an old one.
         var msh = ensureMonthSheet_(ss, month);
         var r = lastDataRow_(msh) + 1;
         msh.getRange(r, 1, 1, 7).setValues([[
           name, status, point, role, false,
           '=HYPERLINK("' + url + '","Notion ↗")', pid,
         ]]);
-        idx.byPid[pid] = { sheet: msh, row: r };
-        idx.byTitle[nt] = { sheet: msh, row: r };
+        // RULE 2 (fuzzy): a row with the SAME title but a DIFFERENT id already exists
+        // somewhere (e.g. tracked under an old board id). Per Garry: still add, but
+        // flag it in the Note column so he can verify and delete manually if it's a
+        // true duplicate. Only flag matches in a DIFFERENT row than the one we just
+        // wrote (titleRef was built before this add, so it can't point here).
+        var titleRef = idx.byTitle[nt];
+        if (titleRef && norm_(String(
+              titleRef.sheet.getRange(titleRef.row, 7).getValue())) !== pid) {
+          msh.getRange(r, NOTE_COL).setValue(
+            '⚠ Nghi trùng "' + name + '" ở tab ' + titleRef.month + ' — check & xoá nếu trùng');
+          suspect++;
+        }
+        idx.byPid[pid] = { sheet: msh, row: r, month: month };
+        idx.byTitle[nt] = { sheet: msh, row: r, month: month };
         added++;
-      } else {
-        waiting++; // not counted yet, not in sheet
+        return;
       }
+
+      waiting++; // not counted yet, not in sheet
     });
   });
   writeState_(st.sheet, newState);
-  Logger.log('Sync done. added=%s updated=%s baseline=%s waiting=%s firstRun=%s month=%s',
-             added, updated, baseline, waiting, firstRun, month);
-  return { added: added, updated: updated, baseline: baseline, waiting: waiting, firstRun: firstRun };
+  Logger.log('Sync done. added=%s updated=%s baseline=%s waiting=%s suspect=%s firstRun=%s month=%s',
+             added, updated, baseline, waiting, suspect, firstRun, month);
+  return { added: added, updated: updated, baseline: baseline, waiting: waiting, suspect: suspect, firstRun: firstRun };
 }
 
 // Manual catch-up: stamp every counted task that's missing from the sheet, even if
@@ -211,11 +244,14 @@ function backfillCounted() {
   try {
     SpreadsheetApp.getUi().alert(
       'Backfill xong.\n\n' +
-      'Kéo về (mới): ' + r.added + '\n' +
-      'Cập nhật:     ' + r.updated + '\n' +
-      'Chưa tới mốc: ' + r.waiting + '\n\n' +
+      'Kéo về (mới):  ' + r.added + '\n' +
+      'Cập nhật:      ' + r.updated + '\n' +
+      'Nghi trùng:    ' + r.suspect + '\n' +
+      'Chưa tới mốc:  ' + r.waiting + '\n\n' +
       (r.added ? 'Lưu ý: task kéo về được gán vào THÁNG HIỆN TẠI (' + curMonth_() +
-                 '). Nếu thực tế nó đạt mốc ở tháng khác, kéo dòng sang tab đúng.'
+                 '). Nếu thực tế nó đạt mốc ở tháng khác, kéo dòng sang tab đúng.' +
+                 (r.suspect ? '\n\n⚠ Có ' + r.suspect + ' task nghi trùng — xem cột Note (H), ' +
+                              'check rồi xoá tay nếu đúng là trùng.' : '')
                : 'Không có task nào thiếu.'));
   } catch (e) { /* no UI when run from editor; log only */ }
   return r;
