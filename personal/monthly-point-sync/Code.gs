@@ -10,6 +10,11 @@
  * Matching is by Notion page id, with task title as a fallback (handles a task that
  * exists in both boards / was tracked under a different id) — prevents duplicates.
  *
+ * MONTH PIN: KPI thường chốt sổ trễ vài ngày — đầu tháng 7 task vẫn tính cho tháng 6.
+ * Menu "⏪ Vẫn tính cho tháng trước" ghim tháng đích cho dòng MỚI (Script Property
+ * ACTIVE_MONTH). "✅ Chốt: sang tháng lịch" gỡ ghim. Ghim cũ hơn tháng liền trước là
+ * stale — tự bỏ qua, dùng tháng lịch (quên gỡ ghim chỉ lệch tối đa 1 tháng).
+ *
  * SETUP: see SETUP.md. Only secret is Script Property NOTION_TOKEN.
  */
 
@@ -32,6 +37,10 @@ var NOTION_VERSION = '2025-09-03';
 // duplicate of a row already in another month. Col H is blank in the template; the
 // KPI summary lives at col I+, so H is safe. Data columns stay A..G (7).
 var NOTE_COL = 8; // H
+// Script Property ACTIVE_MONTH ("MM/YYYY"): ghim tháng đích cho dòng MỚI khi KPI
+// chốt sổ trễ (đầu tháng 7 vẫn tính cho tháng 6). Set/gỡ bằng menu, không sửa tay.
+// Vắng mặt = tháng lịch (mặc định an toàn). Luật stale: xem activeMonth_().
+var ACTIVE_MONTH_PROP = 'ACTIVE_MONTH';
 // -----------------------------------------------------
 
 function token_() {
@@ -46,6 +55,23 @@ function isCounted_(status) { return COUNTED.indexOf(status) !== -1; }
 function curMonth_() {
   var tz = Session.getScriptTimeZone() || 'Asia/Ho_Chi_Minh';
   return Utilities.formatDate(new Date(), tz, 'MM/yyyy');
+}
+function prevMonth_() {
+  var cur = curMonth_(); // 'MM/yyyy' — string math, tránh mọi pitfall timezone
+  var m = parseInt(cur.slice(0, 2), 10), y = parseInt(cur.slice(3), 10);
+  m--; if (m < 1) { m = 12; y--; }
+  return (m < 10 ? '0' + m : String(m)) + '/' + y;
+}
+// Tháng mà dòng MỚI được ghi vào. Bình thường = tháng lịch; khi KPI chốt sổ trễ,
+// menu ghim tháng liền trước qua ACTIVE_MONTH. Ghim chỉ được honor khi nó là tháng
+// lịch hiện tại hoặc tháng liền trước — cũ hơn nghĩa là quên gỡ ghim: bỏ qua và
+// quay về tháng lịch, để thiệt hại của việc quên tối đa là 1 tháng.
+function activeMonth_() {
+  var pin = PropertiesService.getScriptProperties().getProperty(ACTIVE_MONTH_PROP);
+  if (!pin) return curMonth_();
+  if (isMonthTab_(pin) && (pin === curMonth_() || pin === prevMonth_())) return pin;
+  Logger.log('ACTIVE_MONTH "%s" stale/không hợp lệ (tháng lịch %s) — dùng tháng lịch.', pin, curMonth_());
+  return curMonth_();
 }
 
 // ---- Notion ----
@@ -163,7 +189,7 @@ function syncNow(opts) {
   var ss = ss_();
   var st = getState_(ss), firstRun = st.firstRun, prev = st.map, newState = {};
   var idx = buildIndex_(ss);
-  var month = curMonth_();
+  var month = activeMonth_(); // tháng đang tính — tháng lịch, hoặc tháng ghim từ menu
   var added = 0, updated = 0, baseline = 0, waiting = 0, suspect = 0;
 
   WATCH_SOURCES.forEach(function (ds) {
@@ -202,7 +228,8 @@ function syncNow(opts) {
       // Test or beyond. Normal sync also requires observing the CROSS (prev not yet
       // counted); backfill stamps any counted task missing here.
       if (isCounted_(status) && (backfill || !isCounted_(prev[pid]))) {
-        // RULE 1: new rows go ONLY into the current month tab, never an old one.
+        // RULE 1: new rows go ONLY into the active month tab (calendar month, or
+        // the pinned previous month while KPI close lags) — never any other tab.
         var msh = ensureMonthSheet_(ss, month);
         var r = lastDataRow_(msh) + 1;
         msh.getRange(r, 1, 1, 7).setValues([[
@@ -233,7 +260,7 @@ function syncNow(opts) {
   writeState_(st.sheet, newState);
   Logger.log('Sync done. added=%s updated=%s baseline=%s waiting=%s suspect=%s firstRun=%s month=%s',
              added, updated, baseline, waiting, suspect, firstRun, month);
-  return { added: added, updated: updated, baseline: baseline, waiting: waiting, suspect: suspect, firstRun: firstRun };
+  return { added: added, updated: updated, baseline: baseline, waiting: waiting, suspect: suspect, firstRun: firstRun, month: month };
 }
 
 // Manual catch-up: stamp every counted task that's missing from the sheet, even if
@@ -248,13 +275,31 @@ function backfillCounted() {
       'Cập nhật:      ' + r.updated + '\n' +
       'Nghi trùng:    ' + r.suspect + '\n' +
       'Chưa tới mốc:  ' + r.waiting + '\n\n' +
-      (r.added ? 'Lưu ý: task kéo về được gán vào THÁNG HIỆN TẠI (' + curMonth_() +
+      (r.added ? 'Lưu ý: task kéo về được gán vào tháng đang tính (' + r.month +
                  '). Nếu thực tế nó đạt mốc ở tháng khác, kéo dòng sang tab đúng.' +
                  (r.suspect ? '\n\n⚠ Có ' + r.suspect + ' task nghi trùng — xem cột Note (H), ' +
                               'check rồi xoá tay nếu đúng là trùng.' : '')
                : 'Không có task nào thiếu.'));
   } catch (e) { /* no UI when run from editor; log only */ }
   return r;
+}
+
+// ---- month pin (menu) ----
+// KPI chốt sổ trễ vài ngày đầu tháng: bấm ghim để task MỚI tiếp tục vào tab tháng
+// trước; chốt sổ xong thì gỡ (mặc định = tháng lịch). Ghim chỉ đổi tab đích khi
+// ADD — update dòng cũ / Have / Note giữ nguyên hành vi.
+function pinPrevMonth() {
+  var pm = prevMonth_();
+  PropertiesService.getScriptProperties().setProperty(ACTIVE_MONTH_PROP, pm);
+  toast_('Task mới sẽ tính cho tháng ' + pm + '. Chốt sổ xong nhớ bấm "✅ Chốt: sang tháng lịch".',
+         '📌 Đã ghim tháng ' + pm);
+}
+function unpinMonth() {
+  PropertiesService.getScriptProperties().deleteProperty(ACTIVE_MONTH_PROP);
+  toast_('Task mới sẽ tính cho tháng lịch như bình thường.', '✅ Đã về tháng ' + curMonth_());
+}
+function toast_(msg, title) {
+  try { ss_().toast(msg, title, 8); } catch (e) { Logger.log('%s — %s', title, msg); }
 }
 
 // ---- triggers / menu ----
@@ -266,9 +311,19 @@ function installTrigger() {
   Logger.log('Trigger installed: syncNow every 10 minutes');
 }
 function onOpen() {
-  SpreadsheetApp.getUi().createMenu('🔄 Point Sync')
+  var cur = curMonth_(), am = activeMonth_();
+  SpreadsheetApp.getUi().createMenu('🔄 Point Sync — tháng ' + am)
     .addItem('Sync now', 'syncNow')
     .addItem('Kéo task counted còn thiếu (quét bù)', 'backfillCounted')
+    .addSeparator()
+    .addItem('⏪ Vẫn tính cho tháng trước (' + prevMonth_() + ')', 'pinPrevMonth')
+    .addItem('✅ Chốt: sang tháng lịch (' + cur + ')', 'unpinMonth')
+    .addSeparator()
     .addItem('Install 10-min auto-sync', 'installTrigger')
     .addToUi();
+  // Nhắc passive khi đang ghim — mở sheet là thấy mình đang tính cho tháng nào.
+  if (am !== cur) {
+    toast_('Đang ghim: task mới tính cho tháng ' + am + ', không phải tháng lịch ' + cur +
+           '. Chốt sổ xong bấm "✅ Chốt: sang tháng lịch".', '📌 Point Sync');
+  }
 }
