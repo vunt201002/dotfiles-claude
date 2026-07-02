@@ -29,10 +29,19 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
 - Polling mỗi ~10 phút: thấy task vừa đạt "Ready to Test" (hoặc xa hơn) mà **chưa có
   trong sheet** → đóng dấu ngày hiện tại → ghi vào tab tháng đó. Chính xác tới mức tháng.
 - Đã đóng dấu = **cố định tab** (point tính 1 lần). Status sau đó vẫn cập nhật live.
+- **Ghim tháng (ACTIVE_MONTH):** KPI thường chốt sổ trễ vài ngày — đầu tháng 7 task
+  vẫn tính cho tháng 6, và mốc chốt không cố định nên không auto được, phải manual.
+  Menu "⏪ Vẫn tính cho tháng trước" ghim tháng đích cho dòng MỚI (Script Property
+  `ACTIVE_MONTH`); chốt sổ xong bấm "✅ Chốt: sang tháng lịch" (xoá ghim — vắng ghim
+  = tháng lịch, mặc định an toàn). Guard chống quên: ghim chỉ có hiệu lực khi nó là
+  tháng lịch hiện tại hoặc tháng liền trước, cũ hơn → stale, tự bỏ qua (thiệt hại
+  tối đa 1 tháng). Nhắc passive: tên menu mang tháng đang tính + toast khi mở sheet
+  lúc đang ghim. Ghim chỉ đổi tab đích khi ADD — update/Have/Note không đổi hành vi.
 
 ## Quy tắc thêm / cập nhật (hard rules)
-1. **Không thêm task mới vào tháng cũ.** "Tháng cũ" = mọi tab khác tháng hiện tại.
-   Dòng mới chỉ được tạo ở tab **tháng hiện tại**. Tab tháng cũ đã chốt.
+1. **Không thêm task mới vào tháng cũ.** "Tháng cũ" = mọi tab khác tháng đang tính.
+   Dòng mới chỉ được tạo ở tab **tháng đang tính** (tháng lịch, hoặc tháng liền
+   trước khi đang ghim `ACTIVE_MONTH`). Tab tháng cũ đã chốt.
 2. **Tháng cũ vẫn được update theo Notion.** Task nằm ở tab cũ mà Notion đổi
    Status / Point / Role → cập nhật tại chỗ ở tab cũ đó (vd Testing → Done).
    Checkbox **Have** và cột **Note** anh chỉnh tay không bao giờ bị đè.

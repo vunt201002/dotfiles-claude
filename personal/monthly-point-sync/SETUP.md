@@ -36,14 +36,29 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   To Review/Reviewing (bỏ qua Ready to Test), đôi khi không được bắt → bị sót.
 - Khi thấy thiếu: menu **🔄 Point Sync → Kéo task counted còn thiếu (quét bù)**.
   Nó quét mọi task đang ở status counted mà **chưa có** trong sheet và kéo về **tháng
-  hiện tại**. Chống trùng theo id/tên nên bấm nhiều lần vẫn an toàn (task đã có chỉ
-  được cập nhật, không ghi lại).
+  đang tính** (tháng lịch, hoặc tháng đã ghim — xem mục ghim tháng bên dưới). Chống
+  trùng theo id/tên nên bấm nhiều lần vẫn an toàn (task đã có chỉ được cập nhật,
+  không ghi lại).
 - Sau khi quét, nếu task thực tế đạt mốc ở tháng khác, **kéo dòng sang tab đúng** —
-  nút này gán theo tháng bấm, không phải tháng task thật sự chuyển trạng thái.
+  nút này gán theo tháng đang tính lúc bấm, không phải tháng task thật sự chuyển trạng thái.
+
+## Đầu tháng mà vẫn tính cho tháng trước (ghim tháng)
+- KPI thường chốt sổ trễ vài ngày: sang đầu tháng 7 nhưng task vẫn tính cho tháng 6.
+  Mốc chốt không cố định nên không auto — anh tự bấm:
+- **⏪ Vẫn tính cho tháng trước (06/2026)**: từ lúc bấm, task MỚI được ghi vào tab
+  tháng trước thay vì tháng lịch. Label tự điền đúng tháng, không phải gõ gì.
+- Chốt sổ xong: **✅ Chốt: sang tháng lịch (07/2026)** — gỡ ghim, về bình thường.
+- **An toàn khi quên gỡ:** ghim cũ hơn tháng liền trước tự bị bỏ qua (quay về tháng
+  lịch, lệch tối đa 1 tháng). Đang ghim thì mỗi lần mở sheet có toast nhắc, và tên
+  menu luôn hiện tháng đang tính (`🔄 Point Sync — tháng 06/2026`).
+- Ghim chỉ đổi tab cho dòng MỚI (kể cả quét bù). Update dòng cũ / Have / Note giữ
+  nguyên hành vi. Ghim lưu ở Script Property `ACTIVE_MONTH` — chỉ thao tác qua menu,
+  không cần sửa tay.
 
 ## Cách hoạt động
 - Quét các data source trong `WATCH_SOURCES`, lấy task anh là **Developer** hoặc **Reviewer**.
-- Task **chưa có trong sheet** mà đã đạt **Ready to Test** trở đi → ghi vào tab **tháng hiện tại**
+- Task **chưa có trong sheet** mà đã đạt **Ready to Test** trở đi → ghi vào tab **tháng
+  đang tính** — tháng lịch, hoặc tháng đã ghim qua menu (xem mục ghim tháng ở trên)
   (Point = `Size card`, Role = Dev/Reviewer, Status live, Card link, Have = chưa tick).
 - Task **đã có** (khớp theo Notion page id, ở **bất kỳ** tab tháng nào) → cập nhật
   Status/Point/Role/tên ngay tại tab đó, kể cả tab tháng cũ; **giữ nguyên** Have và Note.
