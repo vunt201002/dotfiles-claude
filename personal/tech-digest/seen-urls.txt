@@ -47,3 +47,17 @@ https://www.helpnetsecurity.com/2026/06/05/cisco-sd-wan-cve-2026-20245-0-day-exp
 https://dam.stanford.edu/memory-prices.html
 https://chipsandcheese.com/p/top500-at-isc26-we-have-a-new-number
 https://alganet.github.io/blog/2026-06-28-12-POSIX-Is-Not-A-Shell.html
+https://www.hunton.com/privacy-and-cybersecurity-law-blog/virginia-bans-sale-of-geolocation-data
+https://blog.podman.io/2026/07/introducing-podman-v6-0-0/
+https://mathstodon.xyz/@iblech/116769502749142438
+https://webkit.org/blog/18136/introducing-the-safari-mcp-server-for-web-developers/
+https://blog.fsck.com/2026/06/15/Superpowers-6/
+https://blog.okturtles.org/2026/07/short-leash-ai-method/
+https://github.com/HUANGCHIHHUNGLeo/claude-real-video
+https://www.reuters.com/world/china/alibaba-ban-claude-code-workplace-over-alleged-backdoor-risks-source-says-2026-07-03/
+https://shopify.dev/changelog/hydrogen-now-deploys-to-vercel
+https://github.com/immich-app/immich/discussions/29439
+https://www.dbos.dev/blog/co-locating-workflow-state-with-your-data
+https://github.com/FractalFir/crustc
+https://zk.golf/
+https://manticoresearch.com/blog/onnx-embeddings-speedup/
