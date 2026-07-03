@@ -18,7 +18,7 @@ This is the lightweight cousin of the heavier tracking skills. Route correctly:
 - **A real team task** (assignee, status, board)? → **/notion-task-personal**.
 - **/todo** = a personal scratch checklist for "what do I do next," nothing more.
 
-Script: `python ~/.claude/skills/todo/scripts/todo.py`
+Script: `python3 ~/.claude/skills/todo/scripts/todo.py`
 Storage: `~/.todo/YYYY-MM-DD.md` (one file per day; override with `TODO_VAULT`).
 
 ## Commands
@@ -67,16 +67,16 @@ just print the `list` output — that's the deliverable.
 
 ```bash
 # End of day — jot tomorrow's three, with one blocker noted:
-python ~/.claude/skills/todo/scripts/todo.py add "p1: finish merge-branch conflicts" \
+python3 ~/.claude/skills/todo/scripts/todo.py add "p1: finish merge-branch conflicts" \
   --note "left off: deploy-staging ref rewrite conflicts on .gitlab-ci.yml"
-python ~/.claude/skills/todo/scripts/todo.py add "review widget v4 layer matrix bug"
-python ~/.claude/skills/todo/scripts/todo.py add "p3: clean up seen-urls dedup"
+python3 ~/.claude/skills/todo/scripts/todo.py add "review widget v4 layer matrix bug"
+python3 ~/.claude/skills/todo/scripts/todo.py add "p3: clean up seen-urls dedup"
 
 # Next morning — read by priority (carry-over from prior days shows automatically):
-python ~/.claude/skills/todo/scripts/todo.py list
+python3 ~/.claude/skills/todo/scripts/todo.py list
 
 # Knock one out:
-python ~/.claude/skills/todo/scripts/todo.py done 1
+python3 ~/.claude/skills/todo/scripts/todo.py done 1
 ```
 
 ## Setup note
