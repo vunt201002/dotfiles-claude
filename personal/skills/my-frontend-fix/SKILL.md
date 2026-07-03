@@ -48,7 +48,12 @@ Chưa confirm → chưa code. Root cause chưa có bằng chứng → quay lại
 
 Chạy app ở trạng thái lỗi, chụp **baseline** (đây cũng là *mốc đỏ* của red test).
 - URL/lệnh chạy: theo adapter project (Joy: Vite `5173` / admin embed / storefront thật).
-- `browse`/Playwright: `goto` → `screenshot` → Read ảnh.
+- Browser: mặc định **/chrome** (claude-in-chrome) trên **Chrome thật đang mở** — dùng
+  **1 group tab "Claude" cố định**: `tabs_context` → **navigate tab sẵn có trong group**
+  (không `tabs_create` khi group đã có tab — tạo tab mới dễ đẻ thêm group "Claude" nữa;
+  nhiều URL → điều hướng tuần tự cùng tab). **Không đụng tab ngoài group**. Login
+  Admin/store có sẵn → khỏi cookie-import.
+- Fallback headless (khi /chrome không khả dụng): `browse`/Playwright: `goto` → `screenshot` → Read ảnh.
 
 ## 3. Diagnose runtime TRƯỚC khi code (diagnose-first, fix-second)
 

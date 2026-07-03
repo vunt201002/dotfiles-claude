@@ -57,34 +57,41 @@ Khi app có `.claude/skills` riêng → **skill generic của anh là phương p
 | Layer | Quan sát bằng |
 |---|---|
 | Storefront widget (shadow DOM/Lit) | debug-global nếu có · Playwright `eval`/`getComputedStyle`/`queryShadow` |
-| Admin (React/Polaris) | `console.log` · Playwright eval · React DevTools. **Cần login Admin → xem "Verify trên browser cần login" bên dưới** (Shopify Admin chặn headless + cookie-copy: device-bound + Cloudflare). |
+| Admin (React/Polaris) | `console.log` · eval qua /chrome hoặc Playwright · React DevTools. **Cần login Admin → /chrome trên Chrome thật (đã login sẵn) — xem "Test trên browser" bên dưới.** |
 | Backend (Cloud Functions) | **Firebase emulator: log stdout** — dùng cho bước prove, **đừng deploy staging để đọc log** |
 | DB / record state | emulator UI · firebase console |
 | Webhook | pubsub emulator trigger + log |
 
-### Verify trên browser cần login — thứ tự fallback
+### Test trên browser — mặc định /chrome (Chrome thật, group tab "Claude")
 
-Khi một bước verify (A7 / B8) phải mở trang **sau đăng nhập** (nhất là Shopify Admin),
-**đừng nhảy thẳng vào `/qa-login`.** Đó là *bằng chứng đắt nhất* — Shopify Admin chủ
-động chặn mọi browser không phải Chrome thật của anh (device-bound session +
-Cloudflare bot-check), nên cookie-copy lẫn headless đều có thể fail. Đi theo bậc thang
-**rẻ → đắt**, dừng ở bậc đầu tiên cho ra bằng chứng:
+Bước test/verify nào cần browser (A7 / B8, QA, dogfood) → dùng **/chrome**
+(claude-in-chrome) điều khiển **Chrome thật anh đang mở**, không phải headless.
 
-1. **Không cần login?** Trang đó công khai, hoặc test được ở **storefront** thay vì
-   admin → cứ `/browse` thẳng. Đa số verify UI không thật sự cần vào Admin.
-2. **Dùng lại session Playwright đang có.** Một browse session trước trong cùng phiên
-   có thể đã authenticated → tái dùng nó (`$B status`, `$B cookies`) thay vì login mới.
-3. **Né Admin bằng đường khác** (thường nhanh hơn cả login):
-   - App embed của mình → **dev/preview URL** (`shopify app dev`), không qua admin thật.
-   - Dựng data/state (product, order, discount, settings) → **Admin API**, không click UI.
-   - Theme/storefront → **theme preview URL** / local theme dev.
-4. **Hết cách → `/qa-login`** (last resort). Import cookie Chrome thật vào session.
-   Storefront/customer gần như luôn pass; **Admin device-bound/SSO có thể vẫn chặn** —
-   nếu vẫn hiện màn login thì đó là giới hạn đã biết, không phải bug. Lúc đó: login
-   Admin một lần ngay trong session browse bằng tay, rồi tái dùng (về bậc 2).
+- **Đúng 1 group cố định tên "Claude"** = sân của Claude: mọi tab trong đó đều để
+  Claude test. **KHÔNG tạo group mới** — mỗi lần `tabs_create` là dễ đẻ thêm một
+  group "Claude" nữa, rác browser.
+- Quy trình mỗi lần test: `tabs_context` → tìm tab trong group "Claude" → **navigate
+  tab sẵn có đó** (đổi URL theo tabId) — **không `tabs_create`**. Chỉ khi group chưa
+  có tab test nào mới tạo đúng **1 tab**, rồi tái dùng nó suốt; nhiều URL → điều hướng
+  tuần tự trên cùng tab, đừng mỗi URL một tab.
+- **Không đụng tab ngoài group** — đó là tab làm việc của anh.
+- **Login có sẵn.** Chrome thật đã đăng nhập Shopify Admin / store / Notion... →
+  hết hẳn vấn đề device-bound + Cloudflare; **không cần cookie-import**.
 
-Khớp nguyên tắc lõi *"prove bằng bằng chứng rẻ nhất ép ra được"* — `/qa-login` là
-nước cuối, không phải phản xạ đầu.
+#### Fallback headless — verify trên browser cần login (khi /chrome không khả dụng)
+
+Chỉ khi /chrome không dùng được (extension chưa bật, máy khác, cần bulk/headless)
+→ về `/browse` như cũ. Lúc đó nếu trang cần login, đi bậc thang **rẻ → đắt**,
+dừng ở bậc đầu tiên cho ra bằng chứng:
+
+1. **Không cần login?** Trang công khai, hoặc test được ở **storefront** thay vì
+   admin → cứ `/browse` thẳng.
+2. **Dùng lại session Playwright đang có** trong phiên (`$B status`, `$B cookies`).
+3. **Né Admin bằng đường khác**: app embed → **dev/preview URL** (`shopify app dev`) ·
+   dựng data/state → **Admin API** · theme/storefront → **theme preview URL**.
+4. **Hết cách → `/qa-login`** (last resort). Storefront gần như luôn pass; **Admin
+   device-bound/SSO có thể vẫn chặn** — giới hạn đã biết, không phải bug. Lúc đó
+   login Admin một lần bằng tay trong session browse rồi tái dùng (về bậc 2).
 
 ---
 
@@ -116,7 +123,7 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 **A6. Implement — lát mỏng trước** — `/implement`  ·  build **lát dọc mỏng nhất chạy end-to-end** trước, rồi mở rộng. **Đừng big-bang.** Tới khi test xanh.
 
 **A7. Verify + blast radius** — `/my-verify` *(route theo layer: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*  ·  feature mới **có làm vỡ flow cũ không?**
-*Verify cần trang sau login (nhất là Admin) → theo bậc thang **"Verify trên browser cần login"**; `/qa-login` chỉ là nước cuối.*
+*Verify cần browser → **/chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); headless `/browse` + `/qa-login` chỉ là fallback.*
 
 **A8. Đóng** — `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
 
@@ -143,7 +150,7 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 
 **B8. Verify + blast radius** — `/my-verify` *(route: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*
 Chống băng-dán (giá trị runtime đổi đúng, không hardcode/`!important` đè) + blast radius (mọi nơi cùng nguồn) + regression.
-*Verify cần trang sau login (nhất là Admin) → theo bậc thang **"Verify trên browser cần login"**; `/qa-login` chỉ là nước cuối.*
+*Verify cần browser → **/chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); headless `/browse` + `/qa-login` chỉ là fallback.*
 
 **B9. Đóng** — `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
 
