@@ -28,6 +28,7 @@ Storage: `~/.todo/YYYY-MM-DD.md` (one file per day; override with `TODO_VAULT`).
 | `add "<text>" [--note "..."]` | Append a task to TODAY's file. Text may start with `p1:`/`p2:`/`p3:` (default `p2`). `--note` adds indented context lines under it. |
 | `list` (default) | Show **open** tasks across all days, grouped P1→P2→P3. Unfinished tasks from earlier days appear with `(từ YYYY-MM-DD)` — this is the carry-over that makes "start tomorrow" work. |
 | `list --all` | Same, but include done (`[x]`) tasks too. |
+| `list --notes` | Same as `list`, but also prints the indented note lines under each task — the "xem chi tiết" view. Combines with `--all`. |
 | `done <N>` | Tick task **#N** from the most recent `list` ordering (works across days). |
 | `path` | Print today's file path (to open it by hand). |
 
@@ -39,6 +40,7 @@ Storage: `~/.todo/YYYY-MM-DD.md` (one file per day; override with `TODO_VAULT`).
 | `<text>` (a task) | **Capture mode** — `add` it. Pull a leading `p1:/p2:/p3:` if present. |
 | `done <N>` / `xong <N>` | Mark task #N done. |
 | `all` / `--all` | `list --all` (include finished). |
+| `notes` / `detail` / `chi tiết` | `list --notes` — read mode with every task's notes shown. |
 | `path` | Print today's file path. |
 
 When the user dumps **several tasks at once** (the common end-of-day case), call `add`
@@ -74,6 +76,9 @@ python3 ~/.claude/skills/todo/scripts/todo.py add "p3: clean up seen-urls dedup"
 
 # Next morning — read by priority (carry-over from prior days shows automatically):
 python3 ~/.claude/skills/todo/scripts/todo.py list
+
+# Full detail view — every task with its notes:
+python3 ~/.claude/skills/todo/scripts/todo.py list --notes
 
 # Knock one out:
 python3 ~/.claude/skills/todo/scripts/todo.py done 1

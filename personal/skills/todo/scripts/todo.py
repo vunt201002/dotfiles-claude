@@ -6,6 +6,7 @@ checkbox tasks, priority-tagged. Built for "note now, read tomorrow by priority"
   python todo.py add "p1: finish merge-branch conflict" [--note "stuck on X"]
   python todo.py list                 # open tasks (today + carry-over), grouped P1>P2>P3
   python todo.py list --all           # include done tasks too
+  python todo.py list --notes         # same list, with note lines shown under each task
   python todo.py done 2               # tick task #2 from the last `list` ordering
   python todo.py path                 # print today's file path
 
@@ -94,31 +95,39 @@ def add(text, note=None):
 
 
 def collect(include_done=False):
-    """Return list of dicts across all days: {date, prio, done, text, id, file, lineno}."""
+    """Return list of dicts across all days: {date, prio, done, text, id, file, lineno, notes}."""
     out = []
     for path in all_day_files():
         date = os.path.splitext(os.path.basename(path))[0]
+        cur = None  # task the following note lines belong to (None = drop them)
         with open(path, encoding="utf-8") as f:
             for i, raw in enumerate(f):
-                m = LINE_RE.match(raw.rstrip("\n"))
-                if not m:
+                line = raw.rstrip("\n")
+                m = LINE_RE.match(line)
+                if m:
+                    done = m.group("done").lower() == "x"
+                    if done and not include_done:
+                        cur = None
+                        continue
+                    cur = {
+                        "date": date,
+                        "prio": int(m.group("prio")[1]),
+                        "done": done,
+                        "text": m.group("text").strip(),
+                        "id": m.group("id") or f"{date}#L{i}",
+                        "file": path,
+                        "lineno": i,
+                        "notes": [],
+                    }
+                    out.append(cur)
                     continue
-                done = m.group("done").lower() == "x"
-                if done and not include_done:
-                    continue
-                out.append({
-                    "date": date,
-                    "prio": int(m.group("prio")[1]),
-                    "done": done,
-                    "text": m.group("text").strip(),
-                    "id": m.group("id") or f"{date}#L{i}",
-                    "file": path,
-                    "lineno": i,
-                })
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and cur is not None:
+                    cur["notes"].append(stripped)
     return out
 
 
-def list_tasks(include_done=False):
+def list_tasks(include_done=False, show_notes=False):
     tasks = collect(include_done=include_done)
     if not tasks:
         print("No open tasks. Add one:  /todo p1: <thing>")
@@ -141,6 +150,9 @@ def list_tasks(include_done=False):
         carry = "" if t["date"] == today_str else f"  (từ {t['date']})"
         box = "x" if t["done"] else " "
         print(f"  {n}. [{box}] {t['text']}{carry}")
+        if show_notes:
+            for note in t["notes"]:
+                print(f"         · {note}")
     _write_order(order)
     open_n = sum(1 for t in tasks if not t["done"])
     print(f"\n{open_n} việc chưa xong" + (f" · {len(tasks)-open_n} đã xong" if include_done else ""))
@@ -194,6 +206,7 @@ def main():
 
     lst = sub.add_parser("list", help="show open tasks grouped by priority")
     lst.add_argument("--all", action="store_true", help="include done tasks")
+    lst.add_argument("--notes", action="store_true", help="show note lines under each task")
 
     d = sub.add_parser("done", help="tick task #N from the last list")
     d.add_argument("num", type=int)
@@ -209,7 +222,8 @@ def main():
         print(day_file(today()))
         return 0
     # default (no cmd, or `list`)
-    return list_tasks(include_done=getattr(args, "all", False))
+    return list_tasks(include_done=getattr(args, "all", False),
+                      show_notes=getattr(args, "notes", False))
 
 
 if __name__ == "__main__":
