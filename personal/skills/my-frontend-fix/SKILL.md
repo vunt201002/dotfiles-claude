@@ -48,12 +48,13 @@ Chưa confirm → chưa code. Root cause chưa có bằng chứng → quay lại
 
 Chạy app ở trạng thái lỗi, chụp **baseline** (đây cũng là *mốc đỏ* của red test).
 - URL/lệnh chạy: theo adapter project (Joy: Vite `5173` / admin embed / storefront thật).
-- Browser: mặc định **/chrome** (claude-in-chrome) trên **Chrome thật đang mở** — dùng
-  **1 group tab "Claude" cố định**: `tabs_context` → **navigate tab sẵn có trong group**
-  (không `tabs_create` khi group đã có tab — tạo tab mới dễ đẻ thêm group "Claude" nữa;
-  nhiều URL → điều hướng tuần tự cùng tab). **Không đụng tab ngoài group**. Login
-  Admin/store có sẵn → khỏi cookie-import.
-- Fallback headless (khi /chrome không khả dụng): `browse`/Playwright: `goto` → `screenshot` → Read ảnh.
+- Browser: mặc định **/my-chrome** (claude-in-chrome) trên **Chrome thật đang mở**.
+  **Check group trước mỗi lần test:** `tabs_context_mcp` → **CÓ group thì DÙNG**
+  (`navigate` tab sẵn có; `tabs_create_mcp` chỉ khi cần thêm tab — vẫn vào group đó);
+  **CHƯA có thì tạo đúng 1 lần** rồi tái dùng suốt session (session mới luôn phải tạo —
+  giới hạn extension #69542). **Xong việc → `tabs_close_mcp` đóng tab đã mở** (group
+  tự biến mất). **Không đụng tab ngoài group**. Login Admin/store có sẵn → khỏi cookie-import.
+- Fallback headless (khi /my-chrome không khả dụng): `browse`/Playwright: `goto` → `screenshot` → Read ảnh.
 
 ## 3. Diagnose runtime TRƯỚC khi code (diagnose-first, fix-second)
 

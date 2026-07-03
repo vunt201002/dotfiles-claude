@@ -46,11 +46,13 @@ Chỗ liên quan (gần fix, dùng chung code) còn chạy đúng không?
 
 > App-specific: lấy đồ từ **Project Adapter** (Joy: `__joyDebug` + emulator UI `:4012`; Wishlist: Jest + emulator UI `:4000`).
 
-> **Browser khi cần mở trang:** mặc định **/chrome** (claude-in-chrome) trên **Chrome thật
-> đang mở** — dùng **1 group tab "Claude" cố định**: `tabs_context` → **navigate tab sẵn có
-> trong group** (không `tabs_create` khi group đã có tab — tạo tab mới dễ đẻ thêm group
-> "Claude" nữa), **không đụng tab ngoài group**. Login Admin/store có sẵn. Headless `/browse`
-> chỉ là fallback khi /chrome không khả dụng.
+> **Browser khi cần mở trang:** mặc định **/my-chrome** (claude-in-chrome) trên **Chrome thật
+> đang mở**. **Check group trước mỗi lần test:** `tabs_context_mcp` → **CÓ group thì DÙNG**
+> (`navigate` tab sẵn có; `tabs_create_mcp` chỉ khi cần thêm tab — vẫn vào group đó);
+> **CHƯA có thì tạo đúng 1 lần** rồi tái dùng suốt session. (Check chỉ thấy group của
+> session hiện tại — session mới luôn phải tạo; giới hạn extension #69542.) **Xong việc →
+> `tabs_close_mcp` đóng tab đã mở** để group tự biến mất. Không đụng tab ngoài group.
+> Login Admin/store có sẵn. Headless `/browse` chỉ là fallback khi /my-chrome không khả dụng.
 
 ## Vòng lặp
 
