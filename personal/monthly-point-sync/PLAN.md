@@ -74,6 +74,46 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
   **không đè** Have và Role anh chỉnh tay.
 - Webhook realtime: nâng cấp sau nếu anh có quyền chỉnh integration (cùng logic).
 
+## Dashboard pin + board "đang xử lý"
+- **Dashboard luôn ở đầu:** `ensureMonthSheet_` gọi `pinDashboardFirst_` sau khi
+  tạo tab tháng mới, đưa tab `Dashboard` (đã có sẵn, tên cấu hình ở `DASHBOARD`)
+  về index 0. Menu **📌 Ghim Dashboard lên đầu** làm lại thủ công khi cần. Không
+  có tab Dashboard → no-op, không lỗi.
+- **Board tổng hợp task đang xử lý (tab "Đang xử lý"):** Code.gs tự ghi trực
+  tiếp, không phải formula. `syncInProgress_` được gọi **1 LẦN cho MỌI task**
+  Dev/Reviewer ngay đầu vòng lặp `syncNow` — độc lập hoàn toàn với luồng
+  COUNTED/tab tháng bên dưới (pid match / baseline / add-mới / waiting). Nếu
+  status ∈ `IN_PROGRESS_STATUSES` (`Reviewing`, `To review`, `Test Production`,
+  `Testing`, `Doing`) thì upsert dòng (theo pid, index riêng
+  `buildInProgressIndex_`); nếu không còn thuộc nhóm đó → xoá dòng (`deleteRow`).
+  5 cột A-E (Task/Status/Point/Role/Card), không có Have/Note. Quét MỌI tab tháng
+  (không chỉ tháng hiện tại), tự tạo tab nếu chưa có (`ensureInProgressSheet_`).
+  Hoàn toàn tự động — không cần Garry sửa gì khi có tab tháng mới hay task đổi
+  status. Tách biệt khỏi RULE 1-5 và `_STATE`: tên tab không khớp `isMonthTab_`
+  nên `buildIndex_` không quét vào, không ảnh hưởng dedup-theo-pageId của luồng
+  chính.
+  - **"Doing" nằm ngoài `COUNTED`** (task chưa từng đạt Ready to Test) nhưng vì
+    `syncInProgress_` không phụ thuộc `isCounted_`, task đang Doing vẫn lên được
+    tab này ngay từ lần sync đầu tiên — kể cả task đó chưa từng và có thể
+    KHÔNG BAO GIỜ xuất hiện ở bất kỳ tab tháng nào (Doing không tính KPI).
+  - **Sort theo priority:** sau khi mọi upsert/xoá trong lần sync xong,
+    `sortInProgressSheet_` sắp lại TOÀN BỘ tab theo đúng thứ tự
+    `IN_PROGRESS_STATUSES` (index trong mảng = rank). Đọc lại bằng
+    `getFormulas()` cho cột Card để không mất công thức `HYPERLINK` khi viết
+    lại thứ tự mới. Status lạ (không có trong mảng, hiếm — vd Notion đổi tên
+    status) bị đẩy xuống cuối, không crash. Chạy lại mỗi lần sync (10 phút/lần)
+    nên thứ tự có thể đổi nếu có task đổi status — đánh đổi lấy sự đơn giản/đáng
+    tin cậy so với tự tính vị trí chèn/dịch chuyển từng dòng.
+- **Style tab "Đang xử lý":** `styleInProgressSheet_` chạy đúng 1 lần trong
+  `ensureInProgressSheet_` lúc tab được tạo — copy format header (font/màu nền)
+  từ `_TEMPLATE`, copy conditional format rule của cột Status (`getColumn() === 2`)
+  VÀ cột Role (`getColumn() === 4`) sang đúng cột tương ứng (B/D) của tab mới —
+  cùng vị trí cột ở cả 2 sheet nên copy thẳng, chỉ đổi vùng áp dụng. Rule khác
+  (vd Have ở cột E của `_TEMPLATE`) không mang sang. Set bold header + freeze row
+  1, ẩn cột F (pid), set wrap text cho cột Task (A2:A1000) để tên task dài xuống
+  dòng thay vì bị cắt — khớp tab tháng. Các lần `syncNow` sau chỉ `setValues`,
+  không style lại — không ghi đè chỉnh sửa tay của Garry sau khi tab đã tồn tại.
+
 ## Mở / rủi ro
 - Role lịch sử để trống (schema DB cũ khác nhau) — chấp nhận, backfill thủ công nếu cần.
 - Nếu Vũ đổi sang project DB mới → thêm DB ID vào tab Config.
