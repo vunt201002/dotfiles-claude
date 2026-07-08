@@ -33,13 +33,6 @@ var COUNTED = ['Ready to Test','Testing','UAT','To review','Reviewing',
 var TEMPLATE = '_TEMPLATE';
 var STATE = '_STATE';
 var DASHBOARD = 'Dashboard';
-var IN_PROGRESS = 'Đang xử lý';
-// Statuses hiển thị trong tab Đang xử lý, ĐÚNG THỨ TỰ ưu tiên Garry muốn (index
-// trong mảng = thứ tự sort — dùng trực tiếp bởi statusRank_/syncInProgress_, xem
-// dưới). "Doing" nằm ngoài COUNTED nên KHÔNG bị luồng chính (isCounted_) chặn —
-// syncInProgress_ được gọi độc lập cho mọi task Dev/Reviewer, không phụ thuộc
-// COUNTED, nên "Doing" vẫn lên được tab này dù chưa từng chạm Ready to Test.
-var IN_PROGRESS_STATUSES = ['Reviewing', 'To review', 'Test Production', 'Testing', 'Doing'];
 var NOTION_VERSION = '2025-09-03';
 // Note column (1-based): written ONLY when a freshly-added task looks like a title
 // duplicate of a row already in another month. Col H is blank in the template; the
@@ -172,113 +165,6 @@ function buildIndex_(ss) {
   return { byPid: byPid, byTitle: byTitle };
 }
 
-// ---- tab "Đang xử lý" (mirror sống, cột A..E: Task/Status/Point/Role/Card) ----
-// Tách biệt hoàn toàn khỏi _STATE và các tab tháng: không dedup chéo, không ảnh
-// hưởng RULE 1-5. Chỉ là 1 view luôn khớp với tập task đang ở IN_PROGRESS_STATUSES,
-// tự thêm/xoá dòng — không cần Garry sửa gì khi có tab tháng mới hay task đổi status.
-function ensureInProgressSheet_(ss) {
-  var sh = ss.getSheetByName(IN_PROGRESS);
-  if (sh) return sh;
-  sh = ss.insertSheet(IN_PROGRESS);
-  sh.getRange(1, 1, 1, 5).setValues([['Task', 'Status', 'Point', 'Role', 'Card']]);
-  styleInProgressSheet_(ss, sh);
-  return sh;
-}
-// Đồng bộ hình thức với tab tháng: copy format header (font/màu nền/bold) và rule
-// tô màu Status từ _TEMPLATE sang, ẩn cột F (pid — khoá match nội bộ, không phải
-// dữ liệu để xem), freeze header, set độ rộng cột dễ đọc. Chạy 1 LẦN lúc tạo tab —
-// nếu Garry tự chỉnh format sau đó, sync không ghi đè lại (chỉ setValues, không
-// đụng style ở các lần chạy tiếp theo).
-function styleInProgressSheet_(ss, sh) {
-  var tpl = ss.getSheetByName(TEMPLATE);
-  if (tpl) {
-    // Header: copy format hàng 1 (A:E) từ _TEMPLATE — font/bold/màu nền khớp tab tháng.
-    tpl.getRange(1, 1, 1, 5).copyTo(sh.getRange(1, 1, 1, 5), { formatOnly: true });
-    // Conditional formatting của cột Status (cột B) VÀ Role (cột D) — cùng vị trí
-    // cột ở cả 2 sheet (_TEMPLATE: Task/Status/Point/Role/Have/Card; Đang xử lý:
-    // Task/Status/Point/Role/Card) nên copy thẳng, chỉ đổi vùng áp dụng.
-    var rules = tpl.getConditionalFormatRules();
-    var newRules = sh.getConditionalFormatRules();
-    rules.forEach(function (rule) {
-      var ranges = rule.getRanges();
-      var appliesToStatusCol = ranges.some(function (r) { return r.getColumn() === 2; });
-      var appliesToRoleCol = ranges.some(function (r) { return r.getColumn() === 4; });
-      if (appliesToStatusCol) newRules.push(rule.copy().setRanges([sh.getRange('B2:B1000')]).build());
-      else if (appliesToRoleCol) newRules.push(rule.copy().setRanges([sh.getRange('D2:D1000')]).build());
-      // rule khác (vd Have ở cột E của _TEMPLATE) không mang sang — Đang xử lý không có Have.
-    });
-    sh.setConditionalFormatRules(newRules);
-  }
-  sh.getRange(1, 1, 1, 5).setFontWeight('bold');
-  sh.setFrozenRows(1);
-  sh.setColumnWidth(1, 260); sh.setColumnWidth(2, 130);
-  sh.setColumnWidth(3, 60);  sh.setColumnWidth(4, 90); sh.setColumnWidth(5, 90);
-  sh.hideColumns(6); // pid — khoá match nội bộ, không cần hiển thị
-  // Wrap cột Task giống tab tháng, đặt sẵn cho cả vùng data tương lai (A2:A1000) vì
-  // mỗi dòng mới chỉ setValues, không style lại — set trước ở đây thì dòng mới tự
-  // thừa hưởng wrap, không cần style lại mỗi lần add.
-  sh.getRange('A2:A1000').setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
-}
-function buildInProgressIndex_(sh) {
-  var byPid = {};
-  var last = lastDataRow_(sh);
-  if (last < 2) return byPid;
-  var v = sh.getRange(2, 1, last - 1, 6).getValues(); // A..E + hidden F (pid)
-  for (var i = 0; i < v.length; i++) {
-    var pid = norm_(String(v[i][5]));
-    if (pid) byPid[pid] = i + 2;
-  }
-  return byPid;
-}
-// Upsert hoặc xoá 1 dòng trong tab Đang xử lý theo status MỚI NHẤT của task này
-// trong lần syncNow hiện tại. Gọi 1 lần cho mỗi task, sau khi status đã chốt (dùng
-// chung cho cả nhánh "update tại tab tháng" lẫn nhánh "add mới").
-function syncInProgress_(ctx, pid, name, status, point, role, url) {
-  var wantIn = IN_PROGRESS_STATUSES.indexOf(status) !== -1;
-  var row = ctx.idx[pid];
-  if (!wantIn) {
-    if (row) {
-      ctx.sheet.deleteRow(row);
-      delete ctx.idx[pid];
-      // mọi row index SAU dòng vừa xoá bị lùi 1 — cập nhật lại map.
-      for (var k in ctx.idx) if (ctx.idx[k] > row) ctx.idx[k]--;
-    }
-    return;
-  }
-  if (row) {
-    ctx.sheet.getRange(row, 1, 1, 5).setValues([[
-      name, status, point, role, '=HYPERLINK("' + url + '","Notion ↗")',
-    ]]);
-    return;
-  }
-  var r = lastDataRow_(ctx.sheet) + 1;
-  ctx.sheet.getRange(r, 1, 1, 6).setValues([[
-    name, status, point, role, '=HYPERLINK("' + url + '","Notion ↗")', pid,
-  ]]);
-  ctx.idx[pid] = r;
-}
-// Sắp lại TOÀN BỘ tab Đang xử lý theo đúng thứ tự IN_PROGRESS_STATUSES (index
-// trong mảng = rank). Gọi 1 LẦN ở CUỐI syncNow, sau khi mọi upsert/xoá đã xong —
-// đơn giản & đáng tin cậy hơn tính vị trí chèn/dịch chuyển từng dòng giữa chừng.
-// Card (cột E) là công thức HYPERLINK — đọc lại formula (không phải giá trị hiển
-// thị) để viết lại đúng, tránh mất link khi ghi ra dòng mới.
-function sortInProgressSheet_(sh) {
-  var last = lastDataRow_(sh);
-  if (last < 2) return;
-  var n = last - 1;
-  var values = sh.getRange(2, 1, n, 6).getValues();       // A..E + hidden F (pid)
-  var formulas = sh.getRange(2, 5, n, 1).getFormulas();   // công thức thật của cột Card
-  var rows = values.map(function (v, i) { return { v: v, cardFormula: formulas[i][0] || v[4] }; });
-  rows.sort(function (a, b) {
-    var ra = IN_PROGRESS_STATUSES.indexOf(a.v[1]), rb = IN_PROGRESS_STATUSES.indexOf(b.v[1]);
-    if (ra === -1) ra = IN_PROGRESS_STATUSES.length; // status lạ (hiếm) -> xếp cuối, không lỗi
-    if (rb === -1) rb = IN_PROGRESS_STATUSES.length;
-    return ra - rb;
-  });
-  var out = rows.map(function (r) { return [r.v[0], r.v[1], r.v[2], r.v[3], r.cardFormula, r.v[5]]; });
-  sh.getRange(2, 1, n, 6).setValues(out);
-}
-
 // ---- state (hidden _STATE sheet: A=pageId, B=lastStatus) ----
 function getState_(ss) {
   var sh = ss.getSheetByName(STATE);
@@ -313,8 +199,6 @@ function syncNow(opts) {
   var ss = ss_();
   var st = getState_(ss), firstRun = st.firstRun, prev = st.map, newState = {};
   var idx = buildIndex_(ss);
-  var ipSheet = ensureInProgressSheet_(ss);
-  var ipCtx = { sheet: ipSheet, idx: buildInProgressIndex_(ipSheet) };
   var month = activeMonth_(); // tháng đang tính — tháng lịch, hoặc tháng ghim từ menu
   var added = 0, updated = 0, baseline = 0, waiting = 0, suspect = 0;
 
@@ -325,13 +209,6 @@ function syncNow(opts) {
       var pid = norm_(pg.id), status = statusOf_(p), point = pointOf_(p),
           name = title_(p), nt = normTitle_(name), url = pg.url;
       newState[pid] = status;
-
-      // Tab Đang xử lý độc lập hoàn toàn với luồng COUNTED/tab tháng bên dưới —
-      // gọi 1 LẦN DUY NHẤT ở đây cho MỌI task Dev/Reviewer (kể cả baseline lần
-      // đầu, kể cả task chưa từng chạm COUNTED như "Doing"). Trước đây chỉ gọi
-      // rải rác ở nhánh update/add nên baseline và waiting bị bỏ sót — task đúng
-      // status theo dõi mà rơi vào 1 trong 2 nhánh đó sẽ không lên tab.
-      syncInProgress_(ipCtx, pid, name, status, point, role, url);
 
       // RULE 2 (exact): this Notion page id already lives in SOME month tab (current
       // OR an old, closed one) -> it is the same task. Update it in place, never add
@@ -390,7 +267,6 @@ function syncNow(opts) {
       waiting++; // not counted yet, not in sheet
     });
   });
-  sortInProgressSheet_(ipSheet); // 1 lần cuối, sau khi mọi upsert/xoá Đang xử lý đã xong
   writeState_(st.sheet, newState);
   Logger.log('Sync done. added=%s updated=%s baseline=%s waiting=%s suspect=%s firstRun=%s month=%s',
              added, updated, baseline, waiting, suspect, firstRun, month);

@@ -16,7 +16,6 @@ const ME = '168cd13f-884c-4138-bcec-bbc6ed47ea34';
 const DS1 = '25ab0da4-49f1-817c-903b-000b9aa2443b';
 const DS2 = '74bfb6cb-c769-4121-b1ec-887b2765d625';
 const DASHBOARD_NAME = 'Dashboard';
-const IN_PROGRESS_NAME = 'Đang xử lý';
 
 // ---------------- mock Sheets ----------------
 const MAXR = 200, MAXC = 12;
@@ -31,11 +30,6 @@ class MockRange {
     }
     return out;
   }
-  // Mock đơn giản hoá: mọi setValue(s) ghi thẳng string (kể cả "=HYPERLINK(...)")
-  // vào this.s.data — không phân biệt "giá trị hiển thị" vs "công thức thô" như
-  // Sheets thật. getFormulas() vì vậy trả về ĐÚNG same data — đủ cho mục đích test
-  // (Code.gs chỉ set Card bằng string HYPERLINK trực tiếp, không dùng setFormula riêng).
-  getFormulas() { return this.getValues(); }
   setValues(v) {
     for (let i = 0; i < this.nr; i++)
       for (let j = 0; j < this.nc; j++) this.s.data[this.r - 1 + i][this.c - 1 + j] = v[i][j];
@@ -43,56 +37,19 @@ class MockRange {
   }
   getValue() { return this.s.data[this.r - 1][this.c - 1]; }
   setValue(v) { this.s.data[this.r - 1][this.c - 1] = v; return this; }
-  getColumn() { return this.c; }
-  copyTo(dest, opts) { // Range.copyTo — mock chỉ ghi nhận đã gọi, không mô phỏng font/màu thật
-    dest.s.formatCopiedFrom = dest.s.formatCopiedFrom || [];
-    dest.s.formatCopiedFrom.push({ from: this.s.name, opts: opts || {} });
-    return this;
-  }
-  setFontWeight(w) { this.s.fontWeightCalls = this.s.fontWeightCalls || []; this.s.fontWeightCalls.push(w); return this; }
-  setWrapStrategy(strategy) {
-    this.s.wrapCalls = this.s.wrapCalls || [];
-    this.s.wrapCalls.push({ r: this.r, c: this.c, nr: this.nr, nc: this.nc, strategy: strategy });
-    return this;
-  }
-}
-// Mock 1 conditional format rule đơn giản: chỉ giữ đủ thông tin để test "rule của
-// cột Status được copy sang, rule khác thì bị lọc bỏ" — không mô phỏng điều kiện/màu thật.
-class MockCFRule {
-  constructor(ranges, tag) { this._ranges = ranges; this.tag = tag; }
-  getRanges() { return this._ranges; }
-  copy() { return new MockCFRuleBuilder(this.tag); }
-}
-class MockCFRuleBuilder {
-  constructor(tag) { this.tag = tag; this._ranges = []; }
-  setRanges(ranges) { this._ranges = ranges; return this; }
-  build() { return new MockCFRule(this._ranges, this.tag); }
 }
 class MockSheet {
   constructor(name) {
     this.name = name; this.hidden = false;
     this.data = Array.from({ length: MAXR }, () => Array(MAXC).fill(''));
-    this.cfRules = []; this.frozenRows = 0; this.colWidths = {}; this.hiddenCols = [];
   }
   getName() { return this.name; }
   setName(n) { this.name = n; return this; }
   showSheet() { this.hidden = false; return this; }
   hideSheet() { this.hidden = true; return this; }
-  getConditionalFormatRules() { return this.cfRules.slice(); }
-  setConditionalFormatRules(rules) { this.cfRules = rules.slice(); return this; }
-  setFrozenRows(n) { this.frozenRows = n; return this; }
-  setColumnWidth(col, w) { this.colWidths[col] = w; return this; }
-  hideColumns(col) { this.hiddenCols.push(col); return this; }
   getRange(a, b, c, d) {
     if (typeof a === 'string') {
       if (a === 'A2:A') return new MockRange(this, 2, 1, MAXR - 1, 1);
-      // dạng "<Col><Row>:<Col><Row>" (vd "B2:B1000") — đủ cho các range dùng trong Code.gs
-      const m = a.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
-      if (m) {
-        const colOf = s => s.split('').reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0);
-        const r1 = parseInt(m[2], 10), c1 = colOf(m[1]), r2 = Math.min(parseInt(m[4], 10), MAXR), c2 = colOf(m[3]);
-        return new MockRange(this, r1, c1, r2 - r1 + 1, c2 - c1 + 1);
-      }
       throw new Error('A1 notation chưa mock: ' + a);
     }
     return new MockRange(this, a, b, c === undefined ? 1 : c, d === undefined ? 1 : d);
@@ -103,7 +60,6 @@ class MockSheet {
     return 0;
   }
   clearContents() { this.data = Array.from({ length: MAXR }, () => Array(MAXC).fill('')); }
-  deleteRow(r) { this.data.splice(r - 1, 1); this.data.push(Array(MAXC).fill('')); }
   copyTo(ss) { const c = new MockSheet('Copy of ' + this.name); c.data = this.data.map(r => r.slice()); ss.sheets.push(c); return c; }
   dataRowCount() { // helper riêng cho test: số dòng data (từ row 2, cột A)
     let n = 0;
@@ -165,7 +121,7 @@ function makeEnv(opts) {
       const pages = (opts.pages && opts.pages[m[1]]) || [];
       return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ results: pages, has_more: false }) };
     } },
-    SpreadsheetApp: { getActiveSpreadsheet: () => ss, getUi: () => ui, WrapStrategy: { WRAP: 'WRAP' } },
+    SpreadsheetApp: { getActiveSpreadsheet: () => ss, getUi: () => ui },
     ScriptApp: { getProjectTriggers: () => [], newTrigger: () => ({ timeBased: () => ({ everyMinutes: () => ({ create: () => {} }) }) }) },
   };
   vm.createContext(sandbox);
@@ -457,302 +413,6 @@ t('pinDashboardFirstMenu_: không có tab Dashboard → toast báo không tìm t
   env.sandbox.pinDashboardFirstMenu_();
   eq(env.ss.toasts.length, 1);
   ok(env.ss.toasts[0].msg.indexOf('Không tìm thấy') !== -1, env.ss.toasts[0].msg);
-});
-
-console.log('— Tab Đang xử lý (mirror sống) —');
-t('task cross vào Reviewing → xuất hiện ở Đang xử lý, đủ 5 cột hiển thị', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow(); // baseline
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  ok(ip, 'tab Đang xử lý tự được tạo');
-  const row = ip.getRange(2, 1, 1, 5).getValues()[0];
-  eq(row[0], 'Task A'); eq(row[1], 'Reviewing'); eq(row[2], 3); eq(row[3], 'Dev');
-});
-t('task đi thẳng Ready to Test (không thuộc 4 status theo dõi) → KHÔNG vào Đang xử lý', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Ready to Test', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 0, 'Ready to Test không nằm trong IN_PROGRESS_STATUSES');
-});
-t('status vẫn trong nhóm nhưng đổi (Reviewing -> Testing) → update tại chỗ, không thêm dòng', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Testing', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 1, 'vẫn 1 dòng');
-  eq(ip.getRange(2, 2).getValue(), 'Testing', 'status live update');
-});
-t('task rời nhóm theo dõi (Testing -> Done) → dòng bị XOÁ khỏi Đang xử lý', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Testing', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 1, 'có mặt lúc Testing');
-  pages[DS1][0] = page('p1', 'Task A', 'Done', 3, 'Dev');
-  env.sandbox.syncNow();
-  eq(ip.dataRowCount(), 0, 'biến mất khi Done');
-  // dữ liệu THẬT ở tab tháng vẫn còn nguyên, không bị mất
-  eq(env.ss.getSheetByName('07/2026').getRange(2, 2).getValue(), 'Done');
-});
-t('task rời nhóm theo dõi (Test Production -> Launching) → cũng bị XOÁ khỏi Đang xử lý', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Test Production', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 1, 'có mặt lúc Test Production');
-  pages[DS1][0] = page('p1', 'Task A', 'Launching', 3, 'Dev');
-  env.sandbox.syncNow();
-  eq(ip.dataRowCount(), 0, 'biến mất khi Launching — không nằm trong IN_PROGRESS_STATUSES');
-  eq(env.ss.getSheetByName('07/2026').getRange(2, 2).getValue(), 'Launching');
-});
-t('nhiều task rời nhóm cùng lúc → xoá đúng dòng, không lệch index (test splice)', () => {
-  const pages = {}; pages[DS1] = [
-    page('p1', 'Task A', 'In progress', 1, 'Dev'),
-    page('p2', 'Task B', 'In progress', 2, 'Dev'),
-    page('p3', 'Task C', 'In progress', 3, 'Dev'),
-  ];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1] = [
-    page('p1', 'Task A', 'Reviewing', 1, 'Dev'),
-    page('p2', 'Task B', 'Testing', 2, 'Dev'),
-    page('p3', 'Task C', 'Test Production', 3, 'Dev'),
-  ];
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 3, 'cả 3 vào Đang xử lý');
-  // Task B (giữa) rời nhóm; Task A và Task C phải còn nguyên đúng dữ liệu
-  pages[DS1][1] = page('p2', 'Task B', 'Done', 2, 'Dev');
-  env.sandbox.syncNow();
-  eq(ip.dataRowCount(), 2, 'còn 2 dòng');
-  const names = [ip.getRange(2, 1).getValue(), ip.getRange(3, 1).getValue()];
-  ok(names.indexOf('Task A') !== -1, 'Task A còn: ' + names.join(','));
-  ok(names.indexOf('Task C') !== -1, 'Task C còn: ' + names.join(','));
-  ok(names.indexOf('Task B') === -1, 'Task B đã bị xoá: ' + names.join(','));
-});
-t('task ở TAB THÁNG CŨ cũng được theo dõi (không chỉ tab tháng hiện tại)', () => {
-  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
-  const old = ss.insertSheet('05/2026');
-  old.getRange(2, 1, 1, 7).setValues([['Task cũ', 'Testing', 2, 'Dev', false, 'link', 'pold']]);
-  const pages = {}; pages[DS1] = [page('pold', 'Task cũ', 'Test Production', 2, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages, ss });
-  env.sandbox.syncNow();
-  const ip = ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 1, 'task tab tháng cũ vẫn xuất hiện ở Đang xử lý');
-  eq(ip.getRange(2, 2).getValue(), 'Test Production');
-});
-t('chạy syncNow lặp lại nhiều lần không đổi status → Đang xử lý idempotent, không nhân đôi', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  env.sandbox.syncNow();
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 1, 'vẫn đúng 1 dòng sau nhiều lần sync');
-});
-t('Đang xử lý KHÔNG bị buildIndex_ coi là tab tháng (không ảnh hưởng dedup RULE 1-5)', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  // tab Đang xử lý tồn tại nhưng không phải MM/YYYY -> không được buildIndex_ quét,
-  // nghĩa là 1 sync tiếp theo không nhầm nó là nơi task đã "có" theo pid.
-  ok(!env.sandbox.isMonthTab_(IN_PROGRESS_NAME), 'tên tab không khớp pattern MM/YYYY');
-});
-
-console.log('— Đang xử lý: style (header, màu Status, ẩn cột pid) —');
-t('tạo tab lần đầu → header bold, freeze row 1, cột pid (F) bị ẩn', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow(); // tạo tab Đang xử lý lần đầu ở đây
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  ok(ip.fontWeightCalls && ip.fontWeightCalls.indexOf('bold') !== -1, 'header set bold');
-  eq(ip.frozenRows, 1, 'freeze header row');
-  ok(ip.hiddenCols.indexOf(6) !== -1, 'cột F (pid) bị ẩn: ' + ip.hiddenCols.join(','));
-});
-t('header format được copy từ _TEMPLATE (đồng bộ hình thức tab tháng)', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  ok(ip.formatCopiedFrom && ip.formatCopiedFrom.some(c => c.from === '_TEMPLATE' && c.opts.formatOnly),
-     'có copyTo formatOnly từ _TEMPLATE: ' + JSON.stringify(ip.formatCopiedFrom));
-});
-t('conditional format rule của cột Status (B) ở _TEMPLATE được copy sang cột B của Đang xử lý', () => {
-  const ss = new MockSS();
-  const tpl = ss.insertSheet('_TEMPLATE');
-  tpl.cfRules = [
-    new MockCFRule([{ getColumn: () => 2 }], 'status-color'), // rule cột B (Status)
-    new MockCFRule([{ getColumn: () => 5 }], 'have-checkbox'), // rule KHÔNG phải Status
-  ];
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages, ss });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.cfRules.length, 1, 'chỉ 1 rule được mang sang (chỉ rule cột Status)');
-  eq(ip.cfRules[0].tag, 'status-color', 'đúng rule Status, không phải rule Have');
-  eq(ip.cfRules[0].getRanges()[0].getColumn(), 2, 'rule áp cho đúng cột B ở tab mới');
-});
-t('conditional format rule của cột Role (D) ở _TEMPLATE cũng được copy sang cột D của Đang xử lý', () => {
-  const ss = new MockSS();
-  const tpl = ss.insertSheet('_TEMPLATE');
-  tpl.cfRules = [
-    new MockCFRule([{ getColumn: () => 2 }], 'status-color'),
-    new MockCFRule([{ getColumn: () => 4 }], 'role-color'), // rule cột D (Role)
-    new MockCFRule([{ getColumn: () => 5 }], 'have-checkbox'),
-  ];
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages, ss });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.cfRules.length, 2, 'Status + Role được mang sang, Have thì không');
-  const tags = ip.cfRules.map(r => r.tag).sort();
-  eq(tags.join(','), 'role-color,status-color', 'đúng 2 rule: ' + tags.join(','));
-  const roleRule = ip.cfRules.find(r => r.tag === 'role-color');
-  eq(roleRule.getRanges()[0].getColumn(), 4, 'rule Role áp cho đúng cột D ở tab mới');
-});
-t('không có _TEMPLATE → vẫn tạo tab + style cơ bản, không lỗi', () => {
-  // Task đã có SẴN ở 1 tab tháng (không phải add mới) → đi qua nhánh update pid
-  // match, không đụng ensureMonthSheet_ (chỗ DUY NHẤT thật sự cần _TEMPLATE để
-  // tạo tab tháng). Cô lập đúng thứ đang test: styleInProgressSheet_ tự chịu
-  // được thiếu _TEMPLATE, không phải toàn bộ syncNow.
-  const ss = new MockSS();
-  const cur = ss.insertSheet('07/2026');
-  cur.getRange(2, 1, 1, 7).setValues([['Task A', 'In progress', 3, 'Dev', false, 'link', 'p1']]);
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Reviewing', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages, ss }); // makeEnv tự thêm _TEMPLATE
-  ss.sheets = ss.sheets.filter(s => s.getName() !== '_TEMPLATE'); // rồi gỡ đi để test đúng case thiếu
-  env.sandbox.syncNow();
-  const ip = ss.getSheetByName(IN_PROGRESS_NAME);
-  ok(ip, 'tab Đang xử lý vẫn được tạo dù thiếu _TEMPLATE');
-  ok(ip.fontWeightCalls.indexOf('bold') !== -1, 'header vẫn bold dù không copy được từ _TEMPLATE');
-});
-t('tạo tab lần đầu → cột Task (A) được set wrap, giống tab tháng', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A dài để cần wrap', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A dài để cần wrap', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  ok(ip.wrapCalls && ip.wrapCalls.length === 1, 'gọi setWrapStrategy đúng 1 lần: ' + JSON.stringify(ip.wrapCalls));
-  const call = ip.wrapCalls[0];
-  eq(call.c, 1, 'áp dụng cho cột A (Task)');
-  eq(call.r, 2, 'bắt đầu từ dòng data (row 2), không đụng header');
-  eq(call.strategy, 'WRAP', 'đúng WrapStrategy.WRAP');
-});
-t('tạo tab CHỈ 1 lần — sync các lần sau không style lại (không tốn thêm API call)', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 3, 'Dev');
-  env.sandbox.syncNow(); // tạo + style lần đầu
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  const callsAfterFirst = ip.fontWeightCalls.length;
-  pages[DS1][0] = page('p1', 'Task A', 'Testing', 3, 'Dev');
-  env.sandbox.syncNow(); // update status, KHÔNG được style lại
-  eq(ip.fontWeightCalls.length, callsAfterFirst, 'không gọi setFontWeight thêm lần nào');
-});
-
-console.log('— Đang xử lý: sort theo priority + hỗ trợ Doing —');
-t('5 status trộn thứ tự phát hiện → sau sync, đúng thứ tự Reviewing, To review, Test Production, Testing, Doing', () => {
-  const pages = {}; pages[DS1] = [
-    page('p1', 'Task Testing', 'In progress', 1, 'Dev'),
-    page('p2', 'Task Doing', 'In progress', 1, 'Dev'),
-    page('p3', 'Task ToReview', 'In progress', 1, 'Dev'),
-    page('p4', 'Task TestProd', 'In progress', 1, 'Dev'),
-    page('p5', 'Task Reviewing', 'In progress', 1, 'Dev'),
-  ];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow(); // baseline
-  // cố tình phát hiện theo thứ tự KHÔNG khớp priority, để chứng minh sort hoạt động
-  pages[DS1] = [
-    page('p1', 'Task Testing', 'Testing', 1, 'Dev'),
-    page('p2', 'Task Doing', 'Doing', 1, 'Dev'),
-    page('p3', 'Task ToReview', 'To review', 1, 'Dev'),
-    page('p4', 'Task TestProd', 'Test Production', 1, 'Dev'),
-    page('p5', 'Task Reviewing', 'Reviewing', 1, 'Dev'),
-  ];
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 5, 'cả 5 status đều lên tab (kể cả Doing)');
-  const order = [1, 2, 3, 4, 5].map(r => ip.getRange(r + 1, 1).getValue());
-  eq(order.join(','), 'Task Reviewing,Task ToReview,Task TestProd,Task Testing,Task Doing',
-     'thứ tự thực tế: ' + order.join(','));
-});
-t('Doing trước đây bị chặn hoàn toàn bởi COUNTED — giờ lên được tab dù CHƯA TỪNG chạm Ready to Test', () => {
-  const pages = {}; pages[DS1] = [page('p1', 'Task Doing', 'Doing', 5, 'Dev')];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow(); // baseline — trước fix, syncInProgress_ CHƯA BAO GIỜ được gọi ở nhánh baseline
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.dataRowCount(), 1, 'Task Doing xuất hiện ngay từ baseline, không cần đợi cross COUNTED');
-  eq(ip.getRange(2, 2).getValue(), 'Doing');
-  // task này CHƯA từng vào tab tháng nào (chưa đạt Ready to Test) — xác nhận đúng thiết kế
-  ok(!env.ss.getSheetByName('07/2026'), 'không có tab tháng nào được tạo — task chưa counted');
-});
-t('task đổi status (Testing -> Reviewing) → re-sort lên đúng vị trí đầu', () => {
-  const pages = {}; pages[DS1] = [
-    page('p1', 'Task A', 'Testing', 1, 'Dev'),
-    page('p2', 'Task B', 'Doing', 1, 'Dev'),
-  ];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow();
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  eq(ip.getRange(2, 1).getValue(), 'Task A', 'lúc đầu Testing đứng trước Doing (đúng rank)');
-  pages[DS1][0] = page('p1', 'Task A', 'Reviewing', 1, 'Dev');
-  env.sandbox.syncNow();
-  eq(ip.getRange(2, 1).getValue(), 'Task A', 'Task A (giờ Reviewing) lên đầu');
-  eq(ip.getRange(2, 2).getValue(), 'Reviewing');
-});
-t('Card (HYPERLINK) không bị mất công thức sau khi sort', () => {
-  const pages = {}; pages[DS1] = [
-    page('p1', 'Task A', 'Testing', 1, 'Dev'),
-    page('p2', 'Task B', 'Reviewing', 1, 'Dev'),
-  ];
-  const env = makeEnv({ nowMonth: '07/2026', pages });
-  env.sandbox.syncNow(); // Testing (p1) và Reviewing (p2) đảo thứ tự sau sort
-  const ip = env.ss.getSheetByName(IN_PROGRESS_NAME);
-  const card = ip.getRange(2, 5).getValue(); // dòng đầu sau sort phải là Task B (Reviewing)
-  eq(ip.getRange(2, 1).getValue(), 'Task B');
-  ok(String(card).indexOf('HYPERLINK') !== -1, 'Card vẫn là công thức HYPERLINK: ' + card);
-  ok(String(card).indexOf('notion.so/p2') !== -1, 'đúng URL của Task B: ' + card);
-});
-t('status lạ không nằm trong IN_PROGRESS_STATUSES (hiếm, vd đổi tên trên Notion) → xếp cuối, không crash', () => {
-  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
-  const ip = ss.insertSheet(IN_PROGRESS_NAME);
-  ip.getRange(1, 1, 1, 5).setValues([['Task', 'Status', 'Point', 'Role', 'Card']]);
-  ip.getRange(2, 1, 2, 6).setValues([
-    ['Task Known', 'Testing', 1, 'Dev', 'link1', 'pk'],
-    ['Task Unknown', 'Some Weird Status', 1, 'Dev', 'link2', 'pu'],
-  ]);
-  const env = makeEnv({ nowMonth: '07/2026', ss });
-  env.sandbox.sortInProgressSheet_(ip);
-  eq(ip.getRange(2, 1).getValue(), 'Task Known', 'status hợp lệ lên trước');
-  eq(ip.getRange(3, 1).getValue(), 'Task Unknown', 'status lạ bị đẩy xuống cuối, không crash');
 });
 
 console.log('— Menu / pin actions —');
