@@ -1,6 +1,6 @@
 ---
 name: todo
-description: Quick capture of WORK TODOs into a personal day-keyed vault (~/.todo) — jot what to do next with no context, then read it back tomorrow sorted by priority. One file per day, checkbox tasks tagged p1/p2/p3, unfinished tasks auto carry over to the next day's view. NOT a context-restoring worklog (use /my-worklog when you need full session state + branch resume), NOT a learning note (use /note), NOT Joy work knowledge (use /joy-note), NOT the Notion team board (use /notion-task-personal). Use when asked to "todo", "note this task", "ghi việc cần làm", "what should I do next", "remind me to", "/todo", or at end of day to jot tomorrow's priorities.
+description: Quick capture of WORK TODOs into a personal day-keyed vault (~/.todo) — jot what to do next with no context, then read it back tomorrow sorted by priority, and edit any task's text/priority/note later. One file per day, checkbox tasks tagged p1/p2/p3, unfinished tasks auto carry over to the next day's view. NOT a context-restoring worklog (use /my-worklog when you need full session state + branch resume), NOT a learning note (use /note), NOT Joy work knowledge (use /joy-note), NOT the Notion team board (use /notion-task-personal). Use when asked to "todo", "note this task", "ghi việc cần làm", "what should I do next", "remind me to", "sửa task", "update task 2", "đổi priority task", "/todo", or at end of day to jot tomorrow's priorities.
 ---
 
 # /todo — quick work-todo capture (read back by priority tomorrow)
@@ -26,21 +26,23 @@ Storage: `~/.todo/YYYY-MM-DD.md` (one file per day; override with `TODO_VAULT`).
 | Command | What it does |
 |---------|--------------|
 | `add "<text>" [--note "..."]` | Append a task to TODAY's file. Text may start with `p1:`/`p2:`/`p3:` (default `p2`). `--note` adds indented context lines under it. |
-| `list` (default) | Show **open** tasks across all days, grouped P1→P2→P3. Unfinished tasks from earlier days appear with `(từ YYYY-MM-DD)` — this is the carry-over that makes "start tomorrow" work. |
+| `list` (default) | Show **open** tasks across all days, grouped P1→P2→P3, **with each task's note lines shown underneath**. Unfinished tasks from earlier days appear with `(từ YYYY-MM-DD)` — this is the carry-over that makes "start tomorrow" work. |
 | `list --all` | Same, but include done (`[x]`) tasks too. |
-| `list --notes` | Same as `list`, but also prints the indented note lines under each task — the "xem chi tiết" view. Combines with `--all`. |
+| `list --brief` | Same as `list`, but hides note lines — one line per task, for a quick scan. Combines with `--all`. |
 | `done <N>` | Tick task **#N** from the most recent `list` ordering (works across days). |
+| `update <N> [--text "..."] [--prio p1\|p2\|p3] [--note "..."]` | Edit task **#N** in place — any combination of flags; only the ones passed change. `--prio` moves it between P1/P2/P3 groups. `--note ""` clears existing note lines; omitting `--note` leaves them untouched. The task stays in the day file it was created in. |
 | `path` | Print today's file path (to open it by hand). |
 
 ## Detect scope — parse what comes after `/todo`
 
 | Input | Behavior |
 |-------|----------|
-| *(nothing)* | **Read mode** — run `list`. This is the morning "what do I do next" view. |
+| *(nothing)* | **Read mode** — run `list`. This is the morning "what do I do next" view; notes show by default. |
 | `<text>` (a task) | **Capture mode** — `add` it. Pull a leading `p1:/p2:/p3:` if present. |
 | `done <N>` / `xong <N>` | Mark task #N done. |
+| `update <N> ...` / `sửa <N> ...` / `đổi <N> ...` | Edit task #N — parse what changed (new text, a `p1:/p2:/p3:` re-tag, a new note) into the matching `--text`/`--prio`/`--note` flags. **Always `list` first** if the last listing is stale (new session, or the user hasn't seen numbers yet) — `update`/`done` both resolve `<N>` against the last `list` output, so a wrong or missing prior listing means the wrong task gets edited. |
 | `all` / `--all` | `list --all` (include finished). |
-| `notes` / `detail` / `chi tiết` | `list --notes` — read mode with every task's notes shown. |
+| `brief` / `gọn` / `tóm tắt` | `list --brief` — read mode with note lines hidden, for a quick scan. |
 | `path` | Print today's file path. |
 
 When the user dumps **several tasks at once** (the common end-of-day case), call `add`
@@ -74,18 +76,28 @@ python3 ~/.claude/skills/todo/scripts/todo.py add "p1: finish merge-branch confl
 python3 ~/.claude/skills/todo/scripts/todo.py add "review widget v4 layer matrix bug"
 python3 ~/.claude/skills/todo/scripts/todo.py add "p3: clean up seen-urls dedup"
 
-# Next morning — read by priority (carry-over from prior days shows automatically):
+# Next morning — read by priority, notes shown (carry-over from prior days shows automatically):
 python3 ~/.claude/skills/todo/scripts/todo.py list
 
-# Full detail view — every task with its notes:
-python3 ~/.claude/skills/todo/scripts/todo.py list --notes
+# Quick scan — just the task lines, no notes:
+python3 ~/.claude/skills/todo/scripts/todo.py list --brief
 
 # Knock one out:
 python3 ~/.claude/skills/todo/scripts/todo.py done 1
+
+# Something about task #2 changed — bump priority and add a blocker note:
+python3 ~/.claude/skills/todo/scripts/todo.py update 2 --prio p1 --note "blocked on API key"
+
+# Reword task #3, leave its priority and note alone:
+python3 ~/.claude/skills/todo/scripts/todo.py update 3 --text "revamp home page metrics, not just manual check"
+
+# Note resolved — clear it without touching text/priority:
+python3 ~/.claude/skills/todo/scripts/todo.py update 3 --note ""
 ```
 
 ## Setup note
 Vault defaults to `~/.todo/` (created on first `add`; override with `TODO_VAULT`).
 The skill is symlinked into `~/.claude/skills/todo` — if it's missing on a machine,
-run **/sync-skills** to link it. Files are append-only; `done` only flips a single
-checkbox in place. Read-only beyond `~/.todo/` — never touches repo code, never commits.
+run **/sync-skills** to link it. `add` appends; `done` flips a single checkbox in
+place; `update` rewrites a task's own line(s) in place without moving it to a
+different day file. Read-only beyond `~/.todo/` — never touches repo code, never commits.

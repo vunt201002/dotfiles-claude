@@ -4,17 +4,20 @@
 checkbox tasks, priority-tagged. Built for "note now, read tomorrow by priority".
 
   python todo.py add "p1: finish merge-branch conflict" [--note "stuck on X"]
-  python todo.py list                 # open tasks (today + carry-over), grouped P1>P2>P3
+  python todo.py list                 # open tasks (today + carry-over), grouped P1>P2>P3, notes shown
   python todo.py list --all           # include done tasks too
-  python todo.py list --notes         # same list, with note lines shown under each task
+  python todo.py list --brief         # same list, but hide note lines (one line per task)
   python todo.py done 2               # tick task #2 from the last `list` ordering
+  python todo.py update 2 --prio p1   # edit task #2: text/prio/note (any combo)
   python todo.py path                 # print today's file path
 
 Storage: <repo>/personal/todo/YYYY-MM-DD.md  (override with TODO_VAULT). The vault
 lives inside the dotfiles repo so todos sync across machines via git. Path is derived
 from this script's location, so it works regardless of where the repo is cloned.
-Files are append-only; `done` rewrites a single checkbox in place. Carry-over =
-unchecked tasks from prior days.
+Files are append-only except `done`/`update`, which rewrite a task's own line(s) in
+place — the task stays in the day file it was created in even after edits. Carry-over
+= unchecked tasks from prior days. Both `done` and `update` use the numbering from the
+last `list` call (`.last-list-order` cache), so always `list` first.
 """
 import argparse, os, re, sys, datetime, glob
 
@@ -172,27 +175,76 @@ def _write_order(order):
         pass  # ordering cache is best-effort; `done` falls back to re-listing
 
 
-def mark_done(num):
+def _resolve_order_num(num):
+    """Shared by done/update: map a `/todo list` ordering number -> (path, lineno, match).
+    Returns None (and prints the error) on any failure."""
     try:
         with open(_order_path(), encoding="utf-8") as f:
             rows = [ln.rstrip("\n").split("\t") for ln in f if ln.strip()]
     except OSError:
         print("Run `/todo` (list) first so numbers map to tasks.", file=sys.stderr)
-        return 2
+        return None
     if num < 1 or num > len(rows):
         print(f"No task #{num} in the last list (had {len(rows)}).", file=sys.stderr)
-        return 2
+        return None
     path, lineno = rows[num - 1][0], int(rows[num - 1][1])
     with open(path, encoding="utf-8") as f:
         lines = f.readlines()
     m = LINE_RE.match(lines[lineno].rstrip("\n"))
     if not m:
         print("Task line moved; re-run `/todo` and try again.", file=sys.stderr)
+        return None
+    return path, lineno, lines, m
+
+
+def mark_done(num):
+    resolved = _resolve_order_num(num)
+    if resolved is None:
         return 2
+    path, lineno, lines, m = resolved
     lines[lineno] = lines[lineno].replace("- [ ]", "- [x]", 1)
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
     print(f"DONE  {m.group('text').strip()}")
+    return 0
+
+
+def _note_block_end(lines, lineno):
+    """Index just past the note lines following the task at lineno (indented,
+    non-blank, non-task, non-heading lines) — i.e. where a new note block would
+    start/end. Mirrors the reader in collect()."""
+    i = lineno + 1
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not stripped or stripped.startswith("#") or LINE_RE.match(lines[i].rstrip("\n")):
+            break
+        i += 1
+    return i
+
+
+def update_task(num, text=None, prio=None, note=None):
+    if text is None and prio is None and note is None:
+        print("Nothing to update — pass --text, --prio, and/or --note.", file=sys.stderr)
+        return 2
+    resolved = _resolve_order_num(num)
+    if resolved is None:
+        return 2
+    path, lineno, lines, m = resolved
+    done_mark = m.group("done")
+    new_prio = PRIOS[prio.lower()] if prio else int(m.group("prio")[1])
+    new_text = text.strip() if text is not None else m.group("text").strip()
+    if not new_text:
+        print("--text cannot be empty.", file=sys.stderr)
+        return 2
+    tid = m.group("id") or f"{os.path.splitext(os.path.basename(path))[0]}#?"
+    lines[lineno] = f"- [{done_mark}] ({PRIO_LABEL[new_prio]}) {new_text}  <!--id:{tid}-->\n"
+    if note is not None:
+        end = _note_block_end(lines, lineno)
+        new_notes = [f"      {ln}\n" for ln in note.splitlines()] if note else []
+        lines[lineno + 1:end] = new_notes
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    print(f"UPDATED [{PRIO_LABEL[new_prio]}] {new_text}  ->  {path}")
     return 0
 
 
@@ -206,10 +258,17 @@ def main():
 
     lst = sub.add_parser("list", help="show open tasks grouped by priority")
     lst.add_argument("--all", action="store_true", help="include done tasks")
-    lst.add_argument("--notes", action="store_true", help="show note lines under each task")
+    lst.add_argument("--notes", action="store_true", help="(default on) show note lines under each task — kept for backwards compat")
+    lst.add_argument("--brief", action="store_true", help="hide note lines, one line per task")
 
     d = sub.add_parser("done", help="tick task #N from the last list")
     d.add_argument("num", type=int)
+
+    u = sub.add_parser("update", help="edit task #N from the last list (text/prio/note)")
+    u.add_argument("num", type=int)
+    u.add_argument("--text", default=None, help="replace the task text")
+    u.add_argument("--prio", choices=["p1", "p2", "p3"], default=None, help="move to a new priority")
+    u.add_argument("--note", default=None, help="replace the note lines (empty string clears them)")
 
     sub.add_parser("path", help="print today's file path")
 
@@ -218,12 +277,14 @@ def main():
         return add(" ".join(args.text), note=args.note)
     if args.cmd == "done":
         return mark_done(args.num)
+    if args.cmd == "update":
+        return update_task(args.num, text=args.text, prio=args.prio, note=args.note)
     if args.cmd == "path":
         print(day_file(today()))
         return 0
-    # default (no cmd, or `list`)
+    # default (no cmd, or `list`) — notes show by default; --brief hides them.
     return list_tasks(include_done=getattr(args, "all", False),
-                      show_notes=getattr(args, "notes", False))
+                      show_notes=not getattr(args, "brief", False))
 
 
 if __name__ == "__main__":
