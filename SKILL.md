@@ -2,11 +2,7 @@
 name: gstack
 preamble-tier: 1
 version: 1.1.0
-description: |
-  Fast headless browser for QA testing and site dogfooding. Navigate pages, interact with
-  elements, verify state, diff before/after, take annotated screenshots, test responsive
-  layouts, forms, uploads, dialogs, and capture bug evidence. Use when asked to open or
-  test a site, verify a deployment, dogfood a user flow, or file a bug with screenshots. (gstack)
+description: Fast headless browser for QA testing and site dogfooding. (gstack)
 allowed-tools:
   - Bash
   - Read
@@ -20,6 +16,14 @@ triggers:
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
+
+
+## When to invoke this skill
+
+Navigate pages, interact with
+elements, verify state, diff before/after, take annotated screenshots, test responsive
+layouts, forms, uploads, dialogs, and capture bug evidence. Use when asked to open or
+test a site, verify a deployment, dogfood a user flow, or file a bug with screenshots.
 
 ## Preamble (run first)
 
@@ -41,6 +45,16 @@ echo "SKILL_PREFIX: $_SKILL_PREFIX"
 source <(~/.claude/skills/gstack/bin/gstack-repo-mode 2>/dev/null) || true
 REPO_MODE=${REPO_MODE:-unknown}
 echo "REPO_MODE: $REPO_MODE"
+_SESSION_KIND=$(~/.claude/skills/gstack/bin/gstack-session-kind 2>/dev/null || echo "interactive")
+case "$_SESSION_KIND" in spawned|headless|interactive) ;; *) _SESSION_KIND="interactive" ;; esac
+echo "SESSION_KIND: $_SESSION_KIND"
+# Conductor host: AskUserQuestion is unreliable here (native disabled, MCP
+# variant flaky), so skills render decisions as prose instead of calling the
+# tool. Gated on !headless so an eval/CI run INSIDE Conductor (GSTACK_HEADLESS)
+# still BLOCKs rather than rendering prose to nobody.
+if [ "$_SESSION_KIND" != "headless" ] && { [ -n "${CONDUCTOR_WORKSPACE_PATH:-}" ] || [ -n "${CONDUCTOR_PORT:-}" ]; }; then
+  echo "CONDUCTOR_SESSION: true"
+fi
 _LAKE_SEEN=$([ -f ~/.gstack/.completeness-intro-seen ] && echo "yes" || echo "no")
 echo "LAKE_INTRO: $_LAKE_SEEN"
 _TEL=$(~/.claude/skills/gstack/bin/gstack-config get telemetry 2>/dev/null || true)
@@ -56,7 +70,7 @@ _QUESTION_TUNING=$(~/.claude/skills/gstack/bin/gstack-config get question_tuning
 echo "QUESTION_TUNING: $_QUESTION_TUNING"
 mkdir -p ~/.gstack/analytics
 if [ "$_TEL" != "off" ]; then
-echo '{"skill":"gstack","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+echo '{"skill":"gstack","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null | tr -cd 'a-zA-Z0-9._-'); echo "${_repo:-unknown}")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
 fi
 for _PF in $(find ~/.gstack/analytics -maxdepth 1 -name '.pending-*' 2>/dev/null); do
   if [ -f "$_PF" ]; then
@@ -98,6 +112,19 @@ _CHECKPOINT_MODE=$(~/.claude/skills/gstack/bin/gstack-config get checkpoint_mode
 _CHECKPOINT_PUSH=$(~/.claude/skills/gstack/bin/gstack-config get checkpoint_push 2>/dev/null || echo "false")
 echo "CHECKPOINT_MODE: $_CHECKPOINT_MODE"
 echo "CHECKPOINT_PUSH: $_CHECKPOINT_PUSH"
+# Plan-mode hint for skills like /spec that branch behavior on plan-mode state.
+# Claude Code exposes plan mode via system reminders; we detect best-effort
+# from CLAUDE_PLAN_FILE (set by the harness when plan mode is active) and
+# fall back to "inactive". Codex hosts and Claude execution mode both end up
+# inactive, which is the safe default (defaults to file+execute pipeline).
+if [ -n "${CLAUDE_PLAN_FILE:-}${GSTACK_PLAN_MODE_FORCE:-}" ]; then
+  export GSTACK_PLAN_MODE="active"
+elif [ "${GSTACK_PLAN_MODE:-}" = "active" ]; then
+  export GSTACK_PLAN_MODE="active"
+else
+  export GSTACK_PLAN_MODE="inactive"
+fi
+echo "GSTACK_PLAN_MODE: $GSTACK_PLAN_MODE"
 [ -n "$OPENCLAW_SESSION" ] && echo "SPAWNED_SESSION: true" || true
 ```
 
@@ -107,7 +134,7 @@ In plan mode, allowed because they inform the plan: `$B`, `$D`, `codex exec`/`co
 
 ## Skill Invocation During Plan Mode
 
-If the user invokes a skill in plan mode, the skill takes precedence over generic plan mode behavior. **Treat the skill file as executable instructions, not reference.** Follow it step by step starting from Step 0; the first AskUserQuestion is the workflow entering plan mode, not a violation of it. AskUserQuestion (any variant — `mcp__*__AskUserQuestion` or native; see "AskUserQuestion Format → Tool resolution") satisfies plan mode's end-of-turn requirement. If no variant is callable, fall back to writing the decision brief into the plan file as a `## Decisions to confirm` section + ExitPlanMode — never silently auto-decide. At a STOP point, stop immediately. Do not continue the workflow or call ExitPlanMode there. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" execute. Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.
+If the user invokes a skill in plan mode, the skill takes precedence over generic plan mode behavior. **Treat the skill file as executable instructions, not reference.** Follow it step by step starting from Step 0; the first AskUserQuestion is the workflow entering plan mode, not a violation of it. AskUserQuestion (any variant — `mcp__*__AskUserQuestion` or native; see "AskUserQuestion Format → Tool resolution") satisfies plan mode's end-of-turn requirement. If AskUserQuestion is unavailable or a call fails, follow the AskUserQuestion Format failure fallback: `headless` → BLOCKED; `interactive` → the prose fallback (also satisfies end-of-turn). At a STOP point, stop immediately. Do not continue the workflow or call ExitPlanMode there. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" execute. Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.
 
 If `PROACTIVE` is `"false"`, do not auto-invoke or proactively suggest skills. If a skill seems useful, ask: "I think /skillname might help here — want me to run it?"
 
@@ -142,7 +169,7 @@ touch ~/.gstack/.writing-style-prompted
 
 Skip if `WRITING_STYLE_PENDING` is `no`.
 
-If `LAKE_INTRO` is `no`: say "gstack follows the **Boil the Lake** principle — do the complete thing when AI makes marginal cost near-zero. Read more: https://garryslist.org/posts/boil-the-ocean" Offer to open:
+If `LAKE_INTRO` is `no`: say "gstack follows the **Boil the Ocean** principle — do the complete thing when AI makes marginal cost near-zero. Read more: https://garryslist.org/posts/boil-the-ocean" Offer to open:
 
 ```bash
 open https://garryslist.org/posts/boil-the-ocean
@@ -153,7 +180,7 @@ Only run `open` if yes. Always run `touch`.
 
 If `TEL_PROMPTED` is `no` AND `LAKE_INTRO` is `yes`: ask telemetry once via AskUserQuestion:
 
-> Help gstack get better. Share usage data only: skill, duration, crashes, stable device ID. No code, file paths, or repo names.
+> Help gstack get better. Share usage data only: skill, duration, crashes, stable device ID. No code or file paths. Your repo name is recorded locally only and stripped before any upload.
 
 Options:
 - A) Help gstack get better! (recommended)
@@ -229,6 +256,7 @@ Key routing rules:
 - Ship/deploy/PR → invoke /ship or /land-and-deploy
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec
 ```
 
 Then commit the change: `git add CLAUDE.md && git commit -m "chore: add gstack skill routing rules to CLAUDE.md"`
@@ -285,30 +313,29 @@ _BRAIN_SYNC_BIN="~/.claude/skills/gstack/bin/gstack-brain-sync"
 _BRAIN_CONFIG_BIN="~/.claude/skills/gstack/bin/gstack-config"
 
 # /sync-gbrain context-load: teach the agent to use gbrain when it's available.
-# Mutually exclusive variants per /plan-eng-review §4. Empty string when gbrain
-# is not configured (zero context cost for non-gbrain users).
+# Per-worktree pin: post-spike redesign uses kubectl-style `.gbrain-source` in the
+# git toplevel to scope queries. Look for the pin in the worktree (not a global
+# state file) so that opening worktree B without a pin doesn't claim "indexed"
+# just because worktree A was synced. Empty string when gbrain is not
+# configured (zero context cost for non-gbrain users).
 _GBRAIN_CONFIG="$HOME/.gbrain/config.json"
 if [ -f "$_GBRAIN_CONFIG" ] && command -v gbrain >/dev/null 2>&1; then
   _GBRAIN_VERSION_OK=$(gbrain --version 2>/dev/null | grep -c '^gbrain ' || echo 0)
   if [ "$_GBRAIN_VERSION_OK" -gt 0 ] 2>/dev/null; then
-    _SYNC_STATE="$_GSTACK_HOME/.gbrain-sync-state.json"
-    _CWD_PAGES=0
-    if [ -f "$_SYNC_STATE" ]; then
-      # Flatten newlines so the regex works against pretty-printed JSON too.
-      _CWD_PAGES=$(tr -d '\n' < "$_SYNC_STATE" 2>/dev/null \
-        | grep -o '"name": *"code"[^}]*"detail": *{[^}]*"page_count": *[0-9]*' \
-        | grep -o '"page_count": *[0-9]*' | grep -o '[0-9]\+' | head -1)
-      _CWD_PAGES=${_CWD_PAGES:-0}
+    _GBRAIN_PIN_PATH=""
+    _REPO_TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+    if [ -n "$_REPO_TOP" ] && [ -f "$_REPO_TOP/.gbrain-source" ]; then
+      _GBRAIN_PIN_PATH="$_REPO_TOP/.gbrain-source"
     fi
-    if [ "$_CWD_PAGES" -gt 0 ] 2>/dev/null; then
+    if [ -n "$_GBRAIN_PIN_PATH" ]; then
       echo "GBrain configured. Prefer \`gbrain search\`/\`gbrain query\` over Grep for"
       echo "semantic questions; use \`gbrain code-def\`/\`code-refs\`/\`code-callers\` for"
       echo "symbol-aware code lookup. See \"## GBrain Search Guidance\" in CLAUDE.md."
       echo "Run /sync-gbrain to refresh."
     else
-      echo "GBrain configured but this repo isn't indexed yet. Run \`/sync-gbrain --full\`"
-      echo "before relying on \`gbrain search\` for code questions in this repo."
-      echo "Falls back to Grep until indexed."
+      echo "GBrain configured but this worktree isn't pinned yet. Run \`/sync-gbrain --full\`"
+      echo "before relying on \`gbrain search\` for code questions in this worktree."
+      echo "Falls back to Grep until pinned."
     fi
   fi
 fi
@@ -474,9 +501,7 @@ Replace `SKILL_NAME`, `OUTCOME`, and `USED_BROWSE` before running.
 
 ## Plan Status Footer
 
-In plan mode before ExitPlanMode: if the plan file lacks `## GSTACK REVIEW REPORT`, run `~/.claude/skills/gstack/bin/gstack-review-read` and append the standard runs/status/findings table. With `NO_REVIEWS` or empty, append a 5-row placeholder with verdict "NO REVIEWS YET — run `/autoplan`". If a richer report exists, skip.
-
-PLAN MODE EXCEPTION — always allowed (it's the plan file).
+Skills that run plan reviews (`/plan-*-review`, `/codex review`) include the EXIT PLAN MODE GATE blocking checklist at the end of the skill, which verifies the plan file ends with `## GSTACK REVIEW REPORT` before ExitPlanMode is called. Skills that don't run plan reviews (operational skills like `/ship`, `/qa`, `/review`) typically don't operate in plan mode and have no review report to verify; this footer is a no-op for them. Writing the plan file is the one edit allowed in plan mode.
 
 If `PROACTIVE` is `false`: do NOT proactively invoke or suggest other gstack skills during
 this session. Only run skills the user explicitly invokes. This preference persists across
@@ -489,6 +514,7 @@ quality gates that produce better results than answering inline.
 
 **Routing rules — when you see these patterns, INVOKE the skill via the Skill tool:**
 - User describes a new idea, asks "is this worth building", brainstorms, pitches a concept → invoke `/office-hours`
+- User asks to spec something out, file an issue, write up a ticket, "turn this into a GitHub issue", "backlog item" → invoke `/spec`
 - User asks about strategy, scope, ambition, "think bigger", "what should we build" → invoke `/plan-ceo-review`
 - User asks to review architecture, lock in the plan, "does this design make sense" → invoke `/plan-eng-review`
 - User asks about design system, brand, visual identity, "how should this look" → invoke `/design-consultation`
@@ -506,6 +532,7 @@ quality gates that produce better results than answering inline.
 - User asks to configure deployment for the project → invoke `/setup-deploy`
 - User asks to monitor prod after shipping, post-deploy checks → invoke `/canary`
 - User asks to update docs after shipping → invoke `/document-release`
+- User asks to write docs from scratch, generate documentation, "document this feature/module" → invoke `/document-generate`
 - User asks for a weekly retro, what did we ship, "how'd we do" → invoke `/retro`
 - User asks for a second opinion, codex review → invoke `/codex`
 - User asks for safety mode, careful mode → invoke `/careful` or `/guard`
@@ -862,7 +889,7 @@ Refs are invalidated on navigation — run `snapshot` again after `goto`.
 | Command | Description |
 |---------|-------------|
 | `archive [path]` | Save complete page as MHTML via CDP |
-| `download <url|@ref> [path] [--base64]` | Download URL or media element to disk using browser cookies |
+| `download <url|@ref> [path] [--base64] [--navigate]` | Download URL or media element to disk using browser cookies. Use --navigate for URLs that trigger browser downloads (CDN redirects, Content-Disposition, anti-bot protected sites) |
 | `scrape <images|videos|media> [--selector sel] [--dir path] [--limit N]` | Bulk download all media from page. Writes manifest.json |
 
 ### Interaction
@@ -897,10 +924,10 @@ Refs are invalidated on navigation — run `snapshot` again after `goto`.
 | `cookies` | All cookies as JSON |
 | `css <sel> <prop>` | Computed CSS value |
 | `dialog [--clear]` | Dialog messages |
-| `eval <file>` | Run JavaScript from a file in the page context and return result as string. Path must resolve under /tmp or cwd (no traversal). Use eval for multi-line scripts; use js for one-liners. |
+| `eval <file> [--out <file>] [--raw]` | Run JavaScript from a file in the page context and return result as string. Path must resolve under /tmp or cwd (no traversal). Use eval for multi-line scripts; use js for one-liners. With --out <file>, the result is written to disk (base64 data URL decoded to bytes unless --raw); --out makes the invocation a WRITE (needs write scope, never allowed over the tunnel). |
 | `inspect [selector] [--all] [--history]` | Deep CSS inspection via CDP — full rule cascade, box model, computed styles |
 | `is <prop> <sel|@ref>` | State check on element. Valid <prop> values: visible, hidden, enabled, disabled, checked, editable, focused (case-sensitive). <sel> accepts a CSS selector OR an @ref token from a prior snapshot (e.g. @e3, @c1) — refs are interchangeable with selectors anywhere a selector is expected. |
-| `js <expr>` | Run inline JavaScript expression in the page context and return result as string. Same JS sandbox as eval; the only difference is js takes an inline expr while eval reads from a file. |
+| `js <expr> [--out <file>] [--raw]` | Run inline JavaScript expression in the page context and return result as string. Same JS sandbox as eval; the only difference is js takes an inline expr while eval reads from a file. With --out <file>, the result is written to disk instead of returned (a base64 data URL is decoded to raw bytes unless --raw is given) — ideal for rasterizing local renders to PNG without serializing megabytes back through the CLI. --out makes the invocation a WRITE (needs write scope, never allowed over the tunnel). |
 | `network [--clear]` | Network requests |
 | `perf` | Page load timings |
 | `storage  |  storage set <key> <value>` | Read both localStorage and sessionStorage as JSON. With "set <key> <value>", write to localStorage only (sessionStorage is read-only via this command — set it with `js sessionStorage.setItem(...)`). |
@@ -946,6 +973,7 @@ Refs are invalidated on navigation — run `snapshot` again after `goto`.
 | `disconnect` | Disconnect headed browser, return to headless mode |
 | `focus [@ref]` | Bring headed browser window to foreground (macOS) |
 | `handoff [message]` | Open visible Chrome at current page for user takeover |
+| `memory [--json]` | Snapshot Bun heap + per-tab JS heap + Chromium process tree + bounded buffer sizes. JSON output with --json. |
 | `restart` | Restart server |
 | `resume` | Re-snapshot after user takeover, return control to AI |
 | `state save|load <name>` | Save/load browser state (cookies + URLs) |

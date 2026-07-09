@@ -24,6 +24,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { hermeticChildEnv, isHermeticEnabled } from './hermetic-env';
 
 /** Strip ANSI escapes for pattern-matching against visible text. */
 export function stripAnsi(s: string): string {
@@ -70,6 +71,15 @@ export interface ClaudePtyOptions {
   permissionMode?: 'plan' | 'default' | 'acceptEdits' | 'bypassPermissions' | 'auto' | 'dontAsk' | null;
   /** Extra args after the permission-mode flag. */
   extraArgs?: string[];
+  /**
+   * Model for the spawned interactive `claude`. Without an explicit --model the
+   * child inherits the operator's ~/.claude/settings.json model (e.g.
+   * claude-fable-5[1m]), which can spend 5+ min in extended thinking on an empty
+   * plan-mode context and blow every smoke budget. Resolution mirrors
+   * session-runner.ts:144 exactly: opts.model ?? EVALS_MODEL ?? 'claude-sonnet-4-6'.
+   * Pushed BEFORE extraArgs so a test-supplied --model still wins (last flag wins).
+   */
+  model?: string;
   /** Terminal size. Default 120x40. Plan-mode UI lays out cleanly at this size. */
   cols?: number;
   rows?: number;
@@ -120,6 +130,13 @@ export interface ClaudePtySession {
   exited(): boolean;
   /** Exit code, if known. */
   exitCode(): number | null;
+  /**
+   * The hermetic CLAUDE_CONFIG_DIR this session's claude was pointed at, or
+   * null when EVALS_HERMETIC=0. Forensics: hermetic plan files live under
+   * `<hermeticConfigDir>/plans/` (extractPlanFilePath still matches them —
+   * the dir name ends in `/.claude` by contract).
+   */
+  hermeticConfigDir: string | null;
   /**
    * Send SIGINT, then SIGKILL after 1s. Always safe to call multiple times.
    * Awaits process exit before resolving.
@@ -295,6 +312,310 @@ export function isNumberedOptionListVisible(visible: string): boolean {
   // `[^0-9]2\.` to require a non-digit before `2` (so we don't match
   // `12.0`) without requiring whitespace.
   return /❯\s*1\./.test(visible) && /(^|[^0-9])2\./.test(visible);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// LLM judge — "is the model waiting for user input, working, or hung?"
+//
+// Regex detectors (isNumberedOptionListVisible, isProseAUQVisible) are fast
+// and deterministic but brittle to PTY rendering quirks (cursor-positioning
+// escapes that collapse multi-line option lists onto a single logical line).
+// When they miss, the polling loop times out at the full budget — even
+// though the model is correctly surfacing a question via a format the regex
+// can't reassemble.
+//
+// This LLM judge takes a TTY snapshot and answers a trichotomy:
+//   - 'waiting'  — agent surfaced a question/options, sitting at input prompt
+//   - 'working'  — agent is still generating (spinner, tool calls, "Musing")
+//   - 'hung'     — agent stopped without surfacing anything (rare)
+//
+// Used by polling loops as a fallback after N seconds with no terminal
+// classification. On 'waiting' verdict, return outcome='asked' early.
+//
+// Cost: ~$0.0005 per call using claude haiku 4.5. Cached by snapshot hash so
+// identical TTY frames don't re-charge. All verdicts logged to
+// ~/.gstack/analytics/pty-judge.jsonl for offline analysis.
+// ────────────────────────────────────────────────────────────────────────────
+
+import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+
+export interface PtyStateVerdict {
+  state: 'waiting' | 'working' | 'hung' | 'unknown';
+  reasoning: string;
+  /** SHA-1 of the normalized snapshot input (for caching/dedup). */
+  hash: string;
+  /** Wall time (ms) the judge call took. */
+  elapsedMs: number;
+}
+
+const PTY_VERDICT_CACHE = new Map<string, PtyStateVerdict>();
+
+/**
+ * Persist a verdict (or snapshot dump) to the analytics JSONL log.
+ * Best-effort — failures (disk full, permission denied, etc.) are swallowed
+ * so the harness never fails on logging.
+ */
+function logPtyJudge(record: Record<string, unknown>): void {
+  try {
+    const dir = `${process.env.HOME}/.gstack/analytics`;
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(`${dir}/pty-judge.jsonl`, JSON.stringify(record) + '\n');
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Snapshot dump for postmortem debugging when GSTACK_PTY_LOG=1.
+ * Writes the last 4KB of visible TTY plus context to
+ * ~/.gstack/analytics/pty-snapshots/<testName>-<elapsed>ms.txt.
+ */
+export function logPtySnapshot(visible: string, ctx: { testName: string; elapsedMs: number; tag?: string }): void {
+  if (process.env.GSTACK_PTY_LOG !== '1') return;
+  try {
+    const dir = `${process.env.HOME}/.gstack/analytics/pty-snapshots`;
+    fs.mkdirSync(dir, { recursive: true });
+    const tag = ctx.tag ? `-${ctx.tag}` : '';
+    const file = `${dir}/${ctx.testName}-${ctx.elapsedMs}ms${tag}.txt`;
+    fs.writeFileSync(
+      file,
+      `# testName: ${ctx.testName}\n# elapsedMs: ${ctx.elapsedMs}\n# tag: ${ctx.tag ?? ''}\n# visible.length: ${visible.length}\n\n${visible.slice(-4096)}`,
+    );
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Ask Claude Haiku 4.5 to classify a TTY snapshot as waiting/working/hung.
+ *
+ * Implementation: spawns `claude -p --model claude-haiku-4-5` synchronously
+ * with the prompt piped via stdin. Uses subscription auth (no API key env
+ * required). 30-second timeout; returns 'unknown' on any failure mode
+ * (timeout, malformed JSON, missing claude binary).
+ *
+ * Cache: identical snapshot hashes return the cached verdict without
+ * re-calling. Cache lives in-process; resets between test runs.
+ */
+export function judgePtyState(
+  visible: string,
+  ctx?: { testName?: string },
+): PtyStateVerdict {
+  // Normalize: strip trailing whitespace lines + take last 4KB. Hash the
+  // normalized form so spinner-frame-only diffs (which all look "working")
+  // don't bust the cache and rack up cost.
+  const tail = visible.slice(-4096).replace(/[ \t]+$/gm, '');
+  const hash = createHash('sha1').update(tail).digest('hex').slice(0, 16);
+
+  const cached = PTY_VERDICT_CACHE.get(hash);
+  if (cached) return cached;
+
+  const judgeStart = Date.now();
+  const prompt = `You are reading a snapshot of a terminal where Claude Code is running in plan mode for an automated test. Your job: classify the agent's current state.
+
+Pick exactly ONE:
+- WAITING — agent surfaced a question or option list and is sitting at the input prompt waiting for user reply. Signs: numbered/lettered options visible (1./2./3. or A)/B)/C)), "Recommendation:" line, cursor at empty input prompt with no recent generation activity, OR a fully-rendered question + reply-instruction (e.g. "Reply with A, B, or C" / "Recommendation:") is visible.
+- WORKING — agent is actively generating or running tools. Signs: spinner glyphs (✻ ✶ ✳ ✢ ✽), "Musing..." or "Churned for ..." text, recent tool-call blocks (Read/Edit/Bash/Grep), in-flight token output.
+
+PRECEDENCE OVERRIDE: if a lettered/numbered option list (A)/B)/1./2.) AND a "Recommendation:" or "Reply with"/"Reply A" instruction are BOTH visible in this snapshot, classify WAITING even when spinner glyphs (✻ ✶ ✳ ✢ ✽) are still animating — Claude Code keeps the spinner up at an idle prose decision, so a spinner alongside a fully-rendered question + reply-instruction is a residual render artifact, not active generation.
+- HUNG — agent has stopped without surfacing a question and without any spinner/work activity. Rare; usually means a crash.
+
+Respond with strict JSON ONLY (no markdown fences, no prose):
+{"state":"waiting","reasoning":"one short sentence"}
+
+Terminal snapshot (last 4KB):
+\`\`\`
+${tail}
+\`\`\``;
+
+  let verdict: PtyStateVerdict = {
+    state: 'unknown',
+    reasoning: 'judge call did not complete',
+    hash,
+    elapsedMs: 0,
+  };
+
+  try {
+    const result = nodeSpawnSync(
+      'claude',
+      ['-p', '--model', 'claude-haiku-4-5', '--max-turns', '1'],
+      {
+        input: prompt,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 30_000,
+        encoding: 'utf-8',
+      },
+    );
+    const elapsedMs = Date.now() - judgeStart;
+    if (result.status === 0 && result.stdout) {
+      // Pull the first {...} JSON object out of stdout. Haiku occasionally
+      // wraps in ```json ...``` despite the prompt; tolerate that.
+      const match = result.stdout.match(/\{[\s\S]*?"state"[\s\S]*?\}/);
+      if (match) {
+        try {
+          const parsed = JSON.parse(match[0]);
+          const state = ['waiting', 'working', 'hung'].includes(parsed.state)
+            ? (parsed.state as 'waiting' | 'working' | 'hung')
+            : 'unknown';
+          verdict = {
+            state,
+            reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning.slice(0, 200) : '',
+            hash,
+            elapsedMs,
+          };
+        } catch {
+          verdict = { state: 'unknown', reasoning: 'malformed JSON', hash, elapsedMs };
+        }
+      } else {
+        verdict = { state: 'unknown', reasoning: 'no JSON in response', hash, elapsedMs };
+      }
+    } else {
+      verdict = {
+        state: 'unknown',
+        reasoning: `claude exited ${result.status} (${(result.stderr ?? '').slice(0, 80)})`,
+        hash,
+        elapsedMs,
+      };
+    }
+  } catch (err) {
+    verdict = {
+      state: 'unknown',
+      reasoning: `judge spawn failed: ${(err as Error).message}`.slice(0, 200),
+      hash,
+      elapsedMs: Date.now() - judgeStart,
+    };
+  }
+
+  PTY_VERDICT_CACHE.set(hash, verdict);
+  logPtyJudge({
+    ts: new Date().toISOString(),
+    testName: ctx?.testName ?? 'unknown',
+    state: verdict.state,
+    reasoning: verdict.reasoning,
+    hash: verdict.hash,
+    judgeMs: verdict.elapsedMs,
+  });
+  return verdict;
+}
+
+/**
+ * Detect a prose-rendered AskUserQuestion in plan mode.
+ *
+ * Plan-mode AUQs sometimes render as visible model output rather than via
+ * the native numbered-prompt UI — e.g., when --disallowedTools AskUserQuestion
+ * is set and no MCP variant is callable, the model surfaces the question as
+ * lettered or numbered options in plain text. isNumberedOptionListVisible
+ * doesn't catch these because the `❯` cursor sits on the empty input prompt,
+ * not on option 1.
+ *
+ * Detection patterns:
+ *   - 2+ distinct lettered options (A) B) C) D)) at line starts — typical
+ *     for plan-eng / plan-design / plan-devex prose AUQ
+ *   - 3+ distinct numbered options (1. 2. 3.) at line starts WITHOUT a
+ *     `❯<spaces>1.` cursor — typical for autoplan / office-hours prose AUQ
+ *   - 3+ markdown bold-bullet options (`- **label**`) following an
+ *     interrogative line — office-hours renders its mode question this way
+ *     (`> - **Building a startup**`), which has no letter/number marker
+ *   - Pattern 4/5 (collapsed-form): a reply-instruction OR recommendation
+ *     marker PLUS 2+ distinct A-D letter markers each punctuated by ) : or (
+ *     anywhere in the tail. stripAnsi destroys the newlines + inter-word
+ *     spaces that the line-anchored patterns above need, so a real prose AUQ
+ *     arrives collapsed ("ReplywithA,B,orC", "A(recommended)", "-B:") and is
+ *     invisible to Patterns 1-3. This is the dominant Shape-B render mode in
+ *     the plan-design smoke + floor timeouts (verified against real run bytes).
+ *
+ * Used by classifyVisible and runPlanSkillFloorCheck to return outcome='asked'
+ * (or auq_observed) instead of letting the harness time out when the model
+ * is correctly surfacing the question and waiting for user input via prose.
+ *
+ * The 4KB tail window avoids matching stale options from earlier prompts in
+ * scrollback. Permission dialogs are filtered out by the caller (see
+ * isPermissionDialogVisible callers in classifyVisible).
+ */
+export function isProseAUQVisible(visible: string): boolean {
+  const tail = visible.length > 4096 ? visible.slice(-4096) : visible;
+
+  // Pattern 1: 2+ distinct lettered options at line starts. Allow leading
+  // whitespace or `❯` cursor before the marker. PTY may collapse multiple
+  // option lines onto one logical line via stripped cursor-positioning
+  // escapes, but the NEWLINE before each option survives.
+  const letteredRe = /(?:^|\n)[ \t❯]*([A-D])\)/g;
+  const letteredHits = new Set<string>();
+  let lm: RegExpExecArray | null;
+  while ((lm = letteredRe.exec(tail)) !== null) {
+    if (lm[1]) letteredHits.add(lm[1]);
+  }
+  if (letteredHits.size >= 2) return true;
+
+  // Pattern 2: 2+ distinct numbered options at line starts, AND no
+  // `❯<spaces>1.` cursor IN THE RECENT TAIL (not the full buffer — a
+  // trust-dialog `❯ 1. Yes` at boot is in scrollback forever and
+  // would otherwise suppress this path for the rest of the run).
+  // The native-UI deferral only applies when the cursor list is
+  // currently rendered, not historically.
+  //
+  // Threshold 2 (matching the lettered branch): the tail is a 4KB window,
+  // and by the time the polling loop sees it, the model may have emitted
+  // option 1 several KB earlier and only 2/3/4 remain in tail. False
+  // positives on prose ("First, x. Second, y.") are extremely rare given
+  // the line-start anchor + the no-cursor gate.
+  if (/❯\s*1\./.test(tail)) return false;
+  const numberedRe = /(?:^|\n)[ \t❯]*([1-9])\./g;
+  const numberedHits = new Set<string>();
+  let nm: RegExpExecArray | null;
+  while ((nm = numberedRe.exec(tail)) !== null) {
+    if (nm[1]) numberedHits.add(nm[1]);
+  }
+  if (numberedHits.size >= 2) return true;
+
+  // Pattern 3: markdown bold-bullet option list. office-hours renders its
+  // mode question as `> - **Building a startup**` lines under
+  // --disallowedTools — no letter/number marker, so Patterns 1-2 miss it,
+  // and the model keeps a spinner up so the Haiku judge scores it 'working'
+  // and the run times out despite the question being on screen.
+  // Require both: an interrogative line (the question stem ends in '?') AND
+  // 3+ bold-bullet markers. The bold (`- **`) requirement is what separates
+  // an option list from incidental prose bullets; the line anchor is dropped
+  // because stripAnsi can collapse option lines (see Pattern 1 note), so we
+  // count markers anywhere in the tail. The `❯ 1.` cursor gate above already
+  // excludes a live native list.
+  if (/\?/.test(tail)) {
+    const boldBulletHits = (tail.match(/[-*•]\s+\*\*/g) || []).length;
+    if (boldBulletHits >= 3) return true;
+  }
+
+  // Pattern 4/5: collapsed-form prose AUQ. stripAnsi removes the
+  // cursor-positioning escapes that render option newlines + inter-word
+  // spaces, so "Reply with A, B, or C" arrives as "ReplywithA,B,orC" and
+  // "A) ..." as "A(recommended)" / "-B:" — defeating every line-anchored or
+  // ')'-anchored pattern above (Patterns 1-3 all return false on the real
+  // plan-design smoke + floor timeout bytes). Detect via two INDEPENDENT
+  // signals that must BOTH hold — the corroboration is what separates a real
+  // AUQ from incidental report prose that happens to mention a recommendation:
+  //   (1) a reply-instruction matched space-insensitively OR a recommendation
+  //       marker, AND
+  //   (2) 2+ distinct A-D letter markers each punctuated by ) : or ( anywhere
+  //       in the tail.
+  // A single 'B)' + the word "recommendation", or a comma-only collapsed
+  // "ReplywithA,B,orC" with no )/:/( punctuation on the letters, both stay
+  // false — the two-signal contract is pinned by unit tests.
+  const replyOrRec =
+    /reply\s*(?:with)?\s*[A-D]/i.test(tail) ||
+    /reply(?:with)?[A-D]/i.test(tail.replace(/\s+/g, '')) ||
+    /\bRecommendation\s*:/i.test(tail) ||
+    /\(recommended\)/i.test(tail);
+  if (replyOrRec) {
+    const collapsedLetterRe = /\b([A-D])[):(]/g;
+    const collapsedHits = new Set<string>();
+    let cm: RegExpExecArray | null;
+    while ((cm = collapsedLetterRe.exec(tail)) !== null) {
+      if (cm[1]) collapsedHits.add(cm[1]);
+    }
+    if (collapsedHits.size >= 2) return true;
+  }
+
+  return false;
 }
 
 /**
@@ -570,6 +891,21 @@ export function classifyVisible(
       summary: 'skill fired a numbered-option prompt (AskUserQuestion or routing-injection)',
     };
   }
+  // Prose-rendered AUQ: model surfaced the question as lettered or numbered
+  // options in plain text (typical under --disallowedTools AskUserQuestion
+  // when no MCP variant is callable). The model is waiting for user input
+  // via the plan-mode input prompt rather than via the AUQ tool UI; this
+  // is still a legitimate "asked" surface — semantically equivalent to a
+  // tool-call AUQ from the test's perspective.
+  if (isProseAUQVisible(visible)) {
+    if (isPermissionDialogVisible(visible.slice(-TAIL_SCAN_BYTES))) {
+      return null;
+    }
+    return {
+      outcome: 'asked',
+      summary: 'skill rendered a prose-style AskUserQuestion (model waiting for user input)',
+    };
+  }
   return null;
 }
 
@@ -784,9 +1120,22 @@ export function assertReviewReportAtBottom(
  * `'wrote_findings_before_asking'` when a plan was already written.
  */
 export function assertReportAtBottomIfPlanWritten(
-  obs: { planFile?: string; evidence: string },
+  obs: { planFile?: string; evidence: string; outcome?: string },
 ): void {
   if (!obs.planFile) return;
+  // Skip when the plan file path was detected from TTY output but no file
+  // exists on disk. This happens when the model mentions a path mid-stream
+  // (e.g., as a tool-call argument that was interrupted, or in a draft that
+  // was never persisted). The report-at-bottom contract is for fully-written
+  // plan files; ENOENT means there's no file content to enforce against.
+  if (!fs.existsSync(obs.planFile)) return;
+  // Skip on 'asked' outcomes — these are smoke tests that exited at the
+  // first AUQ render (Step 0 only). The model never reached the workflow's
+  // report-writing step, so a partial plan file without the report section
+  // is the expected mid-flight state, not a contract violation. The
+  // report-at-bottom check applies to outcomes that imply the workflow
+  // ran end-to-end (plan_ready, completion_summary, etc.).
+  if (obs.outcome === 'asked') return;
   const content = fs.readFileSync(obs.planFile, 'utf-8');
   const verdict = assertReviewReportAtBottom(content);
   if (!verdict.ok) {
@@ -865,13 +1214,28 @@ export async function launchClaudePty(
   let exited = false;
   let exitCodeCaptured: number | null = null;
 
+  const args: string[] = [];
+  // Pin the model so smokes don't inherit the operator's settings.json model
+  // (see ClaudePtyOptions.model). Chain mirrors session-runner.ts:144 so PTY and
+  // `claude -p` evals always agree. Pushed before extraArgs => a test-supplied
+  // --model wins (last flag wins).
+  const model = opts.model ?? process.env.EVALS_MODEL ?? 'claude-sonnet-4-6';
+  args.push('--model', model);
   // Permission mode: 'plan' default, null => omit flag entirely.
   const permissionMode = opts.permissionMode === undefined ? 'plan' : opts.permissionMode;
-  const args: string[] = [];
   if (permissionMode !== null) {
     args.push('--permission-mode', permissionMode);
   }
+  // Hermetic children get zero MCP servers; gated on the same call-time
+  // check as the env scrub so EVALS_HERMETIC=0 restores operator MCP too.
+  // Before opts.extraArgs so a test could theoretically supply --mcp-config.
+  const hermetic = isHermeticEnabled();
+  if (hermetic) args.push('--strict-mcp-config');
   if (opts.extraArgs) args.push(...opts.extraArgs);
+
+  // Hermetic by default (test/helpers/hermetic-env.ts): operator session
+  // context never reaches the child; per-test opts.env merges last.
+  const childEnv = hermeticChildEnv(opts.env);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const proc = (Bun as any).spawn([claudePath, ...args], {
@@ -883,7 +1247,7 @@ export async function launchClaudePty(
       },
     },
     cwd,
-    env: { ...process.env, ...(opts.env ?? {}) },
+    env: childEnv,
   });
 
   // Track exit so waitForAny can fail fast if claude crashes.
@@ -1035,6 +1399,7 @@ export async function launchClaudePty(
     pid: () => proc.pid as number | undefined,
     exited: () => exited,
     exitCode: () => exitCodeCaptured,
+    hermeticConfigDir: hermetic ? childEnv.CLAUDE_CONFIG_DIR ?? null : null,
     close,
   };
 }
@@ -1130,6 +1495,27 @@ export interface PlanSkillObservation {
    * the section, and that's the regression we want to catch.
    */
   planFile?: string;
+  /**
+   * High-water-mark flag: did the polling loop ever observe a
+   * prose-rendered AskUserQuestion (lettered or numbered options visible)
+   * during the run? Set true the first poll iteration that
+   * isProseAUQVisible returns true on the recent buffer; remains true
+   * for the rest of the observation.
+   *
+   * The 2KB `evidence` window often misses the prose-AUQ moment because
+   * by the time outcome=plan_ready fires, the ExitPlanMode "Ready to
+   * execute" UI has pushed the options out of the tail. Tests that need
+   * to assert "the user saw the question at SOME point" should check
+   * this flag rather than re-running isProseAUQVisible on the truncated
+   * evidence.
+   */
+  proseAUQEverObserved?: boolean;
+  /**
+   * High-water-mark flag: did the LLM judge ever return state='waiting'
+   * during the run? Same shape as proseAUQEverObserved but driven by the
+   * Haiku judge fallback rather than the regex detector.
+   */
+  waitingEverObserved?: boolean;
 }
 
 /**
@@ -1187,6 +1573,9 @@ export async function runPlanSkillObservation(opts: {
    * Step 0 reads the prior conversation context so it sees the draft.
    */
   initialPlanContent?: string;
+  /** Override the spawned model. Defaults via launchClaudePty's chain
+   *  (opts.model ?? EVALS_MODEL ?? 'claude-sonnet-4-6'). */
+  model?: string;
 }): Promise<PlanSkillObservation> {
   const startedAt = Date.now();
   const session = await launchClaudePty({
@@ -1195,6 +1584,7 @@ export async function runPlanSkillObservation(opts: {
     timeoutMs: (opts.timeoutMs ?? 180_000) + 30_000,
     extraArgs: opts.extraArgs,
     env: opts.env,
+    model: opts.model,
   });
 
   try {
@@ -1220,6 +1610,17 @@ export async function runPlanSkillObservation(opts: {
 
     const budgetMs = opts.timeoutMs ?? 180_000;
     const start = Date.now();
+    let lastJudgeAt = 0;
+    let lastJudgeVerdict: PtyStateVerdict | null = null;
+    // High-water marks: did we EVER see a prose-AUQ surface or a judge
+    // 'waiting' verdict during the run? Models may surface options
+    // briefly, then resume thinking when no user response comes (test
+    // env has no responder). At timeout we trust historical signals
+    // even if the current state is 'working'.
+    let proseAUQEverObserved = false;
+    let waitingEverObserved = false;
+    const JUDGE_AFTER_MS = 60_000;
+    const JUDGE_INTERVAL_MS = 30_000;
     while (Date.now() - start < budgetMs) {
       await Bun.sleep(2000);
       const visible = session.visibleSince(since);
@@ -1240,6 +1641,18 @@ export async function runPlanSkillObservation(opts: {
           elapsedMs: Date.now() - startedAt,
         };
       }
+
+      // Cheap surface-tracking: did the model ever surface a prose AUQ in
+      // this tick's recent buffer? Track once-true (high water).
+      if (!proseAUQEverObserved && isProseAUQVisible(visible)) {
+        proseAUQEverObserved = true;
+        logPtySnapshot(visible, {
+          testName: opts.skillName,
+          elapsedMs: Date.now() - start,
+          tag: 'prose-auq-surfaced',
+        });
+      }
+
       const classified = classifyVisible(visible, {
         strictPlanWrites: !!opts.initialPlanContent,
       });
@@ -1248,6 +1661,8 @@ export async function runPlanSkillObservation(opts: {
           ...classified,
           evidence: visible.slice(-2000),
           elapsedMs: Date.now() - startedAt,
+          proseAUQEverObserved,
+          waitingEverObserved,
         };
         // Capture the plan file path on any outcome where one may have been
         // written. Gating only on 'plan_ready' missed two cases: (1) the
@@ -1260,13 +1675,60 @@ export async function runPlanSkillObservation(opts: {
         if (planFile) obs.planFile = planFile;
         return obs;
       }
+
+      // LLM judge fallback: if regex detectors didn't classify and we've
+      // burned >60s with periodic ticks, ask Haiku "is the model waiting,
+      // working, or hung?" Treat 'waiting' as 'asked' (model surfaced a
+      // question via prose the regex couldn't reassemble). Snapshot the
+      // visible buffer at each judge call when GSTACK_PTY_LOG=1.
+      const elapsed = Date.now() - start;
+      if (elapsed > JUDGE_AFTER_MS && Date.now() - lastJudgeAt > JUDGE_INTERVAL_MS) {
+        lastJudgeAt = Date.now();
+        logPtySnapshot(visible, { testName: opts.skillName, elapsedMs: elapsed, tag: 'judge-tick' });
+        lastJudgeVerdict = judgePtyState(visible, { testName: opts.skillName });
+        if (lastJudgeVerdict.state === 'waiting') {
+          waitingEverObserved = true;
+          return {
+            outcome: 'asked',
+            summary: `LLM judge: ${lastJudgeVerdict.reasoning} (state=waiting after ${Math.round(elapsed / 1000)}s)`,
+            evidence: visible.slice(-2000),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+      }
     }
 
+    // Timeout fallback: if we observed a prose-AUQ surface OR a judge
+    // 'waiting' verdict at any point during the run, treat as 'asked'.
+    // This catches the model-surfaced-then-resumed-thinking case where
+    // by the time the timeout fires, the buffer has moved past the
+    // options into spinner state but the question DID surface earlier.
+    const finalVisible = session.visibleSince(since);
+    if (proseAUQEverObserved || waitingEverObserved) {
+      return {
+        outcome: 'asked',
+        summary:
+          `prose-AUQ surface observed during run (proseAUQEverObserved=${proseAUQEverObserved}, waitingEverObserved=${waitingEverObserved}); model surfaced the question and the test budget elapsed without a follow-up classification` +
+          (lastJudgeVerdict
+            ? ` (last LLM judge: ${lastJudgeVerdict.state} — ${lastJudgeVerdict.reasoning})`
+            : ''),
+        evidence: finalVisible.slice(-2000),
+        elapsedMs: Date.now() - startedAt,
+        proseAUQEverObserved,
+        waitingEverObserved,
+      };
+    }
     return {
       outcome: 'timeout',
-      summary: `no terminal outcome within ${budgetMs}ms`,
-      evidence: session.visibleSince(since).slice(-2000),
+      summary:
+        `no terminal outcome within ${budgetMs}ms` +
+        (lastJudgeVerdict
+          ? ` (last LLM judge: state=${lastJudgeVerdict.state} — ${lastJudgeVerdict.reasoning})`
+          : ''),
+      evidence: finalVisible.slice(-2000),
       elapsedMs: Date.now() - startedAt,
+      proseAUQEverObserved,
+      waitingEverObserved,
     };
   } finally {
     await session.close();
@@ -1379,6 +1841,8 @@ export async function runPlanSkillCounting(opts: {
   timeoutMs?: number;
   /** Extra env merged into the spawned `claude` process. */
   env?: Record<string, string>;
+  /** Override the spawned model. Defaults via launchClaudePty's chain. */
+  model?: string;
 }): Promise<PlanSkillCountObservation> {
   const startedAt = Date.now();
   const defaultPick = opts.defaultPick ?? 1;
@@ -1389,6 +1853,7 @@ export async function runPlanSkillCounting(opts: {
     cwd: opts.cwd,
     timeoutMs: timeoutMs + 60_000,
     env: opts.env,
+    model: opts.model,
   });
 
   const fingerprints: AskUserQuestionFingerprint[] = [];
@@ -1546,6 +2011,202 @@ export async function runPlanSkillCounting(opts: {
       `no terminal outcome within ${timeoutMs}ms (step0=${step0Count}, review=${reviewCount})`,
       session.visibleSince(since),
     );
+  } finally {
+    await session.close();
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// runPlanSkillFloorCheck — minimal "did the agent fire ANY AskUserQuestion?"
+// observer for gate-tier floor tests catching the May 2026 transcript bug
+// (model wrote plan + ExitPlanMode'd with reviewCount=0).
+//
+// Why this exists separately from runPlanSkillCounting: plan-mode AUQs render
+// every option on a single logical line via cursor-positioning escapes that
+// stripAnsi can't simulate. parseNumberedOptions therefore returns < 2 options
+// from those frames and never records a fingerprint. The full counting helper
+// works for periodic finding-count tests because their 25-min budgets give the
+// agent enough redraws that one frame eventually parses cleanly. Gate-tier
+// floor tests don't have that wall-time budget and need to exit early on the
+// first observation. This helper trades fingerprint precision for early-exit
+// reliability.
+//
+// Contract:
+//   - PASS  → outcome === 'auq_observed' (agent rendered any non-permission
+//             numbered-option list; we exit immediately and report success)
+//   - FAIL  → outcome === 'plan_ready' | 'completion_summary' | 'silent_write'
+//             (agent reached a terminal state without ever firing an AUQ —
+//             this IS the transcript bug)
+//   - SOFT  → outcome === 'timeout' (neither happened in budget; agent may
+//             just be slow — test should retry with a larger budget rather
+//             than treat as a hard regression)
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface PlanSkillFloorObservation {
+  /** True iff a review-phase AUQ render was observed. */
+  auqObserved: boolean;
+  outcome:
+    | 'auq_observed'
+    | 'plan_ready'
+    | 'silent_write'
+    | 'exited'
+    | 'timeout';
+  summary: string;
+  /** Visible TTY tail (last 3KB) at terminal time. */
+  evidence: string;
+  /** Wall time (ms) until the outcome was decided. */
+  elapsedMs: number;
+}
+
+/**
+ * Drive a plan-* skill in plan mode and exit at the first non-permission
+ * numbered-option render. See block comment above for the contract.
+ */
+export async function runPlanSkillFloorCheck(opts: {
+  /** Skill name, e.g. 'plan-eng-review'. Used for diagnostic strings only. */
+  skillName: string;
+  /** Slash command to send alone, e.g. '/plan-eng-review'. */
+  slashCommand: string;
+  /** Plan content sent as a follow-up message ~3s after the slash command. */
+  followUpPrompt: string;
+  /** Working directory. Default process.cwd(). */
+  cwd?: string;
+  /** Total budget. Default 600000 (10 min). Tests exit early on AUQ. */
+  timeoutMs?: number;
+  /** Extra env merged into the spawned `claude` process. */
+  env?: Record<string, string>;
+  /** Override the spawned model. Defaults via launchClaudePty's chain. */
+  model?: string;
+}): Promise<PlanSkillFloorObservation> {
+  const startedAt = Date.now();
+  const timeoutMs = opts.timeoutMs ?? 600_000;
+
+  const session = await launchClaudePty({
+    permissionMode: 'plan',
+    cwd: opts.cwd,
+    timeoutMs: timeoutMs + 60_000,
+    env: opts.env,
+    model: opts.model,
+  });
+
+  try {
+    await Bun.sleep(8000); // boot grace + auto-trust handler window
+    const since = session.mark();
+    session.send(`${opts.slashCommand}\r`);
+    await Bun.sleep(3000);
+    session.send(`${opts.followUpPrompt}\r`);
+
+    const start = Date.now();
+    let lastJudgeAt = 0;
+    let lastJudgeVerdict: PtyStateVerdict | null = null;
+    const JUDGE_AFTER_MS = 60_000;
+    const JUDGE_INTERVAL_MS = 30_000;
+    while (Date.now() - start < timeoutMs) {
+      await Bun.sleep(2000);
+      const visible = session.visibleSince(since);
+
+      if (session.exited()) {
+        return {
+          auqObserved: false,
+          outcome: 'exited',
+          summary: `claude exited (code=${session.exitCode()}) before any AUQ render`,
+          evidence: visible.slice(-3000),
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+      if (visible.includes('Unknown command:')) {
+        return {
+          auqObserved: false,
+          outcome: 'exited',
+          summary: `claude rejected ${opts.slashCommand} as unknown command`,
+          evidence: visible.slice(-3000),
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+
+      // Success: ANY non-permission numbered-option list is an AUQ render —
+      // either via the native numbered-prompt UI (isNumberedOptionListVisible)
+      // OR via prose-rendered options under --disallowedTools when no MCP
+      // variant is callable (isProseAUQVisible). Both surface the question
+      // to the user; the bug we're catching is "fired zero AUQs."
+      const tail = visible.slice(-TAIL_SCAN_BYTES);
+      if (
+        (isNumberedOptionListVisible(visible) || isProseAUQVisible(visible)) &&
+        !isPermissionDialogVisible(tail)
+      ) {
+        return {
+          auqObserved: true,
+          outcome: 'auq_observed',
+          summary: 'agent rendered an AskUserQuestion (floor met)',
+          evidence: visible.slice(-3000),
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+
+      // LLM judge fallback: same shape as runPlanSkillObservation. After 60s
+      // of polling without a regex hit, ask Haiku to classify the snapshot.
+      // 'waiting' verdict counts as floor met (model surfaced a question via
+      // prose the regex couldn't catch). 'working' / 'hung' / 'unknown' don't
+      // change the outcome — they enrich the eventual timeout summary so the
+      // failure diagnostic is more actionable than "no AUQ render."
+      const elapsed = Date.now() - start;
+      if (elapsed > JUDGE_AFTER_MS && Date.now() - lastJudgeAt > JUDGE_INTERVAL_MS) {
+        lastJudgeAt = Date.now();
+        logPtySnapshot(visible, { testName: opts.skillName, elapsedMs: elapsed, tag: 'floor-judge-tick' });
+        lastJudgeVerdict = judgePtyState(visible, { testName: opts.skillName });
+        if (lastJudgeVerdict.state === 'waiting') {
+          return {
+            auqObserved: true,
+            outcome: 'auq_observed',
+            summary: `LLM judge: ${lastJudgeVerdict.reasoning} (state=waiting after ${Math.round(elapsed / 1000)}s; floor met)`,
+            evidence: visible.slice(-3000),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+      }
+
+      // Silent write outside sanctioned dirs is the transcript-bug shape.
+      const writeRe = /⏺\s*(?:Write|Edit)\(([^)]+)\)/g;
+      let m: RegExpExecArray | null;
+      while ((m = writeRe.exec(visible)) !== null) {
+        const target = m[1] ?? '';
+        const sanctioned = SANCTIONED_WRITE_SUBSTRINGS.some((s) => target.includes(s));
+        if (!sanctioned && !isNumberedOptionListVisible(visible)) {
+          return {
+            auqObserved: false,
+            outcome: 'silent_write',
+            summary: `Write/Edit to ${target} fired before any AskUserQuestion`,
+            evidence: visible.slice(-3000),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+      }
+
+      // Reached terminal without AUQ → transcript-bug regression.
+      // Note: COMPLETION_SUMMARY_RE is intentionally NOT checked here — it
+      // matches "GSTACK REVIEW REPORT" anywhere in the buffer, including
+      // when the agent does recon by reading existing plan files (which
+      // contain that string as a generated section). The plan_ready check
+      // (claude's actual "Ready to execute" confirmation) is the reliable
+      // terminal signal for "agent finished without asking."
+      if (isPlanReadyVisible(visible)) {
+        return {
+          auqObserved: false,
+          outcome: 'plan_ready',
+          summary: 'agent reached plan_ready without firing any AskUserQuestion',
+          evidence: visible.slice(-3000),
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+    }
+
+    return {
+      auqObserved: false,
+      outcome: 'timeout',
+      summary: `no AUQ render and no terminal outcome within ${timeoutMs}ms`,
+      evidence: session.visibleSince(since).slice(-3000),
+      elapsedMs: Date.now() - startedAt,
+    };
   } finally {
     await session.close();
   }
