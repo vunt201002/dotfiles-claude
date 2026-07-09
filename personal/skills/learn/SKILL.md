@@ -1,6 +1,6 @@
 ---
 name: learn
-description: Daily learning companion for the 1-2 hours the user studies outside work. Suggests what to learn (grounded in their career direction, current work, and what's genuinely hot via web search — never invented), then either teaches a topic directly (for solid fundamentals) or builds a roadmap with real source links (for new/version-specific tech the model shouldn't lecture on from stale memory). Tracks progress per topic in ~/.learn so multi-session skills resume exactly where they left off. Teaches in Vietnamese, keeps technical terms in English. Use when asked to "learn X", "teach me X", "what should I learn", "study plan for X", "/learn", or to continue a topic from a previous session.
+description: Daily learning companion for the 1-2 hours the user studies outside work. Suggests what to learn (grounded in their career direction, current work, and what's genuinely hot via web search — never invented), then either teaches a topic directly (for solid fundamentals) or builds a roadmap with real source links (for new/version-specific tech the model shouldn't lecture on from stale memory). Tracks progress per topic in an in-repo vault (personal/learn) so multi-session skills resume exactly where they left off and sync across machines. Teaches in Vietnamese, keeps technical terms in English. Use when asked to "learn X", "teach me X", "what should I learn", "study plan for X", "/learn", or to continue a topic from a previous session.
 ---
 
 # /learn — Daily learning companion
@@ -41,9 +41,10 @@ actually know is the one failure this skill must never commit.
   invent a URL or a "fact" about a recent version. Search and cite, or say you're unsure.
 - **Classify before TEACH.** Fundamentals → teach. New/version-specific → switch to PLAN
   (roadmap + real sources) with the staleness caveat.
-- **Read existing progress before starting a topic.** If `~/.learn/<topic>.md` exists,
+- **Read existing progress before starting a topic.** If `$LEARN_DIR/<topic>.md` exists,
   resume from `next_start` — don't re-teach what's already covered.
-- **Read-only web + save under `~/.learn/` only.** Never touch repo code, never commit.
+- **Read-only web + save under the progress vault (`$LEARN_DIR`, = `personal/learn/`)
+  only.** Never touch repo code outside that vault, never commit (the user commits it).
 - **Save progress at the end of every session** with a `next_start` line good enough that
   next session picks up without the user re-explaining.
 
@@ -60,7 +61,7 @@ Parse input after `/learn`:
 | `<topic>` | **Start/continue** that topic — auto-propose teach vs plan (below), confirm |
 | `teach <topic>` | **Teach** — force tutor role |
 | `plan <topic>` | **Plan** — force roadmap+sources role |
-| `list` | **List** — show in-progress topics from `~/.learn/` |
+| `list` | **List** — show in-progress topics from `$LEARN_DIR` |
 
 **Auto-propose teach vs plan** (for `/learn <topic>` without teach/plan): classify the
 topic. Durable fundamental → propose TEACH. New/version-specific → propose PLAN. Tell the
@@ -72,8 +73,17 @@ override"). Let them confirm or override.
 
 ## Step 0 — Setup
 
+The progress vault lives **inside the dotfiles repo** (`personal/learn/`) so topics
+sync across machines via git. Resolve its path from this skill's real location
+(following the `~/.claude/skills/learn` symlink back to the repo), so it works no
+matter where the repo is cloned. `$LEARN_DIR` env var overrides it.
+
 ```bash
-LEARN_DIR="$HOME/.learn"
+# Resolve the skill's real dir (skills/learn), then walk up to personal/learn
+SKILL_LINK="$HOME/.claude/skills/learn"
+SKILL_REAL="$(cd "$(dirname "$(readlink "$SKILL_LINK" || echo "$SKILL_LINK")")" 2>/dev/null && pwd)/$(basename "$(readlink "$SKILL_LINK" || echo "$SKILL_LINK")")"
+# personal/skills/learn -> personal/learn
+LEARN_DIR="${LEARN_DIR:-$(cd "$SKILL_REAL/../.." && pwd)/learn}"
 mkdir -p "$LEARN_DIR"
 TODAY=$(date +%Y-%m-%d)
 echo "LEARN_DIR=$LEARN_DIR"; echo "TODAY=$TODAY"
@@ -100,7 +110,7 @@ recalled):
    *why it fits him*.
 2. **Genuinely hot/needed now** — WebSearch real, current results (filter SEO/listicles
    like `/tech-digest`). Don't claim "X is trending" from stale memory.
-3. **Topics already in progress** — from `~/.learn/`; nudge "continue X?".
+3. **Topics already in progress** — from `$LEARN_DIR`; nudge "continue X?".
 
 Present **3-6 suggestions**, each with a one/two-line "what you get / why now" in
 Vietnamese. Let the user pick one to start (then flow into teach/plan).
@@ -110,7 +120,7 @@ Vietnamese. Let the user pick one to start (then flow into teach/plan).
 ## TEACH mode — tutor (direct teaching, for fundamentals)
 
 1. **Classify** (gate). Fundamental → teach. New/version-specific → switch to PLAN, warn.
-2. **Read** `~/.learn/<topic>.md` if it exists → start from `next_start`, not from zero.
+2. **Read** `$LEARN_DIR/<topic>.md` if it exists → start from `next_start`, not from zero.
 3. **Teach for the session** (~1-2h of material, but follow the user's pace):
    - Explain the concept → concrete example → **check understanding** (ask them to
      answer / predict) → a small exercise. Iterate.
@@ -133,7 +143,7 @@ Vietnamese. Let the user pick one to start (then flow into teach/plan).
 
 ## TRACK — progress file (every session, both roles)
 
-At session end, write/update `~/.learn/<topic>.md`. The file must be good enough that
+At session end, write/update `$LEARN_DIR/<topic>.md`. The file must be good enough that
 **you can resume teaching at the right spot next time** (the `/my-worklog` lesson: save
 for-the-assistant-to-resume, not just for-the-user-to-read).
 
@@ -176,7 +186,8 @@ After saving, confirm: what was covered today, and the one-line `next_start` for
   vocabulary/code/proper names in English.
 - **Real sources only** (SUGGEST + PLAN). Every link/"trending" claim comes from a search
   this session, never memory. Filter SEO junk.
-- **Read-only web + save to `~/.learn/`.** No repo edits, no commits.
+- **Read-only web + save to the progress vault (`$LEARN_DIR` = `personal/learn/`).**
+  No other repo edits, no commits.
 - **Ground suggestions in the user's direction** (memory `user-learning-goals`); update
   that memory when he shares more about where he's headed, so suggestions sharpen over time.
 ```

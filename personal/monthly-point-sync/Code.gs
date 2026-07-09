@@ -146,7 +146,13 @@ function writeState_(sheet, map) {
 }
 
 // ---- main ----
-function syncNow() {
+// opts.backfill = true: stamp EVERY counted task missing from the sheet, not only
+// the ones we catch crossing live. Used by the "Backfill counted" menu item to
+// rescue tasks that skipped Ready to Test (e.g. dev-only tasks dragged straight to
+// review) or crossed between two 10-min polls. Dedup is by the sheet index, so a
+// task already present in any month tab is updated, never re-stamped.
+function syncNow(opts) {
+  var backfill = !!(opts && opts.backfill);
   var ss = ss_();
   var st = getState_(ss), firstRun = st.firstRun, prev = st.map, newState = {};
   var idx = buildIndex_(ss);
@@ -171,8 +177,12 @@ function syncNow() {
         if (!norm_(String(cur[6]))) ref.sheet.getRange(ref.row, 7).setValue(pid); // heal missing id
         idx.byPid[pid] = ref; idx.byTitle[nt] = ref;
         updated++;
-      } else if (!firstRun && !isCounted_(prev[pid]) && isCounted_(status)) {
-        // observed crossing into a counted status -> stamp current month
+      } else if (firstRun && !backfill) {
+        // very first auto-run only records a baseline; manual backfill ignores this
+        baseline++;
+      } else if (isCounted_(status) && (backfill || !isCounted_(prev[pid]))) {
+        // stamp into the current month. Normal sync: only when we observe the task
+        // CROSS into a counted status. Backfill: any counted task missing here.
         var msh = ensureMonthSheet_(ss, month);
         var r = lastDataRow_(msh) + 1;
         msh.getRange(r, 1, 1, 7).setValues([[
@@ -182,8 +192,6 @@ function syncNow() {
         idx.byPid[pid] = { sheet: msh, row: r };
         idx.byTitle[nt] = { sheet: msh, row: r };
         added++;
-      } else if (firstRun) {
-        baseline++;
       } else {
         waiting++; // not counted yet, not in sheet
       }
@@ -193,6 +201,24 @@ function syncNow() {
   Logger.log('Sync done. added=%s updated=%s baseline=%s waiting=%s firstRun=%s month=%s',
              added, updated, baseline, waiting, firstRun, month);
   return { added: added, updated: updated, baseline: baseline, waiting: waiting, firstRun: firstRun };
+}
+
+// Manual catch-up: stamp every counted task that's missing from the sheet, even if
+// we never observed it cross live (dev-only tasks dragged straight to review, or a
+// task that jumped between two polls). Safe to run repeatedly — dedup by sheet index.
+function backfillCounted() {
+  var r = syncNow({ backfill: true });
+  try {
+    SpreadsheetApp.getUi().alert(
+      'Backfill xong.\n\n' +
+      'Kéo về (mới): ' + r.added + '\n' +
+      'Cập nhật:     ' + r.updated + '\n' +
+      'Chưa tới mốc: ' + r.waiting + '\n\n' +
+      (r.added ? 'Lưu ý: task kéo về được gán vào THÁNG HIỆN TẠI (' + curMonth_() +
+                 '). Nếu thực tế nó đạt mốc ở tháng khác, kéo dòng sang tab đúng.'
+               : 'Không có task nào thiếu.'));
+  } catch (e) { /* no UI when run from editor; log only */ }
+  return r;
 }
 
 // ---- triggers / menu ----
@@ -206,6 +232,7 @@ function installTrigger() {
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('🔄 Point Sync')
     .addItem('Sync now', 'syncNow')
+    .addItem('Kéo task counted còn thiếu (quét bù)', 'backfillCounted')
     .addItem('Install 10-min auto-sync', 'installTrigger')
     .addToUi();
 }
