@@ -1,20 +1,21 @@
 ---
 name: qa-login
-description: LAST-RESORT login primer for browser QA — try cheaper paths first (public/storefront page, reuse an existing authenticated Playwright session, or bypass Admin via dev-preview URL / Admin API / theme preview). Only when none work, this imports cookies from your real Chrome (Chrome stays open, no separate profile, no CDP) into the headless browse session for the Shopify storefront, admin (admin.shopify.com / *.myshopify.com / accounts.shopify.com), or any app-embed/dev-store domains you name, then verifies. Asks which store each run (no hardcoded domains), works across stores and clients. NOT a credential store (copies existing cookies, never types passwords). Known limit, confirmed in practice: Shopify Admin sessions are device-bound + Cloudflare-gated, so even cookie-import can still hit a login/challenge screen — storefront/customer almost always carries, Admin may not. Use when asked to "qa login", "đăng nhập sẵn để test", "login the browser", "prime the session", "import shopify cookies", "/qa-login", or as the final fallback after other verify-on-browser paths fail. See personal/docs/workflow.md "Verify trên browser cần login" for the full fallback ladder.
+description: LAST-RESORT login primer for browser QA — try cheaper paths first (public/storefront page, reuse an existing authenticated session, or bypass Admin via dev-preview URL / Admin API / theme preview). Only when none work, this reads cookies from your real Chrome (Chrome stays open, no separate profile, no CDP) and primes whichever browser session is actually in play this run — Chrome DevTools MCP (checks it's attached to an already-logged-in Chrome; it has no cookie-copy mechanism, so a cold session there needs a one-time manual login instead), Playwright MCP (genuine cookie injection via storage-state), or the headless `/browse` session (original target, still used by /qa, /qa-only, /design-review). Works for the Shopify storefront, admin (admin.shopify.com / *.myshopify.com / accounts.shopify.com), or any app-embed/dev-store domains you name. Asks which store each run (no hardcoded domains), works across stores and clients. NOT a credential store (copies existing cookies, never types passwords). Known limit, confirmed in practice: Shopify Admin sessions are device-bound + Cloudflare-gated, so even cookie-import can still hit a login/challenge screen — storefront/customer almost always carries, Admin may not. Use when asked to "qa login", "đăng nhập sẵn để test", "login the browser", "prime the session", "import shopify cookies", "/qa-login", or as the final fallback after other verify-on-browser paths fail. See personal/docs/workflow.md "Test trên browser" for the full fallback ladder (/my-chrome → Chrome DevTools MCP → Playwright MCP → /browse).
 ---
 
-# /qa-login — prime the headless browser with your real Chrome logins
+# /qa-login — prime a browser session with your real Chrome logins
 
-The problem this kills: every time Claude opens the headless browser (`/browse`,
-`/qa`, `/design-review`), it's a blank session, so you re-login Shopify storefront +
-admin + app embed by hand, step by step. This skill copies the cookies from your
-**real, already-logged-in Chrome** into the browse session, so the test starts
-authenticated.
+The problem this kills: every time Claude opens a fresh browser session — headless
+`/browse` (`/qa`, `/design-review`), or a connected browser MCP (Chrome DevTools,
+Playwright) used as the /my-chrome fallback — it starts blank, so you re-login
+Shopify storefront + admin + app embed by hand, step by step. This skill copies the
+cookies from your **real, already-logged-in Chrome** into whichever session is
+actually in play this run, so the test starts authenticated.
 
 **Your real Chrome stays open and untouched.** This reads Chrome's cookie store on
-disk; it does NOT launch a separate profile, does NOT use CDP, does NOT make you
-quit Chrome. Just log into the stores you care about in normal Chrome once, then run
-this whenever you're about to test.
+disk; it does NOT launch a separate profile, does NOT use CDP on your real Chrome,
+does NOT make you quit Chrome. Just log into the stores you care about in normal
+Chrome once, then run this whenever you're about to test.
 
 ## What it canNOT do (say this honestly, don't oversell)
 
@@ -23,13 +24,17 @@ this whenever you're about to test.
 - Shopify **Admin** sessions are sometimes device-bound or SSO/2FA-gated. Those
   cookies don't always carry a working session. Storefront/customer cookies almost
   always do. If Admin still shows a login screen after import, that's the known limit
-  of cookie-copying, not a bug — fall back to logging into Admin once in the browse
-  session, or use the UI picker mode and re-import.
+  of cookie-copying, not a bug.
 - Cookies expire. When a session goes stale mid-test, just run `/qa-login` again.
+- **Chrome DevTools MCP has no cookie-copy path at all** — see Step 0. If that's the
+  target and it's not already authenticated, the fix is a one-time manual login in
+  that MCP's Chrome window, not this skill's usual import flow.
 
 ## The browse binary
 
-Every command below uses the browse binary. Resolve it once (it may be symlinked):
+Regardless of target, cookies are always **read** from real Chrome via the browse
+binary — it's the only piece here with OS Keychain access to decrypt Chrome's cookie
+store. Resolve it once (it may be symlinked):
 
 ```bash
 B=""
@@ -43,9 +48,30 @@ if [ -x "$B" ]; then echo "BROWSE: $B"; else echo "BROWSE: NOT FOUND — is gsta
 ```
 
 If `NOT FOUND`, tell the user the browse binary isn't installed/built and stop —
-this skill can't do anything without it. (Build it via the gstack/aov-lab `./setup`.)
+this skill can't do anything without it, even when the destination is an MCP target.
+(Build it via the gstack/aov-lab `./setup`.)
 
-## Step 0 — already on your real browser? (CDP short-circuit)
+## Step -1 — which session are we priming?
+
+Three possible destinations, in priority order (per `personal/docs/workflow.md`
+"Test trên browser"): **Chrome DevTools MCP** → **Playwright MCP** → **`/browse`**
+(original target, still what `/qa`, `/qa-only`, `/design-review` expect).
+
+Decide by what's actually connected/relevant this session — don't ask if it's
+already obvious from context (e.g. you just tried /my-chrome, it wasn't available,
+and you're mid-way through the workflow.md B8/A7 fallback ladder):
+
+1. Check for a connected **Chrome DevTools MCP** server: `ToolSearch("chrome devtools mcp navigate connect")`. If tools come back → this is the target (Step 0-cdp).
+2. Else check for a connected **Playwright MCP** server: `ToolSearch("playwright mcp browser storage cookie")`. If tools come back → this is the target (Step 0-pw skips straight to Step 2-pw, no short-circuit needed).
+3. Neither connected → target is `/browse` (Step 0-browse, the original flow).
+
+If genuinely ambiguous (bare `/qa-login <store>` with no other signal, and more than
+one target's tools are connected), ask once: "Đang prime session nào — Chrome
+DevTools MCP, Playwright MCP, hay `/browse` (cho `/qa` sau)?"
+
+## Step 0 — already authenticated? (short-circuit, per target)
+
+### Step 0-browse (target = `/browse`)
 
 ```bash
 "$B" status 2>/dev/null | grep -q "Mode: cdp" && echo "CDP=yes" || echo "CDP=no"
@@ -55,7 +81,32 @@ If `CDP=yes`: the session is already attached to your real browser, so every log
 is already there. Tell the user "Already connected to your real browser — your
 logins are live, nothing to import." and stop.
 
-If `CDP=no` (the normal case): continue.
+If `CDP=no` (the normal case): continue to Step 1, then Step 2-browse.
+
+### Step 0-cdp (target = Chrome DevTools MCP)
+
+Chrome DevTools MCP has **no cookie-set/get tools** — its whole model is attaching
+to an already-authenticated Chrome instance (`--browser-url`/`--autoConnect` against
+a persistent `--user-data-dir`, since Chrome 136+ blocks remote-debug on the default
+profile). So the check here isn't "import cookies", it's "is the attached session
+already logged in":
+
+1. Navigate to an authenticated page for one of the target domains (e.g. the store's
+   admin) using the MCP's navigate tool.
+2. Read the page (its text/snapshot tool) — logged in if it shows the real page,
+   not a login form.
+
+If already logged in → tell the user, stop (nothing to do). If NOT logged in → this
+is **not** a cookie-import situation. Tell the user plainly: "Chrome DevTools MCP
+đang dùng profile riêng (`--user-data-dir`), chưa login. Login 1 lần bằng tay trong
+cửa sổ Chrome đó — session sẽ persist cho các lần sau (đây là login thật, không phải
+cookie-copy)." Offer to fall through to Playwright MCP instead if that's faster right
+now.
+
+### Step 0-pw (target = Playwright MCP)
+
+Playwright MCP contexts are launched isolated by default — no short-circuit check;
+go straight to Step 1 then Step 2-pw to inject cookies.
 
 ## Step 1 — which store / domains this run?
 
@@ -77,14 +128,20 @@ are we testing? Give me the storefront domain (I'll add the Shopify admin + acco
 hosts automatically)." Keep tech terms/domains in English; talk to the user in their
 language.
 
-**Two ways to import — pick based on how specific the user was:**
+**Two ways to import (target = `/browse` only) — pick based on how specific the user was:**
 
 | Situation | Mode |
 |-----------|------|
-| User named the store / domains | **Direct mode** (Step 2a) — no UI, just import each domain |
-| User wants to eyeball/pick, or isn't sure which domains | **Picker mode** (Step 2b) — open the UI |
+| User named the store / domains | **Direct mode** (Step 2-browse a) — no UI, just import each domain |
+| User wants to eyeball/pick, or isn't sure which domains | **Picker mode** (Step 2-browse b) — open the UI |
 
-## Step 2a — direct import (named domains, no UI)
+(Target = Playwright MCP always uses direct mode — Step 2-pw — since it reads
+through the same `cookie-import-browser` command under the hood, just re-exports
+the result instead of leaving it in browse's own session.)
+
+## Step 2 — import, per target
+
+### Step 2-browse a — direct import (named domains, no UI)
 
 For each domain in the set, run:
 
@@ -110,7 +167,7 @@ click "Always Allow" so it doesn't ask again.
 Report the per-domain counts. A domain that imports `0 cookies` means the user isn't
 logged into that host in Chrome (or never visited it) — call that out, don't hide it.
 
-## Step 2b — UI picker (user wants to choose)
+### Step 2-browse b — UI picker (user wants to choose)
 
 ```bash
 "$B" cookie-import-browser
@@ -124,9 +181,50 @@ This opens a picker UI in the user's default browser (it prints the URL, e.g.
 Then STOP and wait for the user to say they're done. Do not proceed to verify until
 they confirm — they're clicking in another window.
 
+### Step 2-pw — inject into a connected Playwright MCP session
+
+Playwright's native cookie shape (`name`, `value`, `domain`, `path`, `expires`,
+`httpOnly`, `secure`, `sameSite`) is **exactly** what `browse` already emits — browse
+is itself built on Playwright — so no format conversion is needed, only wrapping.
+
+1. Read cookies from real Chrome the same way as Step 2-browse a, but into browse's
+   own throwaway session (this is just the read step, not the final destination):
+
+   ```bash
+   "$B" cookie-import-browser chrome --domain examplestore.com
+   "$B" cookie-import-browser chrome --domain examplestore.myshopify.com
+   "$B" cookie-import-browser chrome --domain admin.shopify.com
+   "$B" cookie-import-browser chrome --domain accounts.shopify.com
+   ```
+
+2. Dump and wrap into a Playwright `storageState.json`:
+
+   ```bash
+   echo "{\"cookies\": $("$B" cookies), \"origins\": []}" > /tmp/qa-login-storage-state.json
+   ```
+
+3. Load it into the connected Playwright MCP session with its `browser_set_storage_state`
+   tool, passing `path: "/tmp/qa-login-storage-state.json"`. This loads every cookie
+   in one call — no MCP server restart needed.
+
+   If `browser_set_storage_state` isn't available on that server (e.g. `--caps=storage`
+   wasn't enabled), fall back to looping the MCP's `browser_cookie_set` tool once per
+   cookie in the JSON (same fields, no file needed).
+
+4. Clean up the throwaway browse session and temp file once the MCP session has the
+   cookies loaded:
+
+   ```bash
+   "$B" stop 2>/dev/null
+   rm -f /tmp/qa-login-storage-state.json
+   ```
+
+Report the same way as browse-direct mode: which domains landed, roughly how many
+cookies each (from the wrapped JSON's length per domain) — not raw values.
+
 ## Step 3 — verify
 
-After importing (either mode), confirm what landed:
+### Target = `/browse`
 
 ```bash
 "$B" cookies
@@ -149,12 +247,22 @@ the Admin cookies didn't carry the session (the known limit above). Tell the use
 plainly and offer: (a) log into Admin once in this browse session by hand, or (b) try
 the picker mode to grab a fresher cookie set.
 
+### Target = Playwright MCP (or Chrome DevTools MCP after a manual login)
+
+Use the connected MCP's own navigate + read/snapshot tools instead of `"$B" goto`/
+`"$B" text`: navigate to an authenticated page for one of the imported domains, read
+the page, confirm it shows real content instead of a login form. Same "Admin may
+still be blocked, storefront almost always works" caveat applies — say so plainly if
+Admin still shows a login screen.
+
 ## Step 4 — hand off
 
-Once verified, the session is primed. Tell the user they can now run `/qa`,
-`/browse`, `/design-review`, or whatever test — the browser is logged in. The cookies
-persist across browse commands for this session, so they don't need to re-run this
-until the session is restarted or a cookie expires.
+Once verified, the session is primed. For `/browse` target: tell the user they can
+now run `/qa`, `/browse`, `/design-review`, or whatever test. For an MCP target: tell
+the user the connected browser MCP session is now authenticated for the domains
+imported — proceed with whatever verify step (e.g. workflow.md B8/A7) triggered this.
+Cookies persist across commands for this session, so no need to re-run this until the
+session restarts or a cookie expires.
 
 ## Cross-machine note
 
@@ -168,9 +276,12 @@ on a machine after pulling the repo, run **/sync-skills** to link it.
 ## Routing — don't confuse with neighbors
 
 - This **primes login state**; it does not test. After it, use **/qa** (test + fix),
-  **/qa-only** (report only), **/browse** (drive the browser), or **/design-review**.
+  **/qa-only** (report only), **/browse** (drive the browser), or **/design-review**
+  — all of these expect the `/browse` target. For a live browser-MCP verify (the
+  /my-chrome fallback path in `personal/docs/workflow.md` A7/B8), the primed session
+  is whichever connected MCP you targeted in Step -1.
 - It is **not** `/setup-browser-cookies` (the gstack/aov-lab built-in). This is a
   thin, Shopify-aware wrapper that knows the admin/accounts host set and asks which
   store. If the user wants the raw generic picker for a non-Shopify site, point them
   at `/setup-browser-cookies`.
-- Read-only beyond the browse session: it never touches repo code, never commits.
+- Read-only beyond the primed session: it never touches repo code, never commits.
