@@ -13,7 +13,7 @@ This skill is designed for sessions where you implemented a multi-step plan or w
 - **Split by logical unit FIRST, then by conventional-commit type.** A logical unit = one feature, one fix, one refactor step, one independently-understandable change. If the session implemented Phase 1 + Phase 2 of a plan, that's at least two commits (more if either phase mixes types). The default assumption is "this needs to be split"; bundling is the exception that must be justified.
 - **One conventional-commit type per commit.** Within a logical unit, if it mixes types (e.g. feat code + new tests + doc updates), further split by type unless the type-mix is small and tightly coupled (e.g. one new test file that ONLY exercises this commit's feat — that can ride along).
 - **You MUST read the actual diffs before grouping.** Filename and type are not enough to determine logical units. `git diff` each session-touched file (or batch via `git diff -- <files>`) so you understand what each change actually does. Combine this with your memory of the session's work — what task were you doing when you made each edit? Was it part of Step 3 of a plan, or a follow-up cleanup? That context drives the grouping.
-- **NEVER commit without explicit user confirmation.** You MUST show the commit plan and wait for the user to reply with "go", "yes", "ok", "proceed", or similar. Do NOT proceed on assumption. Do NOT proceed because the plan "looks obvious." Silence is NOT consent. If the user has not replied since you showed the plan, STOP and wait.
+- **Show the commit plan, then commit immediately — no confirmation gate.** Display the full plan (files, grouping, messages) so the user can see what's about to happen, then proceed straight to staging and committing in the same turn. No waiting for "go".
 
 ## Failure modes this skill exists to prevent
 
@@ -22,11 +22,9 @@ If you catch yourself about to do any of these, STOP and re-read the Iron Law:
 1. Lumping all session changes into a single commit "because they're related" or "because it was all one session" → WRONG. A whole-phase implementation almost always contains multiple logical units. Split them.
 2. Splitting only by conventional-commit type and ignoring logical units → WRONG. If you implemented two distinct features in one session, that's two `feat` commits, not one giant `feat` commit.
 3. Grouping changes by filename or directory without reading the diffs → WRONG. Two edits to the same file can belong to two different logical units (and should be split via `git add -p` if needed). Two edits to different files can belong to the same logical unit.
-4. Running `git commit` immediately after showing the plan, in the same response → WRONG. You must end your turn after showing the plan and wait for the user's next message.
-5. Skipping the plan display "because there's only one file" → WRONG. Always show the plan, even for a single file. The user needs to confirm the type, scope, and subject.
-6. Treating an earlier "yes commit my changes" from the user as standing approval for this run → WRONG. Each invocation of /my-commit requires fresh confirmation of the specific plan you just generated.
-7. Skipping the diff-reading step "because you remember what you did" → WRONG. Session memory is a hint, not a substitute. Read the diffs.
-8. Writing commit subjects that describe the plan/phase/session instead of the code change → WRONG. `fix: phase J-1 of guest wishlist plan` is meaningless to a future reader. Write `fix(wishlist): correct floating button alignment on mobile` instead. The plan reference belongs in the logical-unit label (internal grouping), never in the commit subject.
+4. Skipping the plan display "because there's only one file" → WRONG. Always show the plan, even for a single file, before staging — the user should see the type, scope, and subject before it lands.
+5. Skipping the diff-reading step "because you remember what you did" → WRONG. Session memory is a hint, not a substitute. Read the diffs.
+6. Writing commit subjects that describe the plan/phase/session instead of the code change → WRONG. `fix: phase J-1 of guest wishlist plan` is meaningless to a future reader. Write `fix(wishlist): correct floating button alignment on mobile` instead. The plan reference belongs in the logical-unit label (internal grouping), never in the commit subject.
 
 ## Step 1 — Enumerate session-touched files
 
@@ -136,19 +134,11 @@ Notice every subject describes WHAT the code does (add lexer modules, cover toke
 
 If the result is "everything is one logical unit and one type" (rare for a whole-phase implementation, common for a one-line fix), say so explicitly and show why each file belongs to the same unit before falling back to a single commit.
 
-### BLOCKING GATE — do not pass without explicit user reply
+### Show the plan, then commit — no gate
 
-After showing the plan, you MUST:
+After showing the plan, proceed straight into Step 5 in the same response: stage and commit each group in order. The plan display is for transparency (the user sees exactly what's about to happen), not a question to answer — do not phrase it as a prompt or wait for a reply before committing.
 
-1. End your turn with a clear question: "Proceed with these N commits? Reply 'go' to confirm, or tell me what to change."
-2. Make ZERO `git add`, `git commit`, or other staging tool calls in the same response that shows the plan.
-3. Wait for the user's NEXT message. Do not infer consent from prior context.
-4. Only proceed when the user replies with explicit go-ahead ("go", "yes", "ok", "proceed", "commit", "lgtm", or similar). If they ask for changes, regroup and re-show the plan, then gate again.
-5. If you are uncertain whether the user has approved, ask again. Never commit on ambiguous signals.
-
-This gate exists because past runs of this skill have committed without asking. Do not repeat that mistake.
-
-## Step 5 — Commit each group (ONLY AFTER USER SAYS GO)
+## Step 5 — Commit each group
 
 For each group, in order:
 
