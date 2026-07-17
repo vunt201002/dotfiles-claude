@@ -136,7 +136,8 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 **A7. Verify + blast radius** — `/my-verify` *(route theo layer: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*  ·  feature mới **có làm vỡ flow cũ không?**
 *Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
-**A8. Đóng** — `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
+**A8. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
+*`/tech-review` (chất lượng code + merge-provenance) và `/impact-review` (dự đoán regression qua caller/dependent) là 2 lens nhẹ, 1-pass, chạy song song được — đứng trước `/review` (pipeline nặng — SQL/security/concurrency) để bắt sớm trước khi đầu tư vào pass nặng hơn.*
 
 ---
 
@@ -163,7 +164,8 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 Chống băng-dán (giá trị runtime đổi đúng, không hardcode/`!important` đè) + blast radius (mọi nơi cùng nguồn) + regression.
 *Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
-**B9. Đóng** — `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
+**B9. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
+*`/tech-review` (chất lượng code + merge-provenance) và `/impact-review` (dự đoán regression qua caller/dependent) là 2 lens nhẹ, 1-pass, chạy song song được — đứng trước `/review` (pipeline nặng — SQL/security/concurrency) để bắt sớm trước khi đầu tư vào pass nặng hơn.*
 
 ---
 
