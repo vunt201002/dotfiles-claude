@@ -3,8 +3,8 @@ topic: SEO toàn diện (content + technical + off-page) — áp dụng tienvu-b
 mode: plan
 status: in-progress
 started: 2026-06-24
-last_session: 2026-07-10
-next_start: "Bắt đầu Buổi 3 — Content Strategy: Topic Cluster & Pillar Page + E-E-A-T. Map content hiện có của tienvu-bt (blog + policies + product) vào 1 cluster structure."
+last_session: 2026-07-12
+next_start: "Buổi 4 ĐANG DỞ — lý thuyết on-page đã dạy xong, đang treo 2 câu check hiểu (chọn title a/b/c + meta desc ảnh hưởng số nào trong GSC). Chữa 2 câu đó → bài tập A (title /construction) + B (skeleton pillar /bang-tai-cao-su) → chốt buổi. MỞ ĐẦU HỎI: (1) site đã index chưa (search site:tienvujsc.com.vn — GSC verified 12/07), (2) kết quả tự audit content của anh, (3) đã sửa contact.json hotline giả chưa."
 ---
 ## Bối cảnh (CẬP NHẬT 2026-07-09 — mở rộng scope)
 - User là frontend dev, hướng frontend depth + senior/system design.
@@ -22,6 +22,13 @@ next_start: "Bắt đầu Buổi 3 — Content Strategy: Topic Cluster & Pillar 
 - **QUAN TRỌNG**: tienvu-bt là **doanh nghiệp thật của user** (không phải bài tập/portfolio) — đang kinh
   doanh truyền thống, muốn hiện đại hóa. Website đã xong, SEO là bước tiếp theo. → Ưu tiên đề xuất có ROI
   thật cho business, không chỉ lý thuyết/bài tập.
+- **Mục tiêu website (user chốt 2026-07-11)**: **lead-generation**, KHÔNG phải e-commerce (không giá,
+  không thanh toán). Conversion duy nhất = khách chủ động liên hệ (hotline/Zalo/form báo giá). Nghề cũ:
+  in catalog gửi tận mỏ + khách cũ giới thiệu → giờ chuyển sang kiếm khách online. Khách mua là người
+  TRONG NGHỀ (giám đốc mỏ/quản đốc/kỹ sư) — nhiều người không cần được "dạy", họ cần tìm nhà cung cấp
+  đáng tin nhất / so sánh với bên đang biết. → Tỉ trọng content nghiêng thêm về **commercial
+  investigation**; informational vẫn giữ (3 vai: cửa vào ranking, chứng minh nghề, bắt buying committee).
+  VN trước, cross-border sau (EN overlay có sẵn).
 - Cấu trúc roadmap giờ chia theo **Phase** (mỗi phase = 1 mảng kiến thức). Mỗi buổi vẫn dạy tương tác +
   verify thật trên tienvu-bt khi áp dụng được (như cách làm ở Buổi 1: test curl thật trên local).
 
@@ -72,8 +79,102 @@ next_start: "Bắt đầu Buổi 3 — Content Strategy: Topic Cluster & Pillar 
   - **Action item còn treo**: GSC chưa setup trên tienvu-bt (xác nhận qua code — không có verification
     tag/file nào). Cần setup sớm (link thật đã đưa) để kịp có data trước Buổi 14.
 
+- **Buổi 3 — Content Strategy: Topic Cluster & Pillar Page + E-E-A-T (DONE 2026-07-11):**
+  - Hub-and-spoke: pillar phủ RỘNG 1 topic, spoke sâu 1 subtopic. 3 luật linking: (1) pillar→spoke —
+    anchor mô tả, trong body, xuất hiện sớm; (2) spoke→pillar — gần đầu bài; (3) spoke↔spoke liên quan.
+    Anchor đa dạng tự nhiên. Homepage → pillar trong vài click. 1 cluster = 1 topic, không trộn.
+  - **Pillar test** (chống chọn nhầm): người search head query đáp xuống trang này có được trả lời
+    không? User chọn /construction làm pillar → rớt test (nó trả lời "công ty làm được gì" = trust,
+    không phải "băng tải chọn/mua thế nào"). Vai đúng của /construction = **kho bằng chứng Experience**,
+    mỗi spoke nhúng ảnh/case từ đó.
+  - Commercial pillar vs guide pillar — chọn theo intent head query. "Băng tải cao su" thiên commercial
+    → pillar vừa bán vừa dạy. Pillar không cần hoàn hảo từ đầu — nuôi dần khi thêm spoke.
+  - E-E-A-T: **Trust quan trọng nhất**, không cần đủ 4 đều nhau; là on-site version của "lớp 2" Buổi 2
+    nhưng được Google dùng làm signal lớp 1. Framework Who/How/Why (byline kỹ sư thật; bằng chứng thi
+    công thật; viết để giúp người đọc). AI content chủ-yếu-để-xếp-hạng = vi phạm spam policy; AI hỗ trợ
+    + người kiểm + disclose = OK.
+  - **Lỗ rò Trust thật tìm thấy**: policies live viết cho nghề V-belt cũ + SAI TÊN PHÁP LÝ ("TNHH Tiến
+    Vũ Industrial" → đúng: "Công ty Cổ phần Tiến Vũ"). User tự ưu tiên đúng: sửa tên trước (người mở
+    policies = khách đang thẩm định cuối funnel; entity/NAP consistency — gặp lại ở Buổi 13).
+  - **Cluster map chốt cho tienvu-bt** (3 dòng sản phẩm = 3 cluster; pillar tạo qua CMS + route
+    `[slug].js` có sẵn → zero-code, URL top-level sạch — KHÔNG đặt dưới /products/... vì đụng namespace
+    `products/[slug].js`):
+    - `/bang-tai-cao-su`: spokes = bài draft 1 (chọn theo độ dày/lớp bố/tải), 4 (bảo trì & splicing),
+      5 (abrasion grades)
+    - `/con-lan`: spokes = bài 2 + 3 bài mới: cấu tạo & cách chọn con lăn (info→commercial, kỹ sư cơ
+      điện); con lăn hỏng sớm (info, pain-point); tiêu chí chọn NCC con lăn + checklist RFQ
+      (**commercial investigation** — bài lead-gen)
+    - `/vat-tu-mo`: hạt giống = bài 6, nuôi dần
+    - Bài 3 (downtime) = cầu nối: đặt /blog, treo cluster băng tải, link cả 3 pillar + construction;
+      bài "cấp lãnh đạo" — đáng share Zalo/gửi khách cũ (nối kênh referral truyền thống)
+    - V-belt cũ: NGOÀI cả 3 cluster. Bando/bakery → unpublish; bảng tra còn traffic → giữ, KHÔNG link
+      vào cluster mới, đợi data GSC rồi quyết redirect/bỏ (quyết bằng data)
+  - Ghi chú 2026: cluster cấu trúc rõ + entity rõ được cite trong AI Overviews (~20% search) nhiều hơn;
+    core update 6/2025 củng cố topical authority — cùng cấu trúc phục vụ SEO + AEO.
+
+- **Buổi 4 — On-page SEO (ĐANG DỞ 2026-07-12 — lý thuyết xong, check hiểu + bài tập treo):**
+  - Mental model 3 tầng: máy đọc (title/heading/link/alt) · SERP (title link + snippet → CTR) ·
+    content thật — 3 tầng phải kể cùng 1 câu chuyện.
+  - Title: công thức `[keyword chính]+[qualifier]+[brand]`, front-load, unique/trang, ~55-60 ký tự
+    (cắt theo pixel ~600px). Google VIẾT LẠI title khi: quá dài / nhồi keyword / boilerplate / lệch
+    nội dung. Nhồi biến thể keyword = spam signal.
+  - Meta description: KHÔNG phải ranking factor — ảnh hưởng CTR ("ranking đưa lên bảng, snippet giành
+    click"). Công thức `[có gì]+[cho ai]+[USP]+[CTA]`, ~150-160 ký tự. Google hay thay bằng đoạn trích
+    khớp query hơn — bình thường.
+  - Heading: H1 = lời hứa (1/trang là convention tốt); thứ tự không ảnh hưởng ranking (doc 12/2025) —
+    phục vụ người đọc + máy hiểu cấu trúc. Mẹo 2026: H2 dạng câu hỏi người search gõ + đoạn trả lời
+    gọn ngay dưới → dễ được trích featured snippet / AI Overview (trích theo section).
+  - Keyword tự nhiên = semantic SEO: quên mật độ; keyword ở vị trí trọng yếu vì nội dung cần; phần
+    còn lại dùng TỪ VỰNG NGÀNH thật (lớp bố, lưu hóa, độ mài mòn...) — chính từ vựng ngành chứng minh
+    expertise. Keyword stuffing = vi phạm spam policy.
+  - Internal link: anchor nói rõ trang đích, link trong body > nav/footer, external không tin cậy →
+    nofollow. Alt text = 1 câu tả quan hệ ảnh-nội dung; ảnh thật > stock.
+  - **Audit on-page live 12/07** (curl toàn bộ trang chính): `/` `/about` `/services` `/blog`
+    `/contact` đạt (Phase 8 meta rewrite ĐÃ chạy — khác research.md 30/05); lỗi còn lại:
+    `/products` title+desc+H1 stale nghề cũ ("vòng bi, dây curoa") — TỆ NHẤT, đã chữa mẫu trong chat
+    (title "Sản phẩm — Băng tải cao su, con lăn & vật tư mỏ | CTCP Tiến Vũ" + desc mới + H1 mới);
+    `/construction` title thiếu brand/ngữ cảnh (= bài tập A của user); `/blog` + `/contact` H1 rỗng.
+  - **Hotline giả XÁC NHẬN**: nút gọi/Zalo toàn site đọc `frontend/config/contact.json:2-3` =
+    `0912345678` (placeholder), trong khi hotline thật trong meta services/contact = **0913 304 809**
+    → khách bấm nút gọi vào số ma. Fix: sửa contact.json + deploy (user tự làm). Check thêm
+    contact.json:4 có `tienvu-bt.com` (domain chết) — nghi email cũng hỏng.
+
 ## Đang kẹt / chưa rõ
 - (chưa có)
+
+## Action items (business, ngoài giờ học)
+
+### 1. Setup Google Search Console — ✅ DONE 2026-07-12 (verify thành công, làm cùng nhau trong phiên)
+- Domain property `tienvujsc.com.vn` verified qua TXT record ở Tenten (hướng dẫn từng bước bên dưới đã
+  hoàn thành). **Phát hiện quan trọng trước đó: site CHƯA được index** (user search `site:` trên điện
+  thoại = 0 kết quả; không có gì chặn — không robots.txt/noindex — chỉ là Google chưa phát hiện ra site:
+  domain mới, không backlink, không sitemap).
+- Đã hướng dẫn URL Inspection → Request indexing cho 7 trang chính (homepage, products, services,
+  construction, about, contact, blog). **Follow-up: 2-3 ngày sau search lại `site:tienvujsc.com.vn`**
+  để xác nhận index; GSC dashboard cần ~1 ngày mới có data.
+
+Checklist gốc (đã xong, giữ để tham khảo):
+Domain thật: `tienvujsc.com.vn` (live, HTTP 200). DNS đang ở **Tenten** (ns-b1/b2/b3.tenten.vn).
+1. [ ] Vào https://search.google.com/search-console (dùng Google account giữ lâu dài cho công ty) →
+       Add property → chọn loại **Domain** → nhập `tienvujsc.com.vn`.
+2. [ ] Google đưa 1 TXT record dạng `google-site-verification=...` → mở panel DNS Tenten → thêm TXT
+       record cho domain gốc (Name/Host: `@` hoặc để trống) → Save.
+3. [ ] Đợi DNS propagate (5-60p) → quay lại GSC bấm **Verify**. Fail thì đợi thêm rồi bấm lại —
+       record đúng thì sớm muộn cũng pass, không mất gì.
+4. [ ] KHÔNG cần submit sitemap lúc này (site chưa có — Buổi 9 sẽ build). Data Performance bắt đầu
+       tích từ lúc verify, không backfill quá khứ → làm càng sớm càng có baseline cho Buổi 14/17.
+- Fallback nếu không có quyền DNS Tenten: property loại **URL prefix** `https://tienvujsc.com.vn/`
+  → method "HTML tag" → gắn meta tag vào global `<Head>` rồi deploy (cần sửa code + deploy, làm
+  ngoài phiên học).
+
+### 2. SEO bugs phát hiện 2026-07-10 (check live bằng curl, CHƯA sửa — thuộc Buổi 8/16)
+- Homepage **không có** `canonical`, `og:url`, `og:image`, `hreflang` (title/description thì có) →
+  component `SEO.js` không được dùng ở homepage.
+- `frontend/components/SEO.js:11` fallback `NEXT_PUBLIC_SITE_URL || 'https://tienvu-bt.com'` —
+  domain `tienvu-bt.com` **không tồn tại** (NXDOMAIN). Trang nào dùng `SEO.js`
+  (`products/[slug].js`, `_error.js`) mà production không set env đó → canonical/og:url trỏ domain
+  chết. CHƯA verify được trên product page live (homepage không link thẳng product nào) — check ở
+  Buổi 16 audit hoặc sửa sớm cùng Buổi 8.
 
 ## Lộ trình (PLAN) / Nguồn — CHIA THEO PHASE
 
@@ -83,12 +184,12 @@ next_start: "Bắt đầu Buổi 3 — Content Strategy: Topic Cluster & Pillar 
 ### Phase 1 — Content & Strategy (mảng mới hoàn toàn, ưu tiên học trước)
 - [x] Buổi 2 — Keyword Research & Search Intent (DONE 2026-07-10, xem "Đã học"):
       https://www.semrush.com/blog/search-intent/
-- [ ] Buổi 3 — Content Strategy: Topic Cluster & Pillar Page (hub-and-spoke), E-E-A-T (Experience-
+- [x] Buổi 3 (DONE 2026-07-11) — Content Strategy: Topic Cluster & Pillar Page (hub-and-spoke), E-E-A-T (Experience-
       Expertise-Authoritativeness-Trustworthiness — quan trọng cho B2B industrial vì cần "trust").
       Thực hành: map content hiện có (blog + policies + product) của tienvu-bt vào 1 cluster structure:
       https://searchengineland.com/guide/topic-clusters
       https://developers.google.com/search/docs/fundamentals/creating-helpful-content
-- [ ] Buổi 4 — On-page content writing: công thức title tag/meta description, heading hierarchy,
+- [~] Buổi 4 (ĐANG DỞ 12/07 — xem "Đã học" + next_start) — On-page content writing: công thức title tag/meta description, heading hierarchy,
       keyword đặt tự nhiên (không nhồi nhét), internal linking. Thực hành: viết lại 1 trang thật của
       tienvu-bt theo checklist:
       https://developers.google.com/search/docs/fundamentals/seo-starter-guide
@@ -202,3 +303,38 @@ next_start: "Bắt đầu Buổi 3 — Content Strategy: Topic Cluster & Pillar 
     đang chuyển từ kinh doanh truyền thống sang digital, website xong rồi giờ tới SEO. Đã lưu vào memory
     user-profile. Từ giờ ưu tiên đề xuất có ROI thật, không chỉ lý thuyết.
   - next_start = Buổi 3 (Content Strategy: Topic Cluster/Pillar Page + E-E-A-T).
+
+## Ghi chú buổi 2026-07-10→11 (phiên 2)
+- User hỏi GSC có bắt buộc / block Buổi 3 không → không; chọn vào thẳng Buổi 3, GSC làm ngoài giờ học
+  theo checklist ở mục "Action items" (domain thật = tienvujsc.com.vn, DNS Tenten → Domain property +
+  TXT record). Check nhanh site live phát hiện: homepage thiếu hẳn canonical/og:url/og:image/hreflang;
+  fallback domain chết trong SEO.js (chi tiết Action items §2 — thuộc Buổi 8/16, chưa sửa).
+- Buổi 3 dạy tương tác, user tiến bộ rõ: nắm định nghĩa pillar/spoke ngay; chọn nhầm /construction làm
+  pillar → chữa bằng pillar test; tự cảm nhận đúng bài 6 "rộng hơn" cluster băng tải; tự đề xuất pillar
+  dạng trang chuyên biệt /products/bang-tai-cao-su → chỉnh sang top-level slug qua CMS (zero-code);
+  trả lời đúng bài check E-E-A-T (ưu tiên sửa tên pháp lý trước).
+- User kể bối cảnh nghề (catalog giấy gửi tận mỏ, khách cũ giới thiệu) → chốt mục tiêu site = LEAD-GEN
+  (đã cập nhật mục Bối cảnh). Điều chỉnh chiến lược: thêm loại spoke commercial investigation; giữ
+  informational với 3 vai (cửa vào ranking / chứng minh nghề / buying committee), user đồng ý "giữ
+  content nhưng chỉnh tỉ trọng + thiết kế để dễ chuyển đổi hơn".
+- **Homework user tự giao**: rà soát lại TOÀN BỘ content web một lượt (product, blog, ảnh) trước buổi
+  sau. Buổi 4 mở đầu bằng việc hỏi kết quả rà soát này + GSC setup chưa.
+
+## Ghi chú buổi 2026-07-12 (phiên 3)
+- User báo cảm giác "3 buổi chưa đọng lại" → hệ thống hóa quanh mục tiêu user phát biểu: (vế 1) search
+  "công ty cổ phần Tiến Vũ" ra site — mục tiêu TUẦN; (vế 2) search "băng tải cao su" ra site — mục
+  tiêu THÁNG/QUÝ = toàn bộ roadmap. Một dòng/buổi: B1=được thấy · B2=thấy với query nào · B3=thắng
+  query khó · B4=từng trang nói gì.
+- **Phát hiện lớn: site CHƯA ĐƯỢC INDEX** (user search site: = 0; không bị chặn — không robots.txt/
+  noindex — chỉ là Google chưa phát hiện: domain mới, 0 backlink, 0 sitemap). → Setup GSC ngay trong
+  phiên: Domain property + TXT ở Tenten, verify THÀNH CÔNG 12/07, request indexing 7 trang chính.
+  Follow-up: check site: sau 2-3 ngày; nếu 1 tuần vẫn trắng → xem Lập chỉ mục→Trang + kéo Buổi 9
+  (sitemap) lên sớm.
+- Buổi 4 dạy lý thuyết on-page (xem "Đã học") + audit live toàn trang + chữa mẫu /products + xác nhận
+  hotline giả contact.json. User quyết định: GÁC việc sửa site, tự audit một lượt trước rồi mới nhờ
+  rà lại — bài tập vì vậy chuyển sang dạng thuần kiến thức.
+- **Đang treo khi kết phiên**: 2 câu check hiểu Buổi 4 (chọn title a/b/c — đáp án đúng là (b), (a)
+  fail vì nhồi keyword, (c) fail vì mơ hồ không keyword/không hứa gì; câu 2 — desc tốt tăng CTR,
+  không đổi position/impressions) + bài tập A (title /construction) + B (skeleton pillar
+  /bang-tai-cao-su). Fix-list code user tự áp: contact.json hotline/zalo (+email?), H1 /blog /contact,
+  meta /products theo bản chữa mẫu, title /construction.
