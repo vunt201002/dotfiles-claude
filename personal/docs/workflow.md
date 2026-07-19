@@ -84,20 +84,25 @@ là phần cứng phải nhớ:
 - **Login có sẵn.** Chrome thật đã đăng nhập Shopify Admin / store / Notion... →
   hết hẳn vấn đề device-bound + Cloudflare; **không cần cookie-import**.
 
-#### Fallback headless — verify trên browser cần login (khi /my-chrome không khả dụng)
+#### Fallback — verify trên browser cần login (khi /my-chrome không khả dụng)
 
 Chỉ khi /my-chrome không dùng được (extension chưa bật, máy khác, cần bulk/headless)
-→ về `/browse` như cũ. Lúc đó nếu trang cần login, đi bậc thang **rẻ → đắt**,
-dừng ở bậc đầu tiên cho ra bằng chứng:
+→ ưu tiên **Chrome DevTools MCP**, sau đó **Playwright MCP** (dùng cái nào đang
+connect trong session; Chrome DevTools MCP trước vì nó attach thẳng vào 1 Chrome
+thật — nếu profile đó đã login sẵn thì không cần import gì cả). Lúc đó nếu trang
+cần login, đi bậc thang **rẻ → đắt**, dừng ở bậc đầu tiên cho ra bằng chứng:
 
 1. **Không cần login?** Trang công khai, hoặc test được ở **storefront** thay vì
-   admin → cứ `/browse` thẳng.
-2. **Dùng lại session Playwright đang có** trong phiên (`$B status`, `$B cookies`).
+   admin → cứ đi thẳng, không cần import.
+2. **Dùng lại browser/page context đang mở** trong phiên MCP nếu vừa test xong
+   bước trước — đừng mở tab mới từ đầu.
 3. **Né Admin bằng đường khác**: app embed → **dev/preview URL** (`shopify app dev`) ·
    dựng data/state → **Admin API** · theme/storefront → **theme preview URL**.
-4. **Hết cách → `/qa-login`** (last resort). Storefront gần như luôn pass; **Admin
-   device-bound/SSO có thể vẫn chặn** — giới hạn đã biết, không phải bug. Lúc đó
-   login Admin một lần bằng tay trong session browse rồi tái dùng (về bậc 2).
+4. **Hết cách → `/qa-login`** (last resort). Chrome DevTools MCP **không có cơ chế
+   copy cookie** — nếu profile riêng của nó (`--user-data-dir`) chưa login, phải login
+   tay 1 lần (persist cho lần sau), hoặc rớt xuống Playwright MCP để `/qa-login` nạp
+   cookie thật (storage-state, đọc từ Chrome thật). Storefront gần như luôn pass;
+   **Admin device-bound/SSO có thể vẫn chặn** — giới hạn đã biết, không phải bug.
 
 ---
 
@@ -129,9 +134,10 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 **A6. Implement — lát mỏng trước** — `/implement`  ·  build **lát dọc mỏng nhất chạy end-to-end** trước, rồi mở rộng. **Đừng big-bang.** Tới khi test xanh.
 
 **A7. Verify + blast radius** — `/my-verify` *(route theo layer: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*  ·  feature mới **có làm vỡ flow cũ không?**
-*Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); headless `/browse` + `/qa-login` chỉ là fallback.*
+*Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
-**A8. Đóng** — `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
+**A8. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
+*`/tech-review` (chất lượng code + merge-provenance) và `/impact-review` (dự đoán regression qua caller/dependent) là 2 lens nhẹ, 1-pass, chạy song song được — đứng trước `/review` (pipeline nặng — SQL/security/concurrency) để bắt sớm trước khi đầu tư vào pass nặng hơn.*
 
 ---
 
@@ -156,9 +162,10 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 
 **B8. Verify + blast radius** — `/my-verify` *(route: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*
 Chống băng-dán (giá trị runtime đổi đúng, không hardcode/`!important` đè) + blast radius (mọi nơi cùng nguồn) + regression.
-*Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); headless `/browse` + `/qa-login` chỉ là fallback.*
+*Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
-**B9. Đóng** — `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
+**B9. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
+*`/tech-review` (chất lượng code + merge-provenance) và `/impact-review` (dự đoán regression qua caller/dependent) là 2 lens nhẹ, 1-pass, chạy song song được — đứng trước `/review` (pipeline nặng — SQL/security/concurrency) để bắt sớm trước khi đầu tư vào pass nặng hơn.*
 
 ---
 

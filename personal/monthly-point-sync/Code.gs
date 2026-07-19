@@ -27,9 +27,13 @@ var WATCH_SOURCES = [
 ];
 var POINT_FIELD = 'Size card';
 var STATUS_FIELD = 'Status';
-// statuses meaning "has reached Ready to Test" -> eligible to be stamped
-var COUNTED = ['Ready to Test','Testing','UAT','To review','Reviewing',
-               'To deploy','Test Production','Test Production & To launch','Launching','Done'];
+// statuses meaning "has reached Ready to Test" -> eligible to be stamped.
+// Two boards, two naming schemes (Wishlist vs Loyalty Development) — kept in one
+// flat list rather than split per-source, ordered to read as one merged pipeline.
+var COUNTED = ['Ready to Test','Waiting to test','Testing','UAT','QA/UAT',
+               'To review','Reviewing','Waiting to review',
+               'To deploy','Test Production','Testing prod',
+               'Test Production & To launch','Launching','Waiting to Launch','Waiting to live','Done'];
 var TEMPLATE = '_TEMPLATE';
 var STATE = '_STATE';
 var DASHBOARD = 'Dashboard';
