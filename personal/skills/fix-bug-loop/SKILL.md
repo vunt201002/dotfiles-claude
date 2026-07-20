@@ -54,7 +54,10 @@ it can help an implementation that verify caught as incomplete or wrong.
 
 ## Step 1 — Restate the bug and retry limit before starting
 
-Before the first `/fix-bug` call, confirm what's about to happen:
+If no bug was found per Inputs #1 (nothing in context reads as a bug, and none
+was given as an argument), ask for it now — do not print the restate block
+below with an invented or guessed bug. Once the bug is known, before the first
+`/fix-bug` call, confirm what's about to happen:
 
 ```
 FIX BUG LOOP — up to <N> attempt(s)
