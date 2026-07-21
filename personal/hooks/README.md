@@ -19,7 +19,43 @@
 Tách **changed vs project** (theo claudekit): check rẻ mỗi edit, check đắt 1 lần lúc Stop.
 Đừng bao giờ full `tsc --noEmit` trong PostToolUse — đốt ~25 phút wall-clock mỗi feature.
 
-## Deploy vào một repo app (Wishlist / Joy)
+## Cách A — Global từ dotfiles (KHUYÊN DÙNG: không tạo file nào trong repo app)
+
+Đăng ký 1 lần ở `~/.claude/settings.json` (per machine), script trỏ thẳng vào dotfiles
+checkout. 2 script check đã **repo-aware**: tự nhận repo qua tên thư mục git toplevel
+(`*wishlist*` → eslint + tsc/jest, `*joy*` → eslint + tsc, repo lạ → exit 0 im lặng) —
+nên bật global an toàn, không phá các repo khác. Đổi lệnh cho 1 repo → sửa `case` trong
+script (sync qua git cho mọi máy), hoặc override bằng env trong settings của repo đó.
+
+Thêm vào `~/.claude/settings.json` (Mac — path dotfiles là `~/Project/github/dotfiles-claude`;
+Windows sửa thành path máy đó, vd `D:/Project/j/dotfiles-claude`):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash|Edit|Write",
+        "hooks": [{ "type": "command", "command": "bash \"$HOME/Project/github/dotfiles-claude/personal/hooks/pre-tool-use-guard.sh\"" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "bash \"$HOME/Project/github/dotfiles-claude/personal/hooks/post-tool-use-check-changed.sh\"" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "bash \"$HOME/Project/github/dotfiles-claude/personal/hooks/stop-full-check.sh\"" }] }
+    ],
+    "SessionStart": [
+      { "matcher": "startup|resume|compact",
+        "hooks": [{ "type": "command", "command": "bash \"$HOME/Project/github/dotfiles-claude/personal/hooks/session-start-inject.sh\"" }] }
+    ]
+  }
+}
+```
+
+(File settings đã có nội dung → merge khối `hooks` vào, đừng đè. Sửa xong mở session mới +
+`/hooks` để xác nhận.)
+
+## Cách B — Per-repo (khi muốn scope hẹp / lệnh đặc thù 1 repo)
 
 1. Copy 4 script vào `<repo>/.claude/hooks/` (hoặc symlink từ dotfiles).
 2. Thêm vào `<repo>/.claude/settings.json`:
