@@ -23,6 +23,8 @@ phải độ thông minh của Claude.
 3. **`/my-worklog` mỗi lần switch** — 1 dòng: đang ở đâu + next action. "Nhớ lại" còn 10 giây.
 4. **Right-size.** Trivial (typo/label/color/copy/1-dòng) → fix thẳng. Non-trivial → full.
 5. **Dồn công + max-effort lên ĐẦU** (investigate / spec), không phải implement. Đầu quyết định ~80% chất lượng.
+6. **Tripwire 3-strike.** 3-4 lần fix fail cùng một chỗ → DỪNG (agent đang là liability): revert, làm tay hoặc đổi approach — không thử lần 5.
+7. **2 lần sửa Claude cùng một lỗi → `/clear` + viết lại prompt đầu** (nhét bài học vào prompt). Session sạch + prompt tốt > session dài + chồng correction.
 
 ## Bộ skill — 3 vai + phụ trợ
 
@@ -136,7 +138,8 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 **A7. Verify + blast radius** — `/my-verify` *(route theo layer: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*  ·  feature mới **có làm vỡ flow cũ không?** UI mới: qua **design-verify** (design-eye §B) như B8.
 *Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
-**A8. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
+**A8. Đóng** — **spec-check** *(agent fresh, chỉ nhận spec A1 + diff: "có build đúng cái đã chốt không — thiếu gì, thừa gì, tự ý đổi gì?")* → `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
+*Spec-check đứng ĐẦU và tách khỏi review chất lượng: chấm diff theo SPEC bắt được lớp lỗi mà chấm theo code-quality bỏ sót (silent scope drift, tự lấp spec gap, feature không ai xin) — đo được ~60-70% lỗi thuộc lớp này. Reviewer fresh không được xem lý luận lúc build — chỉ spec + diff.*
 *`/tech-review` (chất lượng code + merge-provenance) và `/impact-review` (dự đoán regression qua caller/dependent) là 2 lens nhẹ, 1-pass, chạy song song được — đứng trước `/review` (pipeline nặng — SQL/security/concurrency) để bắt sớm trước khi đầu tư vào pass nặng hơn.*
 
 ---
@@ -153,6 +156,7 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 **B3. Anh đọc research** — nắm hệ thống + verify approach.
 
 **B4. Red-team ROOT CAUSE** — `/codex challenge`  ·  *"Nguồn hay triệu chứng? Fix đây thì thượng nguồn còn sai gì? Còn nguyên nhân khác?"* Lộ hổng → về B2.
+Nhận findings theo framing **"reviewer ngoài nộp bản phân tích này — nên 'tuyển' không? Finding nào THẬT?"** — triage từng finding (real / noise), chỉ finding ảnh hưởng correctness mới quay về B2. Đừng gật sửa theo tất (reviewer được prompt "tìm gap" thì LUÔN tìm ra gap).
 
 **B5. Red test → ĐỎ**  ·  FE: screenshot baseline / Playwright assertion. BE: Jest test (Wishlist) / emulator repro (Joy, tới khi có harness).
 
@@ -165,7 +169,7 @@ Chống băng-dán (giá trị runtime đổi đúng, không hardcode/`!importan
 Bug UI: thêm cổng **design-verify** (design-eye §B — cơ học trên DOM rồi taste rubric, 5 dimension chấm 0-10, mọi cái ≥8 mới đóng; [Medium]/[Nitpick] → polish, đổ về checklist C, không tự sửa).
 *Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
-**B9. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
+**B9. Đóng** — **spec-check** *(agent fresh, chỉ nhận root cause B2 + scope B6/B7 + diff: "fix đúng NGUỒN đã chứng minh không? có drive-by refactor không?")* → `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
 *`/tech-review` (chất lượng code + merge-provenance) và `/impact-review` (dự đoán regression qua caller/dependent) là 2 lens nhẹ, 1-pass, chạy song song được — đứng trước `/review` (pipeline nặng — SQL/security/concurrency) để bắt sớm trước khi đầu tư vào pass nặng hơn.*
 
 ---
