@@ -83,3 +83,15 @@ https://blog.talosintelligence.com/microsoft-patch-tuesday-july-2026/
 https://dynomight.net/pseudpocalypse/
 https://crowdhailer.me/2026-07-15/abstracting-effects-with-continuations/
 https://solod.dev
+https://werd.io/american-ai-is-locked-down-and-proprietary-its-losing/
+https://news.risky.biz/risky-bulletin-hacker-wipes-romanias-entire-land-registry-database/
+https://www.marktechpost.com/2026/07/13/anthropic-claude-sonnet-5-vs-sonnet-4-6-vs-opus-4-8-agentic-coding-benchmarks-api-pricing-and-cost-performance-tradeoffs-compared/
+https://shopify.dev/changelog
+https://cursor.com/blog/agent-swarm-model-economics
+https://turso.tech/blog/a-new-modern-version-of-postgres-in-rust
+https://jelly-ui.com/
+https://blog.talosintelligence.com/microsoft-patch-tuesday-july-2026/
+https://www.emergingtrajectories.com/lh/frontier-lab-economics/
+https://unslop.run/blog/measuring-ai-writing-on-arxiv
+https://nothings.org/gamedev/ssao/
+https://thecomputersciencebook.com/posts/how-my-2yo-taught-me-constraint-solving/
