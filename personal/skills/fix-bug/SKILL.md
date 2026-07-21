@@ -78,7 +78,10 @@ shortcut:
   mờ/unclear after Step 1's restate? Ask before investigating on a guess.
 - **B2. Investigate + PROVE root cause** (`/my-bug-hunter`) — reproduce, localize,
   observe runtime per the app's Project Adapter (FE: debug-global/Playwright ·
-  BE: emulator). **Cổng — bằng chứng runtime.** No fix without `"tại Y:Z, biến = A
+  BE: emulator). UI bug: opening the surface also means running design-eye's §A
+  visual read + checking its §D1 pattern table FIRST
+  (`~/.claude/skills/my-frontend-fix/references/design-eye.md`) — matching
+  patterns get investigated before fresh hypotheses. **Cổng — bằng chứng runtime.** No fix without `"tại Y:Z, biến = A
   nhưng phải = B"` backed by an actual observation. Cannot prove it? STOP, report
   what was tried and where it's stuck — do not guess a fix.
 - **B3. Anh đọc research** — this is the point of running inline instead of via
@@ -97,7 +100,12 @@ shortcut:
   possible, no drive-by refactor riding along.
 - **B8. Verify + blast radius** (`/my-verify`, routed by layer) — chống băng-dán
   (runtime value actually changed, not a hardcode/`!important` papering over it) +
-  blast radius (every place sharing the root cause) + regression. Needs a browser?
+  blast radius (every place sharing the root cause) + regression. **UI bug: B8
+  includes `/my-frontend-fix`'s design-verify gate** (design-eye §B — mechanical
+  DOM checks first, then taste rubric, scored 0-10 per dimension; every dimension
+  ≥8 or remaining findings severity-triaged; [Medium]/[Nitpick] → reported as
+  polish items, never fixed inline). B8 is not passed while design-verify hasn't.
+  Needs a browser?
   Follow workflow.md's "Test trên browser" ladder: **/my-chrome** first (real Chrome,
   already logged in) → if unavailable, **Chrome DevTools MCP** → **Playwright MCP**
   (with `/qa-login` priming cookies if the target needs login and neither MCP is

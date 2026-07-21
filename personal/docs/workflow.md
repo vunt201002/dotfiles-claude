@@ -30,7 +30,7 @@ phải độ thông minh của Claude.
 |---|---|
 | `/my-bug-hunter` | Chứng minh *vì sao* (root cause, mọi stack). Cũng là **subroutine** gọi bất cứ khi nào "có cái không chạy". |
 | `/my-verify` | *Verify một change THẬT + blast radius + regression*, **mọi layer**. Route xuống đồ từng layer. (Bước A7/B8.) |
-| `/my-frontend-fix` | *Thấy & verify* frontend — **route UI của `/my-verify`** (screenshot loop, `__joyDebug`/Playwright). |
+| `/my-frontend-fix` | *Thấy & verify* frontend — **route UI của `/my-verify`** (screenshot loop, `__joyDebug`/Playwright) **+ design-eye** (`references/design-eye.md`: visual read · design-verify 2 tầng chấm 0-10 · pattern library tích lũy). |
 | `/joy-widget-v4-fix` | Joy adapter (`__joyDebug`, layer matrix 4 tầng). *App khác → adapter của app đó.* |
 | `/my-explore` · `/implement` · `/codex` | Hiểu source · chạy plan từng bước · second opinion / challenge |
 | `/plan-eng-review` · `/plan-ceo-review` · `/plan-design-review` · `/autoplan` | Review approach feature (kiến trúc / scope / UI / cả ba) |
@@ -133,7 +133,7 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 
 **A6. Implement — lát mỏng trước** — `/implement`  ·  build **lát dọc mỏng nhất chạy end-to-end** trước, rồi mở rộng. **Đừng big-bang.** Tới khi test xanh.
 
-**A7. Verify + blast radius** — `/my-verify` *(route theo layer: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*  ·  feature mới **có làm vỡ flow cũ không?**
+**A7. Verify + blast radius** — `/my-verify` *(route theo layer: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*  ·  feature mới **có làm vỡ flow cũ không?** UI mới: qua **design-verify** (design-eye §B) như B8.
 *Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
 **A8. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
@@ -162,6 +162,7 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 
 **B8. Verify + blast radius** — `/my-verify` *(route: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*
 Chống băng-dán (giá trị runtime đổi đúng, không hardcode/`!important` đè) + blast radius (mọi nơi cùng nguồn) + regression.
+Bug UI: thêm cổng **design-verify** (design-eye §B — cơ học trên DOM rồi taste rubric, 5 dimension chấm 0-10, mọi cái ≥8 mới đóng; [Medium]/[Nitpick] → polish, đổ về checklist C, không tự sửa).
 *Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
 
 **B9. Đóng** — `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
@@ -175,7 +176,7 @@ Khi có **một mục tiêu** gồm nhiều item: BFS submit, dọn N bug QC, mi
 
 **C1. Spec cấp project = checklist mục tiêu.**  Lấy checklist chính thức (vd Built for Shopify), list mọi tiêu chí đang fail. **▣ CỔNG 1 toàn cục:** "đạt" nghĩa là gì.
 
-**C2. Triage mỗi item** → **bug (B)** / **feature nhỏ (A)** / **polish** (`/plan-design-review`, perf pass). "Lỗi" của một checklist không phải đều là bug.
+**C2. Triage mỗi item** → **bug (B)** / **feature nhỏ (A)** / **polish** (`/plan-design-review`, perf pass — chấm theo rubric design-eye §B + surface adapter §C). "Lỗi" của một checklist không phải đều là bug. Item polish do design-verify của các fix trước đổ về (mục "polish lân cận") cũng vào lane này.
 
 **C3. Verify hard-blocker bằng bằng chứng** — *trước* khi xếp lịch. Đừng giả định thiếu/đủ (vd webhook bắt buộc: grep code thật, không đoán).
 

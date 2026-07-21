@@ -125,6 +125,12 @@ Bug: <full bug description — title, repro steps, whatever detail is available>
 When you reach a browser-verify step (B8 in Workflow B), use skill /my-chrome to drive
 the browser against this store: <store-url>
 
+If the bug is UI/frontend: read ~/.claude/skills/my-frontend-fix/references/design-eye.md
+and apply it — §A visual read (+ §D1 pattern table first) when opening the surface, §B
+design-verify (mechanical DOM checks, then taste rubric, scored 0-10, severity-triaged)
+before closing B8. Include the design-verify scores in your report. [Medium]/[Nitpick]
+findings are reported as polish items, never fixed inline.
+
 Follow Workflow B's gates exactly:
 - B2: do not proceed past "prove root cause" without runtime evidence. If you cannot
   find/prove a root cause, STOP and report back what you tried and where you're stuck
@@ -181,6 +187,11 @@ Needs your input: bug 3 (blocked), bug 4 (root cause unclear)
 ────────────────────────────────
 Nothing committed, nothing pushed — that's your call next.
 ```
+
+UI bugs additionally carry their design-verify scores (from design-eye §B) in the
+verified line, and any polish items the agents flagged get collected into one shared
+"polish backlog" section — same standard across all agents, so N agents produce ONE
+taste, not N.
 
 Every bug lands in exactly one bucket: **done and verified**, **blocked** (with what's
 blocking it), or **root cause not proven** (agent correctly refused to guess, per
