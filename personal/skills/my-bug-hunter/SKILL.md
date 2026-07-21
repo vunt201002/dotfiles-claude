@@ -1,6 +1,6 @@
 ---
 name: my-bug-hunter
-description: Evidence-first bug investigation workflow, generic across stacks. Localize the bug by following evidence (grep the symptom, trace backward, bisect with logs, diff vs a working case, git blame) instead of guessing files; prove the root cause with runtime observation and try to refute it before any fix; lock it with a red test. Iron Law - no fix without a PROVEN root cause. Use for cross-layer bugs, round-2-fail (a fix that bounced back from QC), compound bugs, or anything that is not an obvious 1-line change. Skip for typos/labels/colors.
+description: Evidence-first bug investigation workflow, generic across stacks. Opens by reading the accumulated brain first (design-eye pattern library for UI bugs, decision log/vault notes — return arrow), then localizes the bug by following evidence (grep the symptom, trace backward, bisect with logs, diff vs a working case, git blame) instead of guessing files; proves the root cause with runtime observation and tries to refute it before any fix; locks it with a red test; closes with a mistake-to-mechanism ratchet (does this failure class deserve a new pattern line / hook / lint rule?). Iron Law - no fix without a PROVEN root cause. Use for cross-layer bugs, round-2-fail (a fix that bounced back from QC), compound bugs, or anything that is not an obvious 1-line change. Skip for typos/labels/colors.
 type: workflow
 ---
 
@@ -32,6 +32,19 @@ Nếu **không quan sát được runtime** — không có browser tool, không 
 - UI / storefront / admin → **Playwright MCP** (`mcp__playwright__*`: navigate · snapshot · screenshot · evaluate). Chưa wire → khai + yêu cầu wire, **đừng bắt người dùng tự chụp tay.**
 - Backend / handler → chạy **emulator** (Bash) + đọc log + firestore UI.
 - Data / record → query state thật.
+
+---
+
+## Phase 0 — Đọc não trước khi đào (return arrow, 30 giây)
+
+Não chỉ có giá trị nếu được ĐỌC LẠI — đừng giải bug nào từ số 0:
+
+- **Bug UI** → mở bảng pattern `~/.claude/skills/my-frontend-fix/references/design-eye.md` §D1:
+  symptom khớp dòng nào → giả thuyết đó kiểm **ĐẦU TIÊN** ở Phase 3. Check luôn §D2 (negative list).
+- **Vùng này từng đụng?** → tra quyết định cũ (`gstack-decision-search --query <keyword>` nếu có)
+  + vault notes (`/joy-note` cho Joy, brain-vault) — có thể bug này/anh em nó đã từng được giải.
+- **Khớp pattern KHÔNG miễn Iron Law** — vẫn phải PROVE bằng runtime ở Phase 3; pattern chỉ giúp
+  đào trúng hố nhanh hơn, không thay được bằng chứng.
 
 ---
 
@@ -125,6 +138,24 @@ Từ root cause, liệt kê MỌI nơi nó biểu hiện rồi verify từng cá
 - [ ] Cache — có cần invalidate?
 
 > Fix 1 nơi rồi commit = round-2-fail. Cùng 1 root cause thường hiện ở nhiều mặt.
+
+---
+
+## Phase 5 — Ratchet: lỗi này có đáng đẻ ra một CƠ CHẾ không? (bước đóng, 1 phút)
+
+Mỗi lỗi lặp lại mà chỉ được "fix" là một cơ hội bị bỏ phí. Trước khi đóng, quyết định
+failure class này có chặn được bằng máy không:
+
+| Nếu | Thì viết |
+|---|---|
+| Bug UI, root cause class mới / gặp lại | +1 dòng / tăng đếm pattern design-eye §D1 (bắt buộc với bug UI — nghi thức §D) |
+| Bug dạy được một điều CẤM cụ thể | +1 dòng negative list design-eye §D2 |
+| Mình/agent lặp một lỗi QUY TRÌNH (quên check X trước Y) | +1 hook (`personal/hooks/`) hoặc 1 dòng rule — máy nhắc, không phải trí nhớ |
+| Message lint/test đã dẫn đi SAI hướng | Viết lại message đó cho agent đọc (nói rõ fix thật nằm đâu — repo-as-harness) |
+| Bug lọt vì thiếu check tự động | Red test Phase 3.5 GIỮ LẠI thành regression test + cân nhắc lint rule |
+
+Không đáng ratchet → nói rõ *"không ratchet vì ..."* — đó là quyết định có ý thức,
+không phải bỏ quên. Một dòng cũng được, nhưng phải có.
 
 ---
 
