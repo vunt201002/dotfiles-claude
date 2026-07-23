@@ -24,10 +24,22 @@ fp=$(cat | jq -r '.tool_input.file_path // empty')
 [ -z "$fp" ] && exit 0
 
 if printf '%s' "$fp" | grep -Eq "\.($EXT)$"; then
-  out=$($LINT_CMD "$fp" 2>&1) || {
+  out=$($LINT_CMD "$fp" 2>&1)
+  status=$?
+
+  # --no-warn-ignored chỉ tồn tại từ ESLint v9 — bản cũ hơn reject flag này ở
+  # bước parse CLI, tức chặn nhầm MỌI edit (không chỉ file bị ignore). Nhận
+  # đúng lỗi này thì bỏ flag, chạy lại 1 lần trước khi kết luận fail thật.
+  if [ $status -ne 0 ] && printf '%s' "$out" | grep -q "warn-ignored"; then
+    fallback_cmd=$(printf '%s' "$LINT_CMD" | sed 's/ --no-warn-ignored//')
+    out=$($fallback_cmd "$fp" 2>&1)
+    status=$?
+  fi
+
+  if [ $status -ne 0 ]; then
     printf '%s\n' "LINT FAIL trên file vừa sửa ($fp) — sửa trước khi làm tiếp:" >&2
     printf '%s\n' "$out" | tail -30 >&2
     exit 2
-  }
+  fi
 fi
 exit 0
