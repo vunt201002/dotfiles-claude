@@ -39,10 +39,16 @@ if [ -z "$CLAUDE_STOP_CHECK" ]; then
       fi
       ;;
     *joy*)
-      # Joy: tsconfig.json nằm rải rác trong extensions/*/packages/* (không
-      # root) — giữ nguyên hardcode cũ, chưa auto-detect vì chưa rõ nên
-      # target tsconfig nào trong 20+ cái đó.
-      CLAUDE_STOP_CHECK="npx tsc --noEmit"
+      # Joy: không có tsconfig.json ở root — 20+ tsconfig rải rác trong
+      # extensions/*/packages/*, nên "npx tsc --noEmit" ở root không tìm
+      # thấy config, chỉ in help text, và hook coi nhầm đó là FAIL trên
+      # MỌI turn kể cả turn không đụng code. Áp dụng cùng pattern với nhánh
+      # *wishlist*) ở trên: chỉ chạy khi root có tsconfig.json thật.
+      if [ -f "$root/tsconfig.json" ]; then
+        CLAUDE_STOP_CHECK="npx tsc --noEmit"
+      else
+        exit 0  # không có root tsconfig thật để check — không giả bộ check
+      fi
       ;;
     *) exit 0 ;;
   esac
