@@ -1,15 +1,17 @@
 ---
 name: sync-skills
-description: Detect and symlink personal skills/commands that this machine hasn't linked yet. Symlinks into ~/.claude/skills and ~/.claude/commands are local (not in git), so after pulling the dotfiles repo on another machine, newly-added skills/commands need linking. This scans personal/skills/* and personal/commands/*.md, links any that are missing (links first, reports after), and flags broken/mis-pointed symlinks without deleting them. Idempotent — safe to run repeatedly. A maintenance tool for adding new links after the first bootstrap, NOT the first-time installer (it can't link itself on a fresh machine). Use when asked to "sync skills", "link my skills", "symlink new skills", "sync-skills", or after pulling the repo with new skills on a machine.
+description: Detect and symlink personal skills/commands/global-instructions that this machine hasn't linked yet. Symlinks into ~/.claude/skills, ~/.claude/commands, and ~/.claude/CLAUDE.md are local (not in git), so after pulling the dotfiles repo on another machine, newly-added skills/commands and the machine-wide CLAUDE.md need linking. This scans personal/skills/*, personal/commands/*.md, and personal/global-CLAUDE.md, links any that are missing (links first, reports after), and flags broken/mis-pointed symlinks without deleting them. Idempotent — safe to run repeatedly. A maintenance tool for adding new links after the first bootstrap, NOT the first-time installer (it can't link itself on a fresh machine). Use when asked to "sync skills", "link my skills", "symlink new skills", "sync-skills", or after pulling the repo with new skills on a machine.
 ---
 
 # /sync-skills — Link personal skills/commands this machine is missing
 
-You keep personal skills in `personal/skills/<name>/` and commands in
-`personal/commands/<name>.md` inside the dotfiles repo. The repo syncs via git, but
+You keep personal skills in `personal/skills/<name>/`, commands in
+`personal/commands/<name>.md`, and your machine-wide Claude instructions in
+`personal/global-CLAUDE.md` inside the dotfiles repo. The repo syncs via git, but
 the **symlinks** that make them usable (`~/.claude/skills/<name>`,
-`~/.claude/commands/<name>.md`) are local to each machine and are NOT in git. So when
-you add a skill on one machine and pull it on another, the new one needs linking.
+`~/.claude/commands/<name>.md`, `~/.claude/CLAUDE.md`) are local to each machine and
+are NOT in git. So when you add a skill on one machine and pull it on another, the
+new one needs linking.
 
 This skill scans the repo, links anything not yet linked, and reports. It **links
 first, then reports** (linking is idempotent and safe, so no need to ask first).
@@ -27,6 +29,8 @@ cd ~/Project/github/dotfiles-claude
 for s in personal/skills/*/; do n=$(basename "$s"); [ -e ~/.claude/skills/"$n" ] || ln -s "$PWD/$s" ~/.claude/skills/"$n"; done
 mkdir -p ~/.claude/commands
 for c in personal/commands/*.md; do n=$(basename "$c"); [ -e ~/.claude/commands/"$n" ] || ln -s "$PWD/$c" ~/.claude/commands/"$n"; done
+# Machine-wide instructions. Refuses to clobber an existing real file — merge that by hand.
+[ -e ~/.claude/CLAUDE.md ] || ln -s "$PWD/personal/global-CLAUDE.md" ~/.claude/CLAUDE.md
 ```
 
 That bootstrap does exactly what this skill does — so on a fresh machine it also
@@ -35,8 +39,9 @@ additions.
 
 ## HARD GATES
 
-- **Only create symlinks** under `~/.claude/skills/` and `~/.claude/commands/`, each
-  pointing back into the repo. Never delete or overwrite anything.
+- **Only create symlinks** under `~/.claude/skills/`, `~/.claude/commands/`, and the
+  single file `~/.claude/CLAUDE.md`, each pointing back into the repo. Never delete or
+  overwrite anything.
 - **Never touch the real files** in the repo. This skill only reads the repo and
   writes symlinks elsewhere.
 - **Broken/mis-pointed symlinks are reported, never auto-removed.** If a link is dead
@@ -124,15 +129,54 @@ done
 
 ---
 
-## Step 3 — Report
+## Step 3 — Link the machine-wide CLAUDE.md (single file symlink)
 
-Tally the lines from Steps 1-2 and present:
+`personal/global-CLAUDE.md` holds the hard rules that apply to **every project on the
+machine** (no inline comments, sub-agent routing, etc). Claude Code reads it from
+`~/.claude/CLAUDE.md`, so it links as one file:
+
+```bash
+src="$REPO/personal/global-CLAUDE.md"
+dest="$HOME/.claude/CLAUDE.md"
+if [ ! -e "$src" ]; then
+  echo "MISSING global  personal/global-CLAUDE.md not in repo — nothing to link"
+elif [ -L "$dest" ]; then
+  target=$(readlink "$dest")
+  if [ ! -e "$dest" ]; then
+    echo "BROKEN  global  CLAUDE.md  → $target (target missing)"
+  elif [ "$target" != "$src" ]; then
+    echo "OTHER   global  CLAUDE.md  → $target (points elsewhere)"
+  else
+    echo "OK      global  CLAUDE.md"
+  fi
+elif [ -e "$dest" ]; then
+  echo "REALFILE global CLAUDE.md  (this machine has its own real ~/.claude/CLAUDE.md — left alone)"
+else
+  ln -s "$src" "$dest" && echo "LINKED  global  CLAUDE.md"
+fi
+```
+
+**`REALFILE` here matters more than elsewhere.** It means this machine already has its
+own global instructions that are NOT in the repo. Do NOT overwrite them — the rules in
+them may be ones the user wants. Report it and offer to diff the two so the user can
+merge by hand:
+
+```bash
+diff "$HOME/.claude/CLAUDE.md" "$REPO/personal/global-CLAUDE.md"
+```
+
+---
+
+## Step 4 — Report
+
+Tally the lines from Steps 1-3 and present:
 
 ```
 SYNC SKILLS
 ────────────────────────────────
 Skills:    {X} already linked · {Y} newly linked{ (names)}
 Commands:  {X} already linked · {Y} newly linked{ (names)}
+Global:    CLAUDE.md {linked | already linked | needs attention}
 ────────────────────────────────
 ⚠ Needs your attention (not touched):
   {BROKEN/OTHER/REALDIR/REALFILE lines, each on one line, or "none"}
@@ -157,8 +201,11 @@ Claude session.
   points into the repo is safe and reversible).
 - **Never delete.** Dead or wrong symlinks are surfaced, never removed automatically —
   removing a link the user made intentionally would be wrong.
-- **Two link shapes, don't mix them.** Skills = directory symlinks; commands = file
-  symlinks. Linking a command as a directory (or vice-versa) breaks discovery.
+- **Three link shapes, don't mix them.** Skills = directory symlinks; commands = file
+  symlinks; global CLAUDE.md = one file symlink at `~/.claude/CLAUDE.md`. Linking a
+  command as a directory (or vice-versa) breaks discovery.
+- **Never overwrite a real `~/.claude/CLAUDE.md`.** A machine with its own global
+  instructions keeps them; surface the diff and let the user merge.
 - **This skill can't link itself on a fresh machine** — that's the bootstrap's job
   (see the top). Don't pretend `/sync-skills` is the first-run installer.
 ```
