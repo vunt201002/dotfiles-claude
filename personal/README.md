@@ -6,6 +6,7 @@ Skill, command, và reference cá nhân, build trên top của gstack.
 
 ```
 personal/
+├── global-CLAUDE.md     # Hard rules áp cho MỌI project trên máy, symlink → ~/.claude/CLAUDE.md
 ├── skills/              # SKILL.md folders, symlink riêng từng skill vào ~/.claude/skills/
 │   ├── deploy-staging/  # Cross-project: trỏ staging slot N (GitLab CI) vào branch hiện tại + push
 │   ├── merge-branch/    # Cross-project: gộp nhiều nhánh vào 1 merge branch để test chung staging
@@ -42,6 +43,16 @@ ln -s ~/Project/github/dotfiles-claude/personal/commands/<command>.md \
       ~/.claude/commands/<command>.md
 ```
 
+### Global CLAUDE.md
+Chỉ link một lần cho mỗi máy. Sửa rule thì sửa thẳng file trong repo rồi commit —
+symlink lo phần còn lại, không cần link lại.
+```bash
+ln -s ~/Project/github/dotfiles-claude/personal/global-CLAUDE.md \
+      ~/.claude/CLAUDE.md
+```
+> Nếu máy đó đã có sẵn `~/.claude/CLAUDE.md` là file thật, **đừng đè**. `diff` hai
+> file rồi merge tay, xong mới thay bằng symlink.
+
 ## Naming convention
 
 | Prefix | Scope |
@@ -68,4 +79,7 @@ for cmd in personal/commands/*.md; do
   name=$(basename "$cmd")
   ln -s "$PWD/$cmd" ~/.claude/commands/"$name"
 done
+
+# Global CLAUDE.md — bỏ qua nếu máy đã có file thật (merge tay, xem mục trên)
+[ -e ~/.claude/CLAUDE.md ] || ln -s "$PWD/personal/global-CLAUDE.md" ~/.claude/CLAUDE.md
 ```
