@@ -152,11 +152,17 @@ If the user says stop, the session is ending, or you're blocked, run the worklog
 save so tomorrow picks up cleanly:
 
 ```
-Invoke /my-worklog save with next_action = the next unstarted step in the plan.
+Invoke /my-worklog save with:
+  next_action = the next unstarted step in the plan
+  in_flight   = the step you were mid-way through, if any — which file is
+                half-edited, what was left unverified, finish-or-revert
 ```
 
-(Use the Skill tool to invoke `/my-worklog`, mode `save`. Its `next_action` field is
-exactly the one-line "where to resume" this needs.)
+(Use the Skill tool to invoke `/my-worklog`, mode `save`. `next_action` is the
+one-line "where to resume"; `in_flight` is the loose end that already exists.
+Pausing mid-plan is the case that produces one most often — a step applied but not
+yet verified reads as finished work tomorrow unless it is named here. Omit
+`in_flight` only when you paused on a clean step boundary.)
 
 ### Step 5 — Completion gate (Hard Gate 4) — evidence, not words
 
