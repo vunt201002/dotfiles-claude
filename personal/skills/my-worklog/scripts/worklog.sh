@@ -3,7 +3,9 @@
 #
 # Reads the gstack checkpoint store (~/.gstack/projects/<SLUG>/checkpoints/*.md),
 # hides tasks marked `status: done`, groups the rest by day, and prints each
-# task's one-line `next_action` so you can pick up where you left off.
+# task's one-line `next_action` so you can pick up where you left off. When a
+# save also recorded an `in_flight` value (something left half-finished at the
+# moment of saving), it prints as a dim second line under the next action.
 #
 # No Claude needed — this is the "quick glance" view. For a smarter summary or
 # to actually resume a task into a session, use the /my-worklog skill.
@@ -24,7 +26,7 @@ for arg in "$@"; do
     --all)  WANT_ALL=1 ;;
     --done) SHOW_DONE=1 ;;
     -h|--help)
-      grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -20
+      grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//' | head -17
       exit 0 ;;
   esac
 done
@@ -159,6 +161,7 @@ for f in "${FILES[@]}"; do
 
   title=$(read_title "$f")
   next=$(read_fm "$f" next_action)
+  inflight=$(read_fm "$f" in_flight)
 
   if [ "$day" != "$CUR_DAY" ]; then
     CUR_DAY="$day"
@@ -175,6 +178,9 @@ for f in "${FILES[@]}"; do
     printf '       \033[33m→\033[0m %s\n' "$next"
   else
     printf '       \033[2m→ (no next_action saved)\033[0m\n'
+  fi
+  if [ -n "$inflight" ] && [ "$status" != "done" ]; then
+    printf '       \033[2m⏸ đang dở: %s\033[0m\n' "$inflight"
   fi
   SHOWN=$((SHOWN+1))
 done

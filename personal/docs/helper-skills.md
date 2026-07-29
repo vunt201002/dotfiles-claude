@@ -50,7 +50,9 @@ note lạc chỗ. Quy tắc phân biệt:
 
 ### `/my-worklog` — standup + resume phiên làm việc
 - **Khi nào:** "save my work", "sáng nay đang làm gì", "resume task". Một **task = một branch**.
-- Tái dùng store checkpoint của gstack; `save` thêm 1 dòng `next_action` để sáng mai bật lại nhanh.
+- Tái dùng store checkpoint của gstack. Mỗi `save` ghi: `next_action` (việc kế tiếp),
+  `in_flight` (cái đang dở giữa chừng), và **session log cộng dồn** — đã thử gì, kết quả
+  ra sao, hướng nào đã loại trừ. File mới nhất tự đủ nên `resume` chỉ đọc 1 file.
 
 | Lệnh | Việc |
 |---|---|
