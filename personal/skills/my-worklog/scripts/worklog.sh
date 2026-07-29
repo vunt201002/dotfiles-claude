@@ -119,8 +119,9 @@ fi
 # A task = a branch. Multiple saves on the same branch collapse to the latest
 # (files are already sorted newest-first, so first-seen wins).
 # macOS ships bash 3.2 (no associative arrays), so the seen-set is a plain
-# newline-delimited string we grep against. Keys are sanitized branch names
-# (gstack-slug strips to [a-zA-Z0-9._-]) so newline/glob collisions can't happen.
+# newline-delimited string we grep against. Keys are branch names normalized here
+# to [a-zA-Z0-9._-], so newline/glob collisions can't happen and the same branch
+# saved with or without slashes (feature/foo vs featurefoo) counts as one task.
 SEEN_BRANCH=$'\n'
 CUR_DAY=""
 SHOWN=0
@@ -147,8 +148,9 @@ for f in "${FILES[@]}"; do
 
   # one task per branch (newest save wins) — unless --all, where the same branch
   # name could legitimately exist in different projects; key by dir+branch then.
-  bkey="$branch"
-  [ "$WANT_ALL" -eq 1 ] && bkey="$(dirname "$f")::$branch"
+  bkey=$(printf '%s' "$branch" | tr -cd 'a-zA-Z0-9._-')
+  bkey="${bkey:-unknown}"
+  [ "$WANT_ALL" -eq 1 ] && bkey="$(dirname "$f")::$bkey"
   case "$SEEN_BRANCH" in
     *$'\n'"$bkey"$'\n'*) continue ;;
   esac
