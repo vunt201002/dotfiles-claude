@@ -11,7 +11,8 @@ Body via --body or stdin. Existing title -> appends a dated section (unless --ne
 """
 import argparse, os, re, sys, datetime
 
-DEFAULT_VAULT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "brain-vault")
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+DEFAULT_VAULT = os.path.join(SCRIPT_DIR, "..", "..", "..", "brain-vault")
 VAULT = os.path.abspath(os.environ.get("BRAIN_VAULT", DEFAULT_VAULT))
 
 TYPES = ["concept", "til", "gotcha", "question", "snippet", "resource", "raw"]

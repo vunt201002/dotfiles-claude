@@ -13,7 +13,8 @@ a dated section is appended (unless --new, which makes a "(2)" copy).
 import argparse, os, re, sys, datetime
 
 # Vault location: env override, else default to this repo's joy-vault.
-DEFAULT_VAULT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "joy-vault")
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+DEFAULT_VAULT = os.path.join(SCRIPT_DIR, "..", "..", "..", "joy-vault")
 VAULT = os.path.abspath(os.environ.get("JOY_VAULT", DEFAULT_VAULT))
 
 TYPES = ["how-it-works", "gotcha", "potential-bug", "decision", "bug", "confusion", "raw"]
