@@ -12,6 +12,9 @@
 > `      <url>`
 
 <!-- SAVED-LIST (skill đọc & ghi phần dưới dòng này; mục mới chèn ngay dưới marker) -->
+- [ ] Hydrogen developer preview release notes: July 8, 2026 — hydrogen.shopify.dev · lưu 2026-07-29 (digest 2026-07-29)
+      → Hydrogen thành framework-neutral: `createCustomerSession()` lo trọn login/OAuth/refresh/logout, `getShopifyScriptTags()` dùng được ngoài React, thêm edge caching Storefront API + WebMCP. Breaking: `createStorefrontRequestContext` → `createShopifyRequestContext`, bỏ `shopifyCartGet`.
+      https://hydrogen.shopify.dev/update/developer-preview-release-notes-july-8-2026
 - [ ] Hydrogen now deploys to Vercel — shopify.dev · lưu 2026-07-03 (digest 2026-07-03)
       → Nút Deploy one-click đưa Hydrogen lên Vercel (tự tạo repo + setup + build), khỏi local setup — liên quan trực tiếp mảng Shopify headless.
       https://shopify.dev/changelog/hydrogen-now-deploys-to-vercel
