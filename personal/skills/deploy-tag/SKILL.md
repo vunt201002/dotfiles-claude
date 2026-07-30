@@ -1,6 +1,6 @@
 ---
 name: deploy-tag
-description: Cross-project skill to cut the next deploy tag on a GitLab repo after an MR is merged. Checks out the base branch (master/main), pulls latest, fetches all tags, infers the tag pattern from the repo's own existing tags (never assumes a format), figures out the next tag in that same shape, and prints a short clear confirmation plus the exact `git tag` and `git push origin <tag>` commands for YOU to run. When the session has context on what branch/task/MR was just merged, the tag command's message names it; otherwise the tag stays plain (or message-less, if the repo's own tags are lightweight). It NEVER pushes anything to the base branch and NEVER runs the tag/push itself — it only hands you the commands. When the latest tags are inconsistent (mixed patterns / multiple version lines) it shows the top tags and asks which to base the next tag on instead of guessing. Use when asked to "deploy tag", "tag tiếp theo", "cut a release tag", "tạo tag deploy", "next deploy tag", "/deploy-tag", or right after merging an MR when you need to tag a release.
+description: Cross-project skill to cut the next deploy tag on a GitLab repo after an MR is merged. Checks out the base branch (master/main), pulls latest, fetches all tags, infers the tag pattern from the repo's own existing tags (never assumes a format), figures out the next tag in that same shape, and prints a short clear confirmation plus the exact `git tag` and `git push origin <tag>` commands for YOU to run. When the session has context on what branch/task was just merged, the tag command's message names it — always in English, and never with the MR number in it; otherwise the tag stays plain (or message-less, if the repo's own tags are lightweight). It NEVER pushes anything to the base branch and NEVER runs the tag/push itself — it only hands you the commands. When the latest tags are inconsistent (mixed patterns / multiple version lines) it shows the top tags and asks which to base the next tag on instead of guessing. Use when asked to "deploy tag", "tag tiếp theo", "cut a release tag", "tạo tag deploy", "next deploy tag", "/deploy-tag", or right after merging an MR when you need to tag a release.
 ---
 
 # /deploy-tag — Cut the next deploy tag (you run the commands)
@@ -34,10 +34,19 @@ git-mutating steps.
 - **When tags are inconsistent, ask — don't guess.** If the most recent tags don't share
   one clear pattern (mixed prefixes, rc/hotfix tags mingled with releases, two parallel
   version lines), show the top tags and ask the user which one to base the next tag on.
-- **Confirm message: clear but short.** One compact block — latest tags, the proposed
-  next tag, and the two commands. No essay. The user asked for ngắn gọn.
+- **Confirm message: clear, short, English only.** One compact block — latest tags, the
+  proposed next tag, and the two commands. No essay. Every line of that block, **including
+  the tag's `-m` message**, is written in English — even when the merged task was described
+  in Vietnamese in this session, in Notion, or in the branch's commits. Summarize it in
+  English; never paste the Vietnamese text through. A tag lives in shared repo history and
+  reads as English.
+- **No MR / issue numbers anywhere in the block or the tag message.** Never write `!482`,
+  `MR !482`, `#482`, or `(MR 482)`. The branch name plus a few words of description is the
+  whole payload. If the only context available is an MR number — no branch name, no
+  description — treat that as *no context found* and fall back to the plain
+  `release <tag>` message.
 - **Tag message reflects merged context only when that context actually exists in this
-  session.** If the conversation already names a branch/task/MR that was just merged
+  session.** If the conversation already names a branch and task that was just merged
   (the user said so, or an earlier skill in this session surfaced it — e.g.
   `/notion-task-personal`, `/merge-master`), the `git tag -a ... -m "..."` command's
   message names it. If no such context exists, do not invent one — fall back to the
@@ -177,9 +186,14 @@ Look back over this conversation (user messages, and anything an earlier skill i
 session surfaced — e.g. `/notion-task-personal`, `/merge-master`, `/merge-branch`) for a
 branch name and/or task description that was just merged into the base branch.
 
-- **Found it** → note the branch name and a short (few-words) task description. This
-  becomes the tag message in Step 6. If more than one branch/task was merged (a batched
-  release), note each — Step 6 lists them as separate lines in the message.
+- **Found it** → note the branch name and a short (few-words) task description, **written in
+  English**. The source is usually Vietnamese (a Notion task title, the user's own words, a
+  commit subject) — restate it in English rather than copying it. Drop any MR/issue number
+  you see along the way; it does not go in the message. This becomes the tag message in
+  Step 6. If more than one branch/task was merged (a batched release), note each — Step 6
+  lists them as separate lines in the message.
+- **Found only an MR number** with no branch name and no description → treat it as not
+  found. A bare number is not context worth putting in a tag.
 - **Not found** → don't guess, don't ask, don't infer one from the commit subject. Proceed
   to Step 6 with no context; the tag message falls back to plain `release <tag>` (or stays
   lightweight, per the repo-style check in Step 6).
@@ -191,8 +205,8 @@ says.
 
 ## Step 6 — Print the confirmation + the commands (this is the deliverable)
 
-Show one compact block. This is what the skill produces — clear but short, and the two
-commands are for the **user** to run. Do not run them.
+Show one compact block, **in English**. This is what the skill produces — clear but short,
+and the two commands are for the **user** to run. Do not run them.
 
 No merged-task context found in Step 5:
 
@@ -215,26 +229,29 @@ DEPLOY TAG — <repo base branch> @ <short-hash> "<HEAD subject>"
 ────────────────────────────────
 Latest tags:  v1.4.2  v1.4.1  v1.4.0
 Next tag:     v1.4.3        (patch bump · minor v1.5.0 · major v2.0.0)
-Merged:       feature/fix-cart-total — Fix sai tổng giỏ hàng khi áp coupon
+Merged:       feature/fix-cart-total — fix wrong cart total when a coupon is applied
 
 Run to create + push the tag:
-  git tag -a v1.4.3 -m "release v1.4.3 — merge feature/fix-cart-total (Fix sai tổng giỏ hàng khi áp coupon)"
+  git tag -a v1.4.3 -m "release v1.4.3 — merge feature/fix-cart-total (fix wrong cart total when a coupon is applied)"
   git push origin v1.4.3
 ────────────────────────────────
 ```
+
+Note what is **not** in that block: no MR number, no `!482`, no Vietnamese. The task was
+filed in Vietnamese ("Fix sai tổng giỏ hàng khi áp coupon") and it appears here in English.
 
 Merged-task context with more than one task (batched release) — one line per task in
 both the `Merged:` block and the `-m` message body:
 
 ```
 Merged:
-  - feature/fix-cart-total: Fix sai tổng giỏ hàng khi áp coupon
-  - feature/update-shipping: Cập nhật phí ship cho khu vực mới
+  - feature/fix-cart-total: fix wrong cart total when a coupon is applied
+  - feature/update-shipping: update shipping fee for new regions
 
   git tag -a v1.4.3 -m "release v1.4.3
 
-- merge feature/fix-cart-total: Fix sai tổng giỏ hàng khi áp coupon
-- merge feature/update-shipping: Cập nhật phí ship cho khu vực mới"
+- merge feature/fix-cart-total: fix wrong cart total when a coupon is applied
+- merge feature/update-shipping: update shipping fee for new regions"
 ```
 
 Notes for filling this in:
@@ -252,6 +269,9 @@ Notes for filling this in:
   `git log -1`). If the user needs the tag on a different commit, they append the
   commit-ish: `git tag v1.4.3 <commit>` — mention this only if relevant.
 - Keep it to this one block. No multi-paragraph explanation unless the user asks.
+- **English, no MR number.** Before printing, re-read the block once: any Vietnamese word,
+  any `!NNN` / `#NNN`, any "MR" reference means rewrite it. This applies to the `Merged:`
+  lines and the `-m` message equally — both end up read by whoever runs `git show <tag>`.
 
 If you want, also print the one-liner to do both at once for convenience, but keep the
 two-line form as the primary (it's clearer about what each step does):
@@ -293,3 +313,9 @@ so they can watch it run.
   an earlier skill surfaced it this run) is trustworthy; a description guessed from the
   commit subject or invented to fill the message is not — a wrong message is worse than
   a plain `release vX.Y.Z`, so absence of context falls back silently instead of guessing.
+- **English in the block, no MR number.** The tag outlives the MR that produced it: it gets
+  read from `git tag -l -n`, from CI logs, from `git show` by whoever is bisecting a
+  regression months later — none of which sit next to GitLab's MR list. So the message
+  carries what still means something there (branch + what changed, in the language the rest
+  of the repo history is written in) and drops what doesn't (a number that only resolves
+  inside GitLab's UI). Vietnamese task titles get restated, not pasted.
