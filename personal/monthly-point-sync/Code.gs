@@ -132,6 +132,7 @@ function ensureMonthSheet_(ss, month) {
   sh = tpl.copyTo(ss).setName(month);
   sh.showSheet(); ss.setActiveSheet(sh); ss.moveActiveSheet(0);
   pinDashboardFirst_(ss); // Dashboard luôn ở vị trí đầu; tab tháng mới xếp ngay sau nó
+  applyCachedStatusRules_(sh);
   return sh;
 }
 // Nếu tab Dashboard tồn tại, đưa nó về vị trí đầu tiên (index 0). Gọi SAU khi tab
@@ -204,7 +205,7 @@ function syncNow(opts) {
   var st = getState_(ss), firstRun = st.firstRun, prev = st.map, newState = {};
   var idx = buildIndex_(ss);
   var month = activeMonth_(); // tháng đang tính — tháng lịch, hoặc tháng ghim từ menu
-  var added = 0, updated = 0, baseline = 0, waiting = 0, suspect = 0;
+  var added = 0, updated = 0, baseline = 0, waiting = 0, suspect = 0, seenStatus = {};
 
   WATCH_SOURCES.forEach(function (ds) {
     notionQuery_(ds).forEach(function (pg) {
@@ -213,6 +214,7 @@ function syncNow(opts) {
       var pid = norm_(pg.id), status = statusOf_(p), point = pointOf_(p),
           name = title_(p), nt = normTitle_(name), url = pg.url;
       newState[pid] = status;
+      if (status) seenStatus[status] = true;
 
       // RULE 2 (exact): this Notion page id already lives in SOME month tab (current
       // OR an old, closed one) -> it is the same task. Update it in place, never add
@@ -272,6 +274,9 @@ function syncNow(opts) {
     });
   });
   writeState_(st.sheet, newState);
+  // Tô màu là việc trang trí — hỏng thì kệ, không được kéo sập lượt sync point.
+  try { syncStatusColors_(ss, Object.keys(seenStatus)); }
+  catch (e) { Logger.log('Đồng bộ màu status lỗi (sync point vẫn xong): %s', e); }
   Logger.log('Sync done. added=%s updated=%s baseline=%s waiting=%s suspect=%s firstRun=%s month=%s',
              added, updated, baseline, waiting, suspect, firstRun, month);
   return { added: added, updated: updated, baseline: baseline, waiting: waiting, suspect: suspect, firstRun: firstRun, month: month };
@@ -325,6 +330,299 @@ function pinDashboardFirstMenu_() {
   }
   pinDashboardFirst_(ss);
   toast_('Tab "' + DASHBOARD + '" đã ở vị trí đầu tiên.', '📌 Point Sync');
+}
+
+// ---- tô màu status theo Notion (tự động, không nút) ----
+// Bảng màu KHÔNG hardcode: đọc schema Status của các board trong WATCH_SOURCES rồi
+// dựng conditional formatting cho cột Status. Tên status hai board vốn đã lệch nhau
+// và còn đổi theo thời gian (xem COUNTED) — lấy sống từ Notion thì màu không bao giờ
+// lệch, status mới thêm bên Notion tự có màu.
+// Chạy cuối mỗi syncNow (kể cả trigger 10 phút) nên anh không phải bấm gì. Bảng màu
+// được cache ở Script Property; chỉ gọi Notion khi cache thiếu / gặp status lạ / cache
+// quá 24h, và chỉ ghi lại rule khi bảng màu THỰC SỰ đổi — xem syncStatusColors_.
+var STATUS_COL = 2; // B
+var STATUS_CACHE_PROP = 'STATUS_COLOR_CACHE';
+var STATUS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// 10 tên màu Notion cho phép -> đúng chip màu light-mode của Notion (nền + chữ).
+var NOTION_CHIP = {
+  'default': { bg: '#E3E2E0', fg: '#37352F' },
+  'gray':    { bg: '#E3E2E0', fg: '#787774' },
+  'brown':   { bg: '#EEE0DA', fg: '#9F6B53' },
+  'orange':  { bg: '#FADEC9', fg: '#D9730D' },
+  'yellow':  { bg: '#FDECC8', fg: '#CB912F' },
+  'green':   { bg: '#DBEDDB', fg: '#448361' },
+  'blue':    { bg: '#D3E5EF', fg: '#337EA9' },
+  'purple':  { bg: '#E8DEEE', fg: '#9065B0' },
+  'pink':    { bg: '#F5E0E9', fg: '#C14C8A' },
+  'red':     { bg: '#FFE2DD', fg: '#D44C47' },
+};
+
+function now_() { return Date.now(); }
+
+// null = ĐỌC LỖI (khác hẳn [] = board không có option nào). Phân biệt hai ca này là
+// bắt buộc: gộp map khi một board lỗi sẽ thiếu status của board đó, dựng rule theo
+// map thiếu là xoá sạch màu của board kia — xem statusColors_.
+function notionStatusOptions_(dataSourceId) {
+  var url = 'https://api.notion.com/v1/data_sources/' + dataSourceId;
+  var headers = { 'Authorization': 'Bearer ' + token_(), 'Notion-Version': NOTION_VERSION };
+  var resp = UrlFetchApp.fetch(url, { method: 'get', headers: headers, muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) {
+    Logger.log('schema %s HTTP %s: %s', dataSourceId, resp.getResponseCode(), resp.getContentText().slice(0, 200));
+    return null;
+  }
+  var prop = (JSON.parse(resp.getContentText()).properties || {})[STATUS_FIELD];
+  return (prop && prop.status && prop.status.options) || [];
+}
+// Gộp status của mọi board thành một bảng tên -> tên màu Notion. Hai board đặt cùng
+// tên status mà khác màu thì board đầu thắng (chỉ log, không hỏi).
+// failed = có board đọc lỗi -> map đang THIẾU, mọi caller phải bỏ qua lượt này chứ
+// không được dựng rule (sẽ xoá màu của board đọc được và báo nhầm là Notion đã xoá).
+function statusColors_() {
+  var map = {}, failed = false;
+  WATCH_SOURCES.forEach(function (ds) {
+    var options = notionStatusOptions_(ds);
+    if (options === null) { failed = true; return; }
+    options.forEach(function (o) {
+      var name = o && o.name;
+      if (!name) return;
+      var c = o.color || 'default';
+      if (map.hasOwnProperty(name)) {
+        if (map[name] !== c) Logger.log('Status "%s" khác màu giữa 2 board (%s) — giữ màu board đầu (%s).', name, c, map[name]);
+        return;
+      }
+      map[name] = c;
+    });
+  });
+  return { map: map, failed: failed };
+}
+
+function readStatusCache_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(STATUS_CACHE_PROP);
+  if (!raw) return null;
+  try {
+    var c = JSON.parse(raw);
+    return (c && c.map && typeof c.ts === 'number') ? c : null;
+  } catch (e) { return null; }
+}
+function writeStatusCache_(map, ts) {
+  PropertiesService.getScriptProperties().setProperty(STATUS_CACHE_PROP, JSON.stringify({ map: map, ts: ts }));
+}
+function sameMap_(a, b) {
+  var ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (var i = 0; i < ka.length; i++) if (a[ka[i]] !== b[ka[i]]) return false;
+  return true;
+}
+// Trigger chạy 10 phút/lần — gọi Notion mỗi lần là đốt quota vô ích. Chỉ đọc lại
+// schema khi: chưa có cache, gặp status chưa có trong cache (Notion vừa thêm), hoặc
+// cache quá 24h (bắt ca đổi MÀU bên Notion mà tên status không đổi).
+function needStatusRefresh_(cache, seenStatuses) {
+  if (!cache) return true;
+  if (now_() - cache.ts > STATUS_CACHE_TTL_MS) return true;
+  for (var i = 0; i < seenStatuses.length; i++)
+    if (!cache.map.hasOwnProperty(seenStatuses[i])) return true;
+  return false;
+}
+
+// CỘNG THÊM, không thay thế: màu anh đã set thì giữ nguyên y hệt, chỉ status nào
+// CHƯA có màu mới lấy màu từ Notion. Rule của anh được giữ nguyên thứ tự và đặt lên
+// ĐẦU danh sách — Sheets xét rule từ trên xuống, rule khớp đầu tiên thắng, nên đứng
+// trước chính là thứ bảo đảm màu của anh không bao giờ bị màu Notion đè.
+// Sai số của việc đoán "rule này của ai" luôn rơi về phía vô hại: đoán nhầm rule của
+// anh thành rule của code thì nó bị dựng lại y nguyên màu cũ; không nhận ra rule của
+// anh phủ status nào (rule dùng công thức / TEXT_CONTAINS) thì cùng lắm thêm một rule
+// thừa đứng SAU nó — thừa một dòng trong danh sách, màu hiển thị không đổi.
+// Range mới luôn là B2:B không chặn đuôi. Rule cũ của anh bị chặn đuôi (vd B2:B100)
+// được nới ra hết cột — không đổi màu, chỉ để dòng thêm sau này có màu của chính anh.
+function applyStatusRules_(sh, colorByStatus) {
+  var old = sh.getConditionalFormatRules();
+  var full = sh.getRange('B2:B'), maxRow = sh.getMaxRows();
+  var theirs = [], covered = {}, extended = 0;
+  for (var i = 0; i < old.length; i++) {
+    var rule = old[i];
+    if (isOwnStatusRule_(rule)) continue;
+    var name = statusRuleValue_(rule);
+    if (name !== null) {
+      covered[name] = true;
+      if (!reachesLastRow_(rule, maxRow)) {
+        rule = rule.copy().setRanges([full]).build();
+        extended++;
+        Logger.log('Nới range rule màu sẵn có của status "%s" (tab %s) ra hết cột Status.', name, sh.getName());
+      }
+    }
+    theirs.push(rule);
+  }
+  var out = theirs.slice(), names = Object.keys(colorByStatus), appended = 0;
+  for (var j = 0; j < names.length; j++) {
+    if (covered[names[j]]) continue;
+    var chip = NOTION_CHIP[colorByStatus[names[j]]] || NOTION_CHIP['default'];
+    out.push(SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo(names[j])
+      .setBackground(chip.bg)
+      .setFontColor(chip.fg)
+      .setRanges([full])
+      .build());
+    appended++;
+  }
+  sh.setConditionalFormatRules(out);
+  return { kept: theirs.length, extended: extended, appended: appended };
+}
+function applyToTabs_(tabs, colorByStatus) {
+  var tot = { kept: 0, extended: 0, appended: 0 };
+  tabs.forEach(function (sh) {
+    var s = applyStatusRules_(sh, colorByStatus);
+    tot.kept += s.kept; tot.extended += s.extended; tot.appended += s.appended;
+  });
+  Logger.log('Màu status: giữ nguyên %s rule sẵn có, nới range %s rule, thêm mới %s rule (trên %s tab).',
+             tot.kept, tot.extended, tot.appended, tabs.length);
+  return tot;
+}
+function isStatusColRule_(rule) {
+  var rs = rule.getRanges();
+  if (!rs.length) return false;
+  for (var i = 0; i < rs.length; i++)
+    if (rs[i].getColumn() !== STATUS_COL || rs[i].getNumColumns() !== 1) return false;
+  return true;
+}
+function textEqRuleCondition_(rule) {
+  if (!isStatusColRule_(rule)) return null;
+  var bc = rule.getBooleanCondition();
+  if (!bc || bc.getCriteriaType() !== SpreadsheetApp.BooleanCriteria.TEXT_EQUAL_TO) return null;
+  return bc;
+}
+// Status mà rule này phủ, hoặc null nếu không đọc ra được (rule công thức, TEXT_CONTAINS…).
+function statusRuleValue_(rule) {
+  var bc = textEqRuleCondition_(rule);
+  if (!bc) return null;
+  var vals = bc.getCriteriaValues() || [];
+  return vals.length ? String(vals[0]) : null;
+}
+// Rule do CHÍNH code này tạo: đúng cột Status, khớp text tuyệt đối, và cặp nền/chữ
+// trùng khít một dòng trong NOTION_CHIP. Chỉ những rule này mới được dựng lại.
+function isOwnStatusRule_(rule) {
+  var bc = textEqRuleCondition_(rule);
+  if (!bc) return false;
+  var bg = hexOf_(bc.getBackgroundObject()), fg = hexOf_(bc.getFontColorObject());
+  if (!bg || !fg) return false;
+  for (var k in NOTION_CHIP)
+    if (normHex_(NOTION_CHIP[k].bg) === bg && normHex_(NOTION_CHIP[k].fg) === fg) return true;
+  return false;
+}
+function hexOf_(colorObj) {
+  if (!colorObj) return '';
+  try { return normHex_(colorObj.asRgbColor().asHexString()); } catch (e) { return ''; }
+}
+// asHexString() trả #rrggbb hoặc #aarrggbb — bỏ alpha và hạ chữ thường để so được.
+function normHex_(h) {
+  var s = String(h || '').toLowerCase().replace('#', '');
+  return s.length === 8 ? s.slice(2) : s;
+}
+function reachesLastRow_(rule, maxRow) {
+  var rs = rule.getRanges();
+  for (var i = 0; i < rs.length; i++)
+    if (rs[i].getRow() + rs[i].getNumRows() - 1 >= maxRow) return true;
+  return false;
+}
+// Status đã được rule sẵn có của anh phủ trên tab này (dùng cho báo cáo "còn thiếu màu").
+function coveredStatuses_(sh) {
+  var out = {}, rules = sh.getConditionalFormatRules();
+  for (var i = 0; i < rules.length; i++) {
+    var name = statusRuleValue_(rules[i]);
+    if (name !== null) out[name] = true;
+  }
+  return out;
+}
+function colorTargets_(ss) {
+  var out = [];
+  ss.getSheets().forEach(function (sh) {
+    var n = sh.getName();
+    if (isMonthTab_(n) || n === TEMPLATE) out.push(sh);
+  });
+  return out;
+}
+// Tab tháng mới clone từ _TEMPLATE nên bình thường đã thừa hưởng conditional
+// formatting. Guard cho ca _TEMPLATE chưa kịp có rule (thứ tự lần chạy đầu): có cache
+// màu thì tô ngay, khỏi đợi tới lần bảng màu đổi tiếp theo.
+function applyCachedStatusRules_(sh) {
+  var cache = readStatusCache_();
+  if (cache) applyStatusRules_(sh, cache.map);
+}
+
+// Quét status thực tế trong các tab tháng và chỉ đích danh cái nào sẽ VẪN không màu:
+// vừa không có rule sẵn của anh trên chính tab đó, vừa không có trong bảng màu Notion.
+function orphanStatuses_(ss, map) {
+  var listed = {}, out = [];
+  ss.getSheets().forEach(function (sh) {
+    if (!isMonthTab_(sh.getName())) return;
+    var last = lastDataRow_(sh);
+    if (last < 2) return;
+    var covered = coveredStatuses_(sh);
+    var v = sh.getRange(2, STATUS_COL, last - 1, 1).getValues();
+    for (var i = 0; i < v.length; i++) {
+      var s = String(v[i][0] === null || v[i][0] === undefined ? '' : v[i][0]).trim();
+      if (!s || listed[s] || covered[s] || map.hasOwnProperty(s)) continue;
+      listed[s] = true; out.push(s);
+    }
+  });
+  return out;
+}
+
+// Đồng bộ màu TỰ ĐỘNG, gọi ở cuối syncNow. seenStatuses = status quan sát được từ
+// Notion trong chính lượt sync này (khỏi quét lại sheet). Không đổi bảng màu thì
+// không đụng vào sheet lấy một lần — ghi lại rule y hệt mỗi 10 phút là đốt quota.
+function syncStatusColors_(ss, seenStatuses) {
+  var cache = readStatusCache_();
+  if (!needStatusRefresh_(cache, seenStatuses)) return { refreshed: false, applied: 0 };
+  var sc = statusColors_();
+  if (sc.failed || !Object.keys(sc.map).length) {
+    Logger.log('Bỏ qua đồng bộ màu status: đọc schema Notion không đủ — giữ nguyên rule đang có.');
+    return { refreshed: false, applied: 0 };
+  }
+  var changed = !cache || !sameMap_(cache.map, sc.map);
+  writeStatusCache_(sc.map, now_());
+  var orphans = orphanStatuses_(ss, sc.map);
+  if (orphans.length)
+    Logger.log('⚠ Status có trong sheet nhưng Notion không còn (mấy dòng này vẫn không màu): %s', orphans.join(' | '));
+  if (!changed) return { refreshed: true, applied: 0, orphans: orphans };
+  var tabs = colorTargets_(ss);
+  applyToTabs_(tabs, sc.map);
+  return { refreshed: true, applied: tabs.length, orphans: orphans };
+}
+
+// Chạy TAY từ Apps Script editor khi cần soi hoặc ép bù màu — cố tình KHÔNG gắn menu:
+// màu đã tự đúng sau mỗi lần sync. Bỏ qua cache, đọc lại schema, bù màu cho mọi tab
+// tháng VÀ _TEMPLATE (tab tháng mới clone từ nó nên thừa hưởng luôn), rồi báo cáo đích
+// danh status vẫn không màu (không có rule sẵn của anh, cũng không có bên Notion).
+function colorStatusesFromNotion() {
+  var ss = ss_();
+  var sc = statusColors_();
+  if (sc.failed || !Object.keys(sc.map).length) {
+    alert_('Không đọc được đủ danh sách status từ Notion (xem Execution log).\n\nChưa đổi màu gì cả.');
+    return { colored: 0, tabs: 0, orphans: [], kept: 0, extended: 0, appended: 0 };
+  }
+  var tabs = colorTargets_(ss);
+  var tot = applyToTabs_(tabs, sc.map);
+  writeStatusCache_(sc.map, now_());
+
+  var colored = Object.keys(sc.map).length;
+  var orphans = orphanStatuses_(ss, sc.map);
+  alert_(
+    'Bù màu status xong.\n\n' +
+    'Status lấy từ Notion:   ' + colored + '\n' +
+    'Tab xử lý:              ' + tabs.length + ' (gồm cả ' + TEMPLATE + ' → tab tháng mới tự có màu)\n' +
+    'Màu cũ giữ nguyên:      ' + tot.kept + ' rule\n' +
+    'Rule cũ nới hết cột:    ' + tot.extended + '\n' +
+    'Rule màu mới thêm:      ' + tot.appended + '\n\n' +
+    (orphans.length
+      ? '⚠ ' + orphans.length + ' status trong sheet vẫn không màu (Notion không còn, đổi tên / xoá):\n   • ' +
+        orphans.join('\n   • ') + '\n\nSửa tên cho khớp Notion là xong.'
+      : 'Mọi status đang có trong sheet đều đã có màu.'));
+  Logger.log('Color done. statuses=%s tabs=%s orphans=%s', colored, tabs.length, orphans.join(' | '));
+  return { colored: colored, tabs: tabs.length, orphans: orphans,
+           kept: tot.kept, extended: tot.extended, appended: tot.appended };
+}
+function alert_(msg) {
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { Logger.log(msg); }
 }
 
 // ---- triggers / menu ----
