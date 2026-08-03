@@ -80,6 +80,61 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
   về index 0. Menu **📌 Ghim Dashboard lên đầu** làm lại thủ công khi cần. Không
   có tab Dashboard → no-op, không lỗi.
 
+## Màu status (theo Notion) — tự động, không nút
+- **Không có nút tô màu.** `syncNow` gọi `syncStatusColors_` ở cuối mỗi lượt (trigger
+  10 phút, "Sync now", `backfillCounted` đều đi qua đây) → task chuyển sang status nào
+  là màu đúng ngay, không cần thao tác tay. `colorStatusesFromNotion` vẫn còn để chạy
+  tay từ Apps Script editor khi cần soi/ép tô lại, nhưng **không** gắn menu.
+- **Tô màu không được kéo sập sync.** Lời gọi nằm trong `try/catch` và đặt SAU
+  `writeState_`: màu là việc trang trí, cộng point mới là việc chính. Lỗi Sheets/quota
+  lúc dựng rule chỉ ghi log, `syncNow` vẫn trả kết quả và trigger không báo fail.
+- Dựng conditional formatting cho cột Status (B) của mọi tab tháng **và** `_TEMPLATE`.
+  Tô template vì `ensureMonthSheet_` tạo tab tháng mới bằng `copyTo` — copy mang theo
+  formatting nên tháng sau tự có màu. `applyCachedStatusRules_` là guard cho ca
+  `_TEMPLATE` chưa kịp có rule: tab mới tạo được tô ngay từ cache.
+- **Cộng thêm, không thay thế.** `applyStatusRules_` chia rule hiện có thành `theirs`
+  (giữ) và rule do chính code tạo (dựng lại). Rule của anh giữ nguyên thứ tự và đứng
+  **đầu** danh sách — Sheets xét từ trên xuống, rule khớp đầu tiên thắng, nên đó chính
+  là bảo đảm màu của anh không bị đè. Chỉ status **không** nằm trong `covered` (đọc từ
+  `getCriteriaValues()` của rule `TEXT_EQUAL_TO` cột B) mới được thêm rule màu Notion.
+  Nhận diện "rule của code" = cột B + `TEXT_EQUAL_TO` + cặp nền/chữ trùng khít một dòng
+  `NOTION_CHIP` (so qua `getBackgroundObject()/getFontColorObject()`, chuẩn hoá
+  `#aarrggbb` → `rrggbb`). Sai số luôn rơi về phía vô hại: đoán nhầm rule của anh thành
+  rule của code → dựng lại y nguyên màu; không đọc ra được rule của anh phủ status nào
+  (công thức / `TEXT_CONTAINS`) → cùng lắm thêm một rule thừa đứng SAU nó, màu hiển thị
+  không đổi.
+- **Nới range rule cũ.** Rule `TEXT_EQUAL_TO` cột B của anh mà không chạm
+  `getMaxRows()` (vd `B2:B100`) được thay bằng `rule.copy().setRanges([B2:B]).build()`
+  — cùng vị trí, cùng màu, cùng criteria, chỉ dài ra. Đây gần như chắc chắn là nguyên
+  nhân gốc của "dòng mới không màu": dòng rơi ra ngoài range. Không đổi màu nào, nên
+  không vi phạm "màu cũ giữ nguyên".
+- Range rule mới luôn là `B2:B` **không chặn đuôi** — đó là thứ làm "dòng thêm sau này
+  tự đúng màu" thành thật.
+- **Màu lấy sống từ Notion**, không hardcode: `GET /v1/data_sources/<id>` →
+  `properties.Status.status.options[].color`, gộp mọi board trong `WATCH_SOURCES`
+  (trùng tên khác màu → board đầu thắng, chỉ log). Lý do: tên status hai board vốn
+  đã lệch nhau (xem `COUNTED`) và còn đổi theo thời gian — bảng màu chép cứng sẽ rot
+  y hệt. 10 tên màu Notion map sang chip màu light-mode ở `NOTION_CHIP`; tên màu lạ
+  → fallback `default`.
+- **Cache để không đốt quota:** Script Property `STATUS_COLOR_CACHE` = `{map, ts}`.
+  `needStatusRefresh_` chỉ cho fetch lại khi cache thiếu / gặp status chưa có trong
+  map (lấy từ chính các page vừa sync, không quét lại sheet) / cache quá 24h (bắt ca
+  đổi màu mà không đổi tên). Map mới **deep-equal** map cũ → không gọi
+  `setConditionalFormatRules` lần nào.
+- **Không blanket-replace:** `setConditionalFormatRules()` ghi đè cả tab, nên hàm ghi
+  lại đúng `theirs.concat(appended)` — mọi rule ở cột khác giữ nguyên (kể cả màu Role
+  ở cột D), rule của code được dựng lại nên chạy lại không nhân đôi.
+- **Partial failure phải abort:** `notionStatusOptions_` trả `null` khi HTTP ≠ 200 (khác
+  `[]` = board không có option). Chỉ cần **một** board lỗi là `statusColors_().failed`
+  → bỏ qua cả lượt, không đụng rule. Nếu không phân biệt, map gộp sẽ thiếu status của
+  board lỗi, dựng rule theo nó sẽ **xoá màu** của board đọc được và báo nhầm mấy status
+  đó là "Notion không còn" (bảo anh đi sửa tên đúng thành sai).
+- Đồng thời là bước **check**: mỗi lần đọc lại bảng màu, quét Status thực tế trong các
+  tab tháng và ghi đích danh status VẪN không màu (không có rule sẵn của anh trên chính
+  tab đó, cũng không có trong map Notion) vào `Logger.log` (trigger không có UI). Đường
+  chạy tay thì alert; `alert_` tự rơi xuống log khi không có UI. Mỗi lượt ghi rule còn
+  log một dòng tổng kết giữ / nới / thêm để kiểm chứng màu cũ không bị đụng.
+
 ## Mở / rủi ro
 - Role lịch sử để trống (schema DB cũ khác nhau) — chấp nhận, backfill thủ công nếu cần.
 - Nếu Vũ đổi sang project DB mới → thêm DB ID vào tab Config.

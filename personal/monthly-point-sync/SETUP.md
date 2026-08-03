@@ -83,6 +83,44 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
 - Nếu tab Dashboard bị đổi tên hoặc xoá, code không lỗi — chỉ đơn giản bỏ qua bước
   ghim (menu sẽ báo "Không tìm thấy tab Dashboard").
 
+## Màu status — tự động, không có nút nào phải bấm
+- **Anh không phải làm gì.** Mỗi lần sync (kể cả nhịp tự động 10 phút) code tự kiểm
+  tra và chỉnh màu status. Task chuyển sang status nào là ô đó có màu đúng của status
+  đó, kể cả status mới toanh vừa thêm bên Notion.
+- **Màu đọc sống từ Notion** (schema Status của các board trong `WATCH_SOURCES`),
+  không có bảng màu chép cứng trong code — nên màu trong sheet luôn khớp Notion.
+- **Chỉ CỘNG THÊM, không sửa màu sẵn có.** Status nào anh đã tô rồi thì giữ y nguyên
+  màu của anh — code không đụng vào. Chỉ status **chưa có màu** mới được lấy màu từ
+  Notion. Rule của anh luôn được xếp **lên đầu** danh sách; Sheets xét rule từ trên
+  xuống và rule khớp đầu tiên thắng, nên màu của anh không bao giờ bị đè.
+- **Rule cũ bị chặn đuôi thì được nới ra hết cột.** Nếu rule anh set là `B2:B100` chẳng
+  hạn thì dòng thứ 101 trở đi rơi ra ngoài và hiện không màu — đây nhiều khả năng chính
+  là lý do mấy dòng mới bị trắng. Code nới range đó thành `B2:B` (không chặn đuôi),
+  **không đổi màu gì cả**, chỉ để màu của chính anh phủ luôn các dòng mới.
+- Tô bằng **conditional formatting** trên cột **Status (B)**. Rule mới thêm cũng luôn
+  dùng `B2:B` → dòng thêm sau này tự có màu.
+- Áp cho **mọi tab tháng** và cả `_TEMPLATE`. Tô `_TEMPLATE` là để tab tháng mới
+  (nhân bản từ nó) sinh ra đã có màu.
+- **Không đè format tay của anh:** màu Role ở cột D và mọi rule cột khác giữ nguyên
+  tuyệt đối. Chạy bao nhiêu lần cũng không nhân đôi rule.
+- **Không tốn quota:** bảng màu được cache ở Script Property `STATUS_COLOR_CACHE`.
+  Chỉ đọc lại Notion khi cache chưa có / gặp status lạ / cache quá 24h (bắt ca đổi
+  màu bên Notion mà không đổi tên). Bảng màu không đổi thì **không** ghi lại rule.
+- Hai board đặt **cùng tên status khác màu** → lấy màu board đầu trong `WATCH_SOURCES`
+  (ghi log, không hỏi).
+- **Notion lỗi thì không đụng gì:** chỉ cần **một** board đọc lỗi (429/500/token sai)
+  là bỏ qua cả lượt và giữ nguyên rule đang có. Không bao giờ xoá màu của board đọc
+  được, cũng không báo nhầm status của nó là "Notion không còn".
+- **Quét ô cũ:** mỗi lần đọc lại bảng màu, code so status thực tế trong các tab tháng
+  với (rule sẵn có của anh + bảng màu Notion) và **ghi đích danh vào Execution log**
+  status nào vẫn không màu — tức là anh chưa tô mà Notion cũng không còn (đổi tên /
+  xoá bên Notion). Sửa tên cho khớp Notion là hết.
+- Mỗi lần ghi rule, log có một dòng tổng kết: **giữ nguyên bao nhiêu rule sẵn có, nới
+  range bao nhiêu, thêm mới bao nhiêu** — mở Execution log là kiểm chứng được màu cũ
+  không bị đụng.
+- Cần soi hoặc ép tô lại ngay: mở Apps Script, chọn hàm **`colorStatusesFromNotion`**
+  → **Run**. Cố tình không gắn menu vì màu đã tự đúng rồi.
+
 ## Giới hạn đã biết
 - Tháng gán theo **lúc sync phát hiện** task đạt Ready to Test (chính xác tới mức tháng;
   chỉ lệch nếu transition rơi đúng đêm giao tháng — hiếm). Cần chính xác tuyệt đối thì
