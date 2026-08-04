@@ -12,6 +12,9 @@
 > `      <url>`
 
 <!-- SAVED-LIST (skill đọc & ghi phần dưới dòng này; mục mới chèn ngay dưới marker) -->
+- [ ] The AI Aesthetic — blog.jim-nielsen.com · lưu 2026-08-02 (digest 2026-08-02)
+      → Jim Nielsen về "mùi AI" trong design: sparkle ✨, streaming/shimmering text, tiny icons (Claude/Codex/Cursor), beige+cam+serif, UI non-deterministic. Lược dịch TV: translations/2026-08-02-the-ai-aesthetic-vi.md
+      https://blog.jim-nielsen.com/2026/ai-aesthetic/
 - [ ] Hydrogen developer preview release notes: July 8, 2026 — hydrogen.shopify.dev · lưu 2026-07-29 (digest 2026-07-29)
       → Hydrogen thành framework-neutral: `createCustomerSession()` lo trọn login/OAuth/refresh/logout, `getShopifyScriptTags()` dùng được ngoài React, thêm edge caching Storefront API + WebMCP. Breaking: `createStorefrontRequestContext` → `createShopifyRequestContext`, bỏ `shopifyCartGet`.
       https://hydrogen.shopify.dev/update/developer-preview-release-notes-july-8-2026
