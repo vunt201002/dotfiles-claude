@@ -103,6 +103,12 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
   rule của code → dựng lại y nguyên màu; không đọc ra được rule của anh phủ status nào
   (công thức / `TEXT_CONTAINS`) → cùng lắm thêm một rule thừa đứng SAU nó, màu hiển thị
   không đổi.
+- **Bold + format version.** Rule code sinh bật `setBold(true)`: chữ chip Notion là màu
+  nhạt trên nền nhạt, để nét thường thì trong Sheets đọc bị mờ. Bold cố tình **không**
+  nằm trong phép nhận diện "rule của code" — có vậy rule sinh từ bản chưa-bold mới được
+  nhận ra để dựng lại. Vì cache chặn ghi rule khi bảng màu không đổi, format rule được
+  đánh version ở `STATUS_FMT` và lưu kèm cache; đổi cách vẽ rule thì bump số này, lượt
+  sync kế tiếp tự dựng lại toàn bộ.
 - **Nới range rule cũ.** Rule `TEXT_EQUAL_TO` cột B của anh mà không chạm
   `getMaxRows()` (vd `B2:B100`) được thay bằng `rule.copy().setRanges([B2:B]).build()`
   — cùng vị trí, cùng màu, cùng criteria, chỉ dài ra. Đây gần như chắc chắn là nguyên

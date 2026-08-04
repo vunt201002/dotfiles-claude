@@ -89,6 +89,9 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   đó, kể cả status mới toanh vừa thêm bên Notion.
 - **Màu đọc sống từ Notion** (schema Status của các board trong `WATCH_SOURCES`),
   không có bảng màu chép cứng trong code — nên màu trong sheet luôn khớp Notion.
+- **Chữ status in đậm.** Chữ của chip Notion là màu nhạt trên nền nhạt, để nét thường
+  thì đọc bị mờ trong Sheets. Rule do code sinh luôn bật bold; rule đã sinh từ trước
+  cũng được nâng lên đậm ở lượt sync kế tiếp, không cần anh chỉnh tay.
 - **Chỉ CỘNG THÊM, không sửa màu sẵn có.** Status nào anh đã tô rồi thì giữ y nguyên
   màu của anh — code không đụng vào. Chỉ status **chưa có màu** mới được lấy màu từ
   Notion. Rule của anh luôn được xếp **lên đầu** danh sách; Sheets xét rule từ trên
@@ -105,7 +108,8 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   tuyệt đối. Chạy bao nhiêu lần cũng không nhân đôi rule.
 - **Không tốn quota:** bảng màu được cache ở Script Property `STATUS_COLOR_CACHE`.
   Chỉ đọc lại Notion khi cache chưa có / gặp status lạ / cache quá 24h (bắt ca đổi
-  màu bên Notion mà không đổi tên). Bảng màu không đổi thì **không** ghi lại rule.
+  màu bên Notion mà không đổi tên) / rule trong sheet còn ở format đời cũ. Bảng màu
+  không đổi và format không đổi thì **không** ghi lại rule.
 - Hai board đặt **cùng tên status khác màu** → lấy màu board đầu trong `WATCH_SOURCES`
   (ghi log, không hỏi).
 - **Notion lỗi thì không đụng gì:** chỉ cần **một** board đọc lỗi (429/500/token sai)
