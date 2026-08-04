@@ -3,8 +3,8 @@ topic: SEO toàn diện (content + technical + off-page) — áp dụng tienvu-b
 mode: plan
 status: in-progress
 started: 2026-06-24
-last_session: 2026-07-12
-next_start: "Buổi 4 ĐANG DỞ — lý thuyết on-page đã dạy xong, đang treo 2 câu check hiểu (chọn title a/b/c + meta desc ảnh hưởng số nào trong GSC). Chữa 2 câu đó → bài tập A (title /construction) + B (skeleton pillar /bang-tai-cao-su) → chốt buổi. MỞ ĐẦU HỎI: (1) site đã index chưa (search site:tienvujsc.com.vn — GSC verified 12/07), (2) kết quả tự audit content của anh, (3) đã sửa contact.json hotline giả chưa."
+last_session: 2026-07-27
+next_start: "Buổi 4 XONG (title 6 trang + 2 H1 đã chốt, xem bảng cuối Ghi chú 27/07). TRƯỚC KHI VÀO BUỔI 5 — làm 2 việc P0: (1) set NEXT_PUBLIC_SITE_URL=https://tienvujsc.com.vn ở production + đổi 2 fallback trong code (SEO.js:11 'https://tienvu-bt.com' → domain thật; ThemeLayout.js:33 '' → domain thật); (2) kéo Buổi 9 (sitemap+robots, cả 2 đang 404) lên làm TRƯỚC Buổi 5. Rồi mới vào Buổi 5 (Site Architecture). MỞ ĐẦU HỎI: (a) search site:tienvujsc.com.vn đã ra chưa, (b) GSC Hiệu suất/Lập chỉ mục đã có data chưa, (c) đã áp 6 title + 2 H1 lên site chưa."
 ---
 ## Bối cảnh (CẬP NHẬT 2026-07-09 — mở rộng scope)
 - User là frontend dev, hướng frontend depth + senior/system design.
@@ -112,7 +112,26 @@ next_start: "Buổi 4 ĐANG DỞ — lý thuyết on-page đã dạy xong, đang
   - Ghi chú 2026: cluster cấu trúc rõ + entity rõ được cite trong AI Overviews (~20% search) nhiều hơn;
     core update 6/2025 củng cố topical authority — cùng cấu trúc phục vụ SEO + AEO.
 
-- **Buổi 4 — On-page SEO (ĐANG DỞ 2026-07-12 — lý thuyết xong, check hiểu + bài tập treo):**
+- **Buổi 4 — On-page SEO (DONE 2026-07-27):**
+  - **Phần chốt ngày 27/07 (title/H1 thực chiến):**
+    - Title = biển hiệu ngoài đường (SERP, ≤60 ký tự, cần brand, cạnh tranh với 9 kết quả khác);
+      H1 = câu chào khi khách đã vào (không cần brand, được dài hơn, xác nhận + đẩy tới hành động).
+      **KHÔNG copy title xuống làm H1** — user mắc đúng lỗi này, đã chữa.
+    - **Front-load keyword chính ≠ luôn để tên sản phẩm lên đầu.** Nó = để lên đầu từ mà người
+      tìm trang NÀY sẽ gõ. Vì vậy `/about` là trang DUY NHẤT brand đứng đầu (keyword của nó là
+      "công ty cổ phần Tiến Vũ" = vế 1 mục tiêu của user).
+    - Lỗi user lặp 2 lần: **lặp từ trong title** (`Công trình - Các công trình đã thi công`;
+      `Liên hệ: Thông tin liên hệ`) — tiêu 2/3 mặt tiền 60 ký tự vào 1 ý không phải keyword.
+    - Thói quen user: khuôn `[Nhãn trang]: [mô tả] - [brand]` — nhãn ("Dịch vụ", "Giới thiệu"...)
+      tốn 8-11 ký tự và không từ nào là từ khách gõ. Trộn `:` và `-` trong cùng title.
+    - Title trang hub (`/blog`) không được hứa 1 chủ đề duy nhất — nó chứa nhiều spoke.
+    - Fix H1 nhiều khi = **nâng cấp heading có sẵn**, không phải viết mới (`/contact` đã có H2
+      "Yêu cầu báo giá băng tải / con lăn" viết tốt, chỉ sai cấp).
+    - **Cơ chế cụ thể mạnh hơn tính từ**: "Gửi bản vẽ" > "phản hồi nhanh chóng, uy tín".
+    - **Không bịa claim trong title/H1**: định thêm "từ 2009" vào title /about → curl kiểm,
+      site không ghi năm thành lập ở đâu → BỎ. Title là lời hứa; hứa số không kiểm chứng được
+      là tự đào hố E-E-A-T.
+  - **Lý thuyết dạy 2026-07-12:**
   - Mental model 3 tầng: máy đọc (title/heading/link/alt) · SERP (title link + snippet → CTR) ·
     content thật — 3 tầng phải kể cùng 1 câu chuyện.
   - Title: công thức `[keyword chính]+[qualifier]+[brand]`, front-load, unique/trang, ~55-60 ký tự
@@ -176,6 +195,67 @@ Domain thật: `tienvujsc.com.vn` (live, HTTP 200). DNS đang ở **Tenten** (ns
   chết. CHƯA verify được trên product page live (homepage không link thẳng product nào) — check ở
   Buổi 16 audit hoặc sửa sớm cùng Buổi 8.
 
+### 3. Audit toàn site 2026-07-27 (curl + đọc payload CMS) — CHƯA SỬA
+
+**P0 — chặn index:**
+- **1 env var thiếu, 3 hệ thống gãy.** `NEXT_PUBLIC_SITE_URL` không được set ở production,
+  và 2 nơi fallback khác nhau:
+  - `SEO.js:11` → `|| 'https://tienvu-bt.com'` (domain NXDOMAIN, đã curl xác nhận chết)
+    ⇒ **canonical + og:url của cả 10/10 product page trỏ domain chết** — nhiều khả năng là
+    lý do `site:` vẫn trắng sau 2 tuần dù đã request indexing.
+  - `ThemeLayout.js:33` → `|| ''` ⇒ hreflang render ra URL **tương đối** (`href="/"`,
+    `href="/en/"`). Thẻ CÓ (đính chính: báo cáo đầu buổi nói "hreflang=0" là SAI, grep hụt)
+    nhưng spec Google yêu cầu URL tuyệt đối → Google bỏ qua toàn bộ, vi/en không ghép cặp.
+  - Fix: set env ở production + đổi CẢ HAI fallback sang `https://tienvujsc.com.vn`.
+  - **Bài học**: fallback im lặng nguy hiểm hơn crash. Nếu code throw khi thiếu env thì lỗi
+    đã lộ ngay hôm deploy thay vì sống 2 tháng.
+- **`robots.txt` + `sitemap.xml` đều 404** (đã thử cả `sitemap-0.xml`, `sitemap_index.xml`).
+- **`/blog` trống 0 bài viết** — không có `href="/blog/..."` nào. Toàn bộ cluster Buổi 3
+  chưa có spoke nào live.
+
+**P1:**
+- 6 title trơ trọi (đã chốt bản thay ở Ghi chú 27/07); `/blog` + `/contact` **h1=0**.
+- Trang tĩnh (`/ /about /services /blog /contact /construction /products`) **không có
+  canonical, og:title, og:image, og:url** — chỉ trang dùng `SEO.js` mới có (mà cái đó đang
+  hỏng). Không og:image ⇒ share Zalo/Facebook ra thẻ trắng, đúng kênh user đang dùng.
+- **Không có JSON-LD Organization/LocalBusiness** ở đâu. Chỉ product detail có Product+Brand.
+- **CTA trên /about trỏ 404**: hero secondaryButtonHref = `/lien-he` (đường thật `/contact`).
+  Đã curl: 404. Trên site lead-gen = nút chuyển đổi dẫn vào ngõ cụt.
+- **NAP không nhất quán** (→ Buổi 13): địa chỉ footer VI "xã Thuận An, TP Hà Nội" vs navbar
+  mobile "Kim Sơn, Gia Lâm, Hà Nội" vs EN "Kim Son, Gia Lam, Hanoi". Email 2 kiểu
+  (`info@tienvujsc.com.vn` / `tienvuinfo@gmail.com`), hotline khác nhau giữa VI (09 678 32 669)
+  và EN (0913 304 809).
+- **Hotline giả còn sót**: `/contact` vẫn có `tel:0912345678` + `zalo.me/0912345678` nằm cạnh
+  số thật. Chuỗi `ten@gmail.com` (placeholder) còn trong messages contact.emailInvalid.
+- **Bản EN còn nội dung nghề cũ**: tagline `"Expert solutions, reliable power transmission"`
+  (nghề V-belt), brandAccent EN = "Expert Solutions".
+- **4 icon social đều `href: "#"`** (Facebook/Instagram/TikTok/YouTube) — liên quan trực tiếp
+  giả thuyết Buổi 2 về khách B2B kiểm fanpage trước khi liên hệ.
+- **CATEGORIES nghề cũ** trong `products/index.js:8-14`: chip lọc "Vòng bi", "Dây curoa"
+  (count = 0). Lệch câu chuyện 3 tầng của Buổi 4.
+- **Menu data cũ còn sót**: navbar có 2 mảng — `links` (cũ, chứa `/products/bang-tai`,
+  `/products/vong-bi`, `/products/day-curoa`, `/du-an` — đã curl, **tất cả 404**) và
+  `menuItems` (đúng, đang render). Mảng cũ chưa dọn.
+- **Ảnh hero /about là stock Unsplash** — Buổi 4: ảnh thật > stock; Buổi 3: /construction là
+  kho bằng chứng Experience, nên dùng ảnh công trình thật.
+- **Số liệu trang trí đáng ngờ**: hero /about có telemetry "Tải trọng 15,000 T/H", "Tốc độ
+  6.5 M/S", "Hoạt động 99.98%" — không rõ của cái gì. Rủi ro Trust với khách trong nghề.
+
+**P2:**
+- `/products` nặng 283KB HTML, `__NEXT_DATA__` chiếm 215KB (76%) — payload lặp nội dung đã
+  render. Ảnh hưởng LCP (→ Buổi 11).
+- `/en/` → `/en` redirect 308 (vô hại, phí crawl).
+- Tin tốt: **0 ảnh thiếu alt** trên mọi trang đã kiểm.
+
+**Lệch giữa content site và quy trình thật (business, → content rewrite):**
+- Site hứa "khảo sát tận nơi" ít nhất 5 chỗ (About, Giá trị cốt lõi/Tâm, Nguyên tắc với khách
+  hàng, Sứ mệnh, CTA cuối trang) và đặt nó làm lời mời chủ đạo. Quy trình THẬT (user nói
+  27/07): **tư vấn qua bản vẽ trước**, khảo sát tận nơi chỉ khi đơn đủ nghiêm túc, vì công
+  trình xa, đi mà không chốt được đơn thì tốn chi phí. → Đề xuất đổi sang lời hứa 2 bước:
+  "Gửi bản vẽ hoặc thông số — kỹ sư tư vấn quy cách và báo giá. Khảo sát tận nơi khi công
+  trình cần." Vừa đúng thực tế, vừa hạ rào cản chuyển đổi.
+- Điểm mạnh thật chưa được nói trên site: **phản hồi nhanh kể cả ngoài giờ hành chính**.
+
 ## Lộ trình (PLAN) / Nguồn — CHIA THEO PHASE
 
 ### Phase 0 — Nền tảng ✅ DONE
@@ -189,12 +269,16 @@ Domain thật: `tienvujsc.com.vn` (live, HTTP 200). DNS đang ở **Tenten** (ns
       Thực hành: map content hiện có (blog + policies + product) của tienvu-bt vào 1 cluster structure:
       https://searchengineland.com/guide/topic-clusters
       https://developers.google.com/search/docs/fundamentals/creating-helpful-content
-- [~] Buổi 4 (ĐANG DỞ 12/07 — xem "Đã học" + next_start) — On-page content writing: công thức title tag/meta description, heading hierarchy,
+- [x] Buổi 4 (DONE 2026-07-27) — On-page content writing: công thức title tag/meta description, heading hierarchy,
       keyword đặt tự nhiên (không nhồi nhét), internal linking. Thực hành: viết lại 1 trang thật của
       tienvu-bt theo checklist:
       https://developers.google.com/search/docs/fundamentals/seo-starter-guide
 
 ### Phase 2 — Technical SEO (dev có lợi thế, học nhanh hơn)
+> **ĐỔI THỨ TỰ 27/07**: làm **Buổi 9 (sitemap + robots)** TRƯỚC Buổi 5. Lý do: cả
+> `robots.txt` và `sitemap.xml` đều 404, site chưa index, 0 backlink, homepage không link
+> tới bất kỳ product/blog nào → Google gần như không có đường vào. Sitemap là đòn bẩy
+> lớn nhất còn lại sau khi fix canonical.
 - [ ] Buổi 5 — Site Architecture: cấu trúc phẳng vs sâu, URL structure, crawl budget (Google 2026: chỉ
       fetch 2MB đầu của HTML — liên hệ page weight thật của tienvu-bt). Thực hành: vẽ + đánh giá cấu
       trúc site hiện tại:
@@ -338,3 +422,37 @@ Domain thật: `tienvujsc.com.vn` (live, HTTP 200). DNS đang ở **Tenten** (ns
   không đổi position/impressions) + bài tập A (title /construction) + B (skeleton pillar
   /bang-tai-cao-su). Fix-list code user tự áp: contact.json hotline/zalo (+email?), H1 /blog /contact,
   meta /products theo bản chữa mẫu, title /construction.
+
+## Ghi chú buổi 2026-07-27 (phiên 4) — KHÉP BUỔI 4
+
+- User chọn "vừa học vừa làm, thực hành thẳng trên site". Mở phiên bằng **audit lại toàn bộ site
+  live** (curl mọi trang chính + 10 product detail + đọc payload CMS) → xem mục "Action items §3"
+  cho danh sách đầy đủ. Phát hiện lớn nhất: **canonical 10 trang product trỏ domain chết**, và
+  gốc rễ chung là 1 env var thiếu làm gãy canonical + og:url + hreflang.
+- Chữa xong 2 câu check hiểu treo từ 12/07 (đáp án (b); chỉ CTR đổi).
+- **Bài tập title — 3 vòng, user tiến bộ rõ**: vòng 1 `/products` 7/10 (đúng khung, thiếu "con lăn",
+  dùng "vật tư khai mỏ" thay vì từ ngành thật) nhưng `/construction` 4/10 (không keyword nào + lặp
+  từ). Vòng 2 `/services` 7/10, `/about` 5/10, `/contact` 3/10 (lặp lại đúng lỗi lặp từ), `/blog`
+  5/10. Vòng 3 (H1) — user copy title xuống làm H1, đã chữa bằng bảng so sánh vai trò title vs H1.
+- **User hỏi thẳng "viết H1 là như nào"** → dạy lại từ đầu bằng sơ đồ vị trí (title ở tab trình
+  duyệt + SERP, H1 là chữ to nhất trên trang), quan hệ H1→H2→H3 = mục lục, và chỉ đúng chỗ sửa
+  trong CMS. Ghi nhận: khái niệm này chưa vững ở buổi 12/07, cần kiểm lại khi audit Buổi 16.
+- **Bảng title + H1 CHỐT (chưa áp lên site)**:
+  | Trang | Title | H1 |
+  |---|---|---|
+  | `/` | giữ nguyên (đã đạt) | đã có |
+  | `/products` | `Băng tải cao su, con lăn & vật tư mỏ \| CTCP Tiến Vũ` | `Băng tải cao su, con lăn & vật tư khai thác mỏ` |
+  | `/construction` | `Công trình băng tải cao su & con lăn cho mỏ đá \| Tiến Vũ` | đã có |
+  | `/services` | `Khảo sát, lắp đặt & nối băng tải cao su \| CTCP Tiến Vũ` | đã có |
+  | `/about` | `CTCP Tiến Vũ — nhà cung cấp băng tải cao su & vật tư mỏ` | đã có |
+  | `/contact` | `Liên hệ & báo giá băng tải cao su, con lăn \| Tiến Vũ` | `Gửi bản vẽ, nhận tư vấn quy cách và báo giá — kể cả ngoài giờ` |
+  | `/blog` | `Kiến thức băng tải cao su & con lăn cho mỏ đá \| Tiến Vũ` | `Chọn, lắp đặt và bảo trì băng tải cao su cho mỏ đá` |
+- **Chỗ sửa đã dò ra chính xác**: `/products` title+desc = `frontend/messages/vi.json:46-47`
+  (+ `en.json`); `/products` H1 hardcode `products/index.js:64`. 5 trang còn lại
+  (`/about /services /contact /blog /construction`) lấy title từ `pageConfig.page` qua CMS →
+  sửa trong admin, zero-code. H1 cần tìm ô "heading level" trong section CMS; nếu section không
+  có ô đó thì phải thêm 1 dòng vào component section.
+- **Business context mới (user kể 27/07)**: phản hồi khách rất nhanh, **kể cả ngoài giờ hành
+  chính**; khảo sát chủ yếu **qua bản vẽ trước** vì công trình xa, đi khảo sát mà không chốt đơn
+  thì tốn chi phí. → Dùng làm H1 `/contact`, và lộ ra lệch giữa content site (hứa "khảo sát tận
+  nơi" 5 chỗ) và quy trình thật (xem Action items §3, mục cuối).
