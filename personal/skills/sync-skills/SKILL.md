@@ -1,6 +1,6 @@
 ---
 name: sync-skills
-description: Detect and symlink personal skills/commands/global-instructions that this machine hasn't linked yet. Symlinks into ~/.claude/skills, ~/.claude/commands, and ~/.claude/CLAUDE.md are local (not in git), so after pulling the dotfiles repo on another machine, newly-added skills/commands and the machine-wide CLAUDE.md need linking. This scans personal/skills/*, personal/commands/*.md, and personal/global-CLAUDE.md, links any that are missing (links first, reports after), and flags broken/mis-pointed symlinks without deleting them. Idempotent — safe to run repeatedly. A maintenance tool for adding new links after the first bootstrap, NOT the first-time installer (it can't link itself on a fresh machine). Use when asked to "sync skills", "link my skills", "symlink new skills", "sync-skills", or after pulling the repo with new skills on a machine.
+description: Detect and symlink personal skills, commands, path-scoped rules, and global instructions this machine hasn't linked yet — symlinks live outside git, so after pulling the dotfiles repo on another machine the new ones need linking. Links first and reports after; flags broken or mis-pointed symlinks without deleting them; idempotent. A maintenance tool for adding links after the first bootstrap, NOT the first-time installer (it can't link itself on a fresh machine). Use when asked to "sync skills", "link my skills", "symlink new skills", "/sync-skills", or after pulling the repo with new skills on a machine.
 ---
 
 # /sync-skills — Link personal skills/commands this machine is missing
@@ -31,6 +31,8 @@ mkdir -p ~/.claude/commands
 for c in personal/commands/*.md; do n=$(basename "$c"); [ -e ~/.claude/commands/"$n" ] || ln -s "$PWD/$c" ~/.claude/commands/"$n"; done
 # Machine-wide instructions. Refuses to clobber an existing real file — merge that by hand.
 [ -e ~/.claude/CLAUDE.md ] || ln -s "$PWD/personal/global-CLAUDE.md" ~/.claude/CLAUDE.md
+# Path-scoped rules, linked as ONE directory (Claude Code reads it recursively).
+[ -e ~/.claude/rules ] || ln -s "$PWD/personal/rules" ~/.claude/rules
 ```
 
 That bootstrap does exactly what this skill does — so on a fresh machine it also
@@ -39,9 +41,9 @@ additions.
 
 ## HARD GATES
 
-- **Only create symlinks** under `~/.claude/skills/`, `~/.claude/commands/`, and the
-  single file `~/.claude/CLAUDE.md`, each pointing back into the repo. Never delete or
-  overwrite anything.
+- **Only create symlinks** under `~/.claude/skills/`, `~/.claude/commands/`, the single
+  file `~/.claude/CLAUDE.md`, and the single directory `~/.claude/rules`, each pointing
+  back into the repo. Never delete or overwrite anything.
 - **Never touch the real files** in the repo. This skill only reads the repo and
   writes symlinks elsewhere.
 - **Broken/mis-pointed symlinks are reported, never auto-removed.** If a link is dead
@@ -167,15 +169,50 @@ diff "$HOME/.claude/CLAUDE.md" "$REPO/personal/global-CLAUDE.md"
 
 ---
 
-## Step 4 — Report
+## Step 4 — Link the rules directory (one directory symlink)
 
-Tally the lines from Steps 1-3 and present:
+`personal/rules/*.md` are path-scoped rules: each one carries a `paths:` frontmatter
+glob and loads only when Claude touches a matching file. Claude Code reads
+`~/.claude/rules/` recursively, so the whole directory links as **one** symlink — do
+NOT link the rule files individually:
+
+```bash
+src="$REPO/personal/rules"
+dest="$HOME/.claude/rules"
+if [ ! -d "$src" ]; then
+  echo "MISSING rules   personal/rules/ not in repo — nothing to link"
+elif [ -L "$dest" ]; then
+  target=$(readlink "$dest")
+  if [ ! -e "$dest" ]; then
+    echo "BROKEN  rules   → $target (target missing)"
+  elif [ "$target" != "$src" ]; then
+    echo "OTHER   rules   → $target (points elsewhere)"
+  else
+    echo "OK      rules   ($(ls -1 "$dest"/*.md 2>/dev/null | wc -l | tr -d ' ') rule files)"
+  fi
+elif [ -e "$dest" ]; then
+  echo "REALDIR rules   (this machine has its own real ~/.claude/rules — left alone)"
+else
+  ln -s "$src" "$dest" && echo "LINKED  rules   ($(ls -1 "$src"/*.md 2>/dev/null | wc -l | tr -d ' ') rule files)"
+fi
+```
+
+`REALDIR` here means the machine already has its own rules directory outside the repo.
+Don't merge it automatically — report it and let the user decide (they could move those
+files into `personal/rules/` and re-run, or keep them local).
+
+---
+
+## Step 5 — Report
+
+Tally the lines from Steps 1-4 and present:
 
 ```
 SYNC SKILLS
 ────────────────────────────────
 Skills:    {X} already linked · {Y} newly linked{ (names)}
 Commands:  {X} already linked · {Y} newly linked{ (names)}
+Rules:     {linked | already linked | needs attention}  ({N} rule files)
 Global:    CLAUDE.md {linked | already linked | needs attention}
 ────────────────────────────────
 ⚠ Needs your attention (not touched):
@@ -201,9 +238,11 @@ Claude session.
   points into the repo is safe and reversible).
 - **Never delete.** Dead or wrong symlinks are surfaced, never removed automatically —
   removing a link the user made intentionally would be wrong.
-- **Three link shapes, don't mix them.** Skills = directory symlinks; commands = file
-  symlinks; global CLAUDE.md = one file symlink at `~/.claude/CLAUDE.md`. Linking a
-  command as a directory (or vice-versa) breaks discovery.
+- **Four link shapes, don't mix them.** Skills = one directory symlink each; commands =
+  one file symlink each; global CLAUDE.md = one file symlink at `~/.claude/CLAUDE.md`;
+  rules = ONE directory symlink at `~/.claude/rules` (not one per file — Claude Code
+  reads that directory recursively). Linking a command as a directory, or rules
+  file-by-file, breaks discovery.
 - **Never overwrite a real `~/.claude/CLAUDE.md`.** A machine with its own global
   instructions keeps them; surface the diff and let the user merge.
 - **This skill can't link itself on a fresh machine** — that's the bootstrap's job
