@@ -117,9 +117,25 @@ shortcut:
   (with `/qa-login` priming cookies if the target needs login and neither MCP is
   already authenticated) — see that doc section for the full ladder. Only ask the
   user for a target URL here, and only if genuinely needed and not already known.
-- **B9. Stop here.** Run `/review` + local verify. Do **NOT** run `/my-commit`, do
-  **NOT** commit, do **NOT** push — that decision belongs to the user, after seeing
-  the result.
+- **B9. Ratchet, rồi stop.** Trước khi dừng, một câu hỏi (1 phút): *failure class
+  này có đáng đẻ ra một CƠ CHẾ không?* — +1 dòng pattern design-eye §D1 hoặc
+  negative list §D2 (**bắt buộc với bug UI**), +1 hook trong `personal/hooks/` nếu
+  đây là lỗi QUY TRÌNH lặp lại, viết lại message lint/test đã dẫn đi sai hướng, hoặc
+  giữ red test B5 lại thành regression test. Không đáng → nói rõ *"không ratchet
+  vì ..."*; đó là quyết định có ý thức, không phải bỏ quên.
+
+  Rồi chạy bước đóng của workflow.md B9 **theo đúng thứ tự, không rút gọn**:
+  1. **spec-check trước** — một agent fresh chỉ nhận root cause đã chứng minh ở B2 +
+     scope B6/B7 + diff, hỏi đúng một câu: *"fix đúng cái NGUỒN đã chứng minh không?
+     có drive-by refactor nào không xin phép không?"* Nó **không được** đọc lý luận
+     lúc fix — chấm theo spec bắt được lớp lỗi mà chấm theo code-quality bỏ sót
+     (silent scope drift, tự lấp gap ngoài scope).
+  2. `/tech-review` + `/impact-review` — 2 lens nhẹ, chạy song song được.
+  3. `/review` — pipeline nặng, chạy sau cùng.
+  4. local verify.
+
+  Do **NOT** run `/my-commit`, do **NOT** commit, do **NOT** push — that decision
+  belongs to the user, after seeing the result.
 
 If a gate fails (root cause unprovable, red-team surfaces a hole, verify doesn't
 hold), say so plainly and stop at that gate rather than pushing forward on a guess —

@@ -143,12 +143,22 @@ Follow Workflow B's gates exactly:
   own adversarial re-check if not) before implementing.
 - B5-B7: red test → minimal fix at the root, no drive-by refactor.
 - B8: verify + blast radius, using /my-chrome against the store URL above.
-- B9: stop at /review + local verify. Do NOT run /my-commit, do NOT commit, do NOT push
-  — that decision belongs to the user, made after seeing every agent's results together.
+- B9: run the closing sequence in workflow.md's order, don't collapse it — (1) spec-check
+  FIRST: re-read your own diff against ONLY the root cause you proved at B2 and the scope
+  you set at B6/B7, asking "did I fix the proven source, and did anything ride along that
+  nobody asked for?"; (2) /tech-review + /impact-review; (3) /review; (4) local verify.
+  Then stop. Do NOT run /my-commit, do NOT commit, do NOT push — that decision belongs to
+  the user, made after seeing every agent's results together.
+- B9 ratchet: PROPOSE, don't write. Answer "does this failure class deserve a mechanism?"
+  (a design-eye §D1 pattern line / §D2 negative-list line / a hook / a rewritten lint
+  message / keeping the red test as a regression test) and put the proposal in your
+  report. Do NOT edit design-eye.md or personal/hooks/ yourself — N agents editing the
+  same shared files concurrently is a merge conflict by construction. The coordinator
+  applies the accepted ones in a single pass.
 
 Report back: root cause found (with the runtime evidence), what you changed and why,
-what you verified and how, and current state (clean/ready-for-review, or blocked and
-why).
+what you verified and how, current state (clean/ready-for-review, or blocked and why),
+and your ratchet proposal (or an explicit "no ratchet because ...").
 ```
 
 Dispatch up to the confirmed parallelism level from Step 2. If the batch is larger than
@@ -196,6 +206,23 @@ UI bugs additionally carry their design-verify scores (from design-eye §B) in t
 verified line, and any polish items the agents flagged get collected into one shared
 "polish backlog" section — same standard across all agents, so N agents produce ONE
 taste, not N.
+
+**Then apply the ratchets — you, once, not the agents.** Collect every agent's ratchet
+proposal, drop the duplicates (a batch often hits the same failure class more than once,
+and that repetition is itself the signal a mechanism is worth it), and write the accepted
+ones in a single pass: pattern lines into design-eye §D1/§D2, a hook into
+`personal/hooks/`, a rewritten lint message, a regression test kept from a red test.
+List what got written in the report:
+
+```
+RATCHET — <k> cơ chế mới từ batch này
+  + design-eye §D1: <dòng pattern>  (đề xuất bởi bug 1, bug 4 — gặp 2 lần)
+  + personal/hooks/<file>: <chặn cái gì>
+  − bug 2: không ratchet (one-off, đúng như agent nói)
+```
+
+A batch that produces zero ratchets is a valid outcome — say so explicitly rather than
+leaving the section out, so it reads as a decision instead of a skipped step.
 
 Every bug lands in exactly one bucket: **done and verified**, **blocked** (with what's
 blocking it), or **root cause not proven** (agent correctly refused to guess, per

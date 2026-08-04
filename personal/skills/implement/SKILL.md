@@ -172,9 +172,16 @@ claim without fresh verification evidence.**
 1. **Plan-completion audit.** Walk the plan item by item. For each: done / deferred /
    dropped. If anything is deferred or dropped, list it and AskUserQuestion before
    declaring complete (don't bury skipped scope).
-2. **Full test suite, fresh.** Run it now (per CLAUDE.md). Paste the actual output.
+2. **Spec-check — plan vs diff, before any quality review.** Re-read the diff against
+   ONLY the plan (not against your own reasoning while building it) and answer: did
+   this build what the plan said — what's missing, what's extra, what quietly changed?
+   This is workflow.md's A8/B9 first stage, and it catches a different class than
+   code-quality review does: silent scope drift, gaps filled with unrequested
+   invention, a "while I was in there" refactor. Anything found here is reported, not
+   silently reconciled.
+3. **Full test suite, fresh.** Run it now (per CLAUDE.md). Paste the actual output.
    Stale output from a mid-run step does NOT count.
-3. **Report:**
+4. **Report:**
 
 ```
 IMPLEMENT REPORT — {plan title}
@@ -182,13 +189,15 @@ IMPLEMENT REPORT — {plan title}
 Mode:        {feature | bugfix}
 Plan:        {file}
 Steps done:  {N}/{M}   (deferred: {list or none})
+Spec-check:  {khớp plan | lệch: what's missing/extra/changed}
 Tests:       {pass/fail summary + how run}   [fresh output above]
 Still open:  {anything incomplete, or "nothing"}
-Next:        Ready for /review, then /my-commit.
+Next:        Ready for /tech-review + /impact-review, then /review, then /my-commit.
 ════════════════════════════════════════
 ```
 
-4. **Do NOT commit.** Stop here. The user runs `/review` and `/my-commit`.
+5. **Do NOT commit.** Stop here. The user runs the remaining review lenses and
+   `/my-commit`.
 
 ---
 
@@ -238,6 +247,13 @@ gstack skill.
     Surface it to the user.
 - **Final audit:** original bug scenario re-run and confirmed fixed; regression test
   passes; full suite green.
+- **Ratchet (closing step, 1 minute).** Does this failure class deserve a *mechanism*
+  rather than just a fix? A design-eye §D1 pattern line or §D2 negative-list line (
+  mandatory for UI bugs), a hook in `personal/hooks/`, a rewritten lint/test message
+  that had pointed the wrong way, or promoting the regression test into the permanent
+  suite. Not worth it → say *"no ratchet because ..."* out loud. A silent skip is the
+  one outcome that isn't allowed: an error that only ever gets fixed will be paid for
+  again.
 
 ---
 
