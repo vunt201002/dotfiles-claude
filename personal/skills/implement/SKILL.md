@@ -217,7 +217,11 @@ gstack skill.
 - **Read the brain first (return arrow).** For UI bugs, check design-eye's §D1
   pattern table + §D2 negative list (`~/.claude/skills/my-frontend-fix/references/design-eye.md`)
   before implementing — the plan's fix may match a known pattern class whose
-  recognition cue confirms (or contradicts) the approach cheaply.
+  recognition cue confirms (or contradicts) the approach cheaply. For every bug,
+  UI or not, also check what's already known about this area: `bin/gstack-decision-search
+  --query <keyword>` if the repo has it, plus vault notes (`/joy-note` for Joy,
+  brain-vault otherwise). A plan written days ago may predate a decision that
+  changes the approach.
 - **Check the plan names a root cause.** If the plan jumps to a fix without stating
   *why* the bug happens, warn: "This plan doesn't state a root cause. Fixing symptoms
   causes whack-a-mole. Consider `/investigate` to find the root cause first, then come

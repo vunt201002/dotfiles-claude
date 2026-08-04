@@ -132,6 +132,10 @@ before closing B8. Include the design-verify scores in your report. [Medium]/[Ni
 findings are reported as polish items, never fixed inline.
 
 Follow Workflow B's gates exactly:
+- B1.5: before building any hypothesis, spend 30 seconds reading what's already known
+  about this area — `bin/gstack-decision-search --query <keyword>` if the repo has it,
+  plus vault notes. A matching note does NOT exempt you from B2's runtime proof; it
+  only tells you which hole to dig first.
 - B2: do not proceed past "prove root cause" without runtime evidence. If you cannot
   find/prove a root cause, STOP and report back what you tried and where you're stuck
   — do not guess a fix.

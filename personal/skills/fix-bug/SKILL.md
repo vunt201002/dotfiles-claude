@@ -76,6 +76,12 @@ shortcut:
 
 - **B1. Context** — read the bug: description, repro, when it started. Still
   mờ/unclear after Step 1's restate? Ask before investigating on a guess.
+- **B1.5. Đọc não trước khi đào** (return arrow, 30 giây) — vùng này từng đụng
+  chưa? Tra trước khi dựng giả thuyết mới: `bin/gstack-decision-search --query
+  <keyword>` (nếu repo có), vault note (`/joy-note` cho Joy, brain-vault cho phần
+  còn lại). Bug UI: phần pattern table nằm ở B2 bên dưới. Khớp một note cũ
+  **không miễn** Iron Law — vẫn phải PROVE bằng runtime ở B2; note chỉ giúp đào
+  trúng hố nhanh hơn, không thay được bằng chứng.
 - **B2. Investigate + PROVE root cause** (`/my-bug-hunter`) — reproduce, localize,
   observe runtime per the app's Project Adapter (FE: debug-global/Playwright ·
   BE: emulator). UI bug: opening the surface also means running design-eye's §A
