@@ -460,6 +460,7 @@ function applyStatusRules_(sh, colorByStatus) {
       .whenTextEqualTo(names[j])
       .setBackground(chip.bg)
       .setFontColor(chip.fg)
+      .setBold(true)
       .setRanges([full])
       .build());
     appended++;
@@ -499,6 +500,8 @@ function statusRuleValue_(rule) {
 }
 // Rule do CHÍNH code này tạo: đúng cột Status, khớp text tuyệt đối, và cặp nền/chữ
 // trùng khít một dòng trong NOTION_CHIP. Chỉ những rule này mới được dựng lại.
+// Cố tình KHÔNG xét bold: rule sinh trước khi có bold vẫn phải nhận ra là của code
+// thì lần chạy sau mới dựng lại được thành bold.
 function isOwnStatusRule_(rule) {
   var bc = textEqRuleCondition_(rule);
   if (!bc) return false;

@@ -48,7 +48,7 @@ const TEXT_EQUAL_TO = 'TEXT_EQUAL_TO', TEXT_CONTAINS = 'TEXT_CONTAINS';
 function rgbColor(hex) { return hex ? { asRgbColor: () => ({ asHexString: () => hex }) } : null; }
 class MockCfRule {
   constructor(s) {
-    this.text = s.text; this.bg = s.bg; this.fg = s.fg;
+    this.text = s.text; this.bg = s.bg; this.fg = s.fg; this.bold = s.bold || false;
     this.ranges = s.ranges.slice(); this.criteria = s.criteria; this.values = (s.values || []).slice();
   }
   getRanges() { return this.ranges.slice(); }
@@ -65,13 +65,14 @@ class MockCfRule {
 }
 function newCfRuleBuilder(from) {
   const s = from
-    ? { text: from.text, bg: from.bg, fg: from.fg, ranges: from.ranges.slice(),
+    ? { text: from.text, bg: from.bg, fg: from.fg, bold: from.bold, ranges: from.ranges.slice(),
         criteria: from.criteria, values: from.values.slice() }
-    : { text: null, bg: null, fg: null, ranges: [], criteria: null, values: [] };
+    : { text: null, bg: null, fg: null, bold: false, ranges: [], criteria: null, values: [] };
   const b = {
     whenTextEqualTo(v) { s.text = v; s.criteria = TEXT_EQUAL_TO; s.values = [v]; return b; },
     setBackground(c) { s.bg = c; return b; },
     setFontColor(c) { s.fg = c; return b; },
+    setBold(v) { s.bold = v; return b; },
     setRanges(rs) { s.ranges = rs.slice(); return b; },
     build() { return new MockCfRule(s); },
   };
@@ -79,7 +80,7 @@ function newCfRuleBuilder(from) {
 }
 // Rule "của anh" dựng tay trong test (chưa từng qua builder của code).
 function mkRule(o) {
-  return new MockCfRule({ text: o.text || null, bg: o.bg || null, fg: o.fg || null,
+  return new MockCfRule({ text: o.text || null, bg: o.bg || null, fg: o.fg || null, bold: o.bold || false,
                           ranges: o.ranges || [], criteria: o.criteria || null, values: o.values || [] });
 }
 class MockSheet {
@@ -569,6 +570,22 @@ t('màu lấy từ schema Notion (không hardcode), map đúng chip Notion', () 
   const done = rules.find(x => x.text === 'Done'), testing = rules.find(x => x.text === 'Testing');
   eq(done.bg, '#DBEDDB', 'green bg'); eq(done.fg, '#448361', 'green fg');
   eq(testing.bg, '#D3E5EF', 'blue bg'); eq(testing.fg, '#337EA9', 'blue fg');
+});
+t('chữ status in đậm — chip Notion ở nét thường đọc bị mờ trên nền nhạt', () => {
+  const schema = {}; schema[DS1] = [statusOption('Done', 'green'), statusOption('Testing', 'blue')];
+  const env = colorEnv(['Done'], schema);
+  env.sandbox.colorStatusesFromNotion();
+  rulesOf(env, '07/2026').forEach(r => eq(r.bold, true, 'bold: ' + r.text));
+});
+t('rule sinh từ bản cũ (chưa bold) vẫn nhận là của code → dựng lại thành bold', () => {
+  const schema = {}; schema[DS1] = [statusOption('Done', 'green')];
+  const env = colorEnv(['Done'], schema);
+  const sh = env.ss.getSheetByName('07/2026');
+  sh.setConditionalFormatRules([ownStatusRule(sh, 'Done', '#DBEDDB', '#448361')]);
+  env.sandbox.colorStatusesFromNotion();
+  const rules = rulesOf(env, '07/2026');
+  eq(rules.length, 1, 'không nhân đôi rule');
+  eq(rules[0].bold, true, 'rule cũ được nâng lên bold');
 });
 t('"Waiting to live" (status đang không màu của anh) cũng được tô', () => {
   const schema = {}; schema[DS1] = [
