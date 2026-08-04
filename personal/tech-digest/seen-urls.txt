@@ -183,3 +183,17 @@ https://turso.tech/blog/a-new-modern-version-of-postgres-in-rust
 https://pandoc.org/twenty-years-of-pandoc.html
 https://cryptoslate.com/is-the-web3-startup-extinction-event-here-as-wall-street-silently-inherits-crypto-architecture/
 https://changelog.complete.org/archives/44456-celebrating-45-years-of-kermit-with-the-first-new-c-kermit-release-in-15-years-and-working-with-a-decades-old-c-codebase
+https://john.fun/elevators
+https://api-docs.deepseek.com/updates/
+https://tailscale.com/blog/hugging-face-intrusion
+https://earendil.com/posts/session-portability/
+https://github.com/yc-software/qm
+https://blog.google/security/chrome-stronger-with-every-update/
+https://blog.jim-nielsen.com/2026/ai-aesthetic/
+https://microsoft.github.io/flint-chart/
+https://shopify.dev/changelog/pos-ui-extensions-can-now-print-directly-to-hardware-receipt-printers
+https://shopify.dev/changelog/updating-an-orders-shipping-address-returns-accurate-financial-data
+https://forum.cursor.com/t/usage-page-to-token-amount-what/167153
+https://github.com/openjdk/jdk/pull/31120
+https://github.com/golang/go/issues/80590
+https://www.quantamagazine.org/is-ai-reasoning-right-for-the-wrong-reasons-20260731/
