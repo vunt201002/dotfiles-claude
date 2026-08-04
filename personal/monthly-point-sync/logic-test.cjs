@@ -16,6 +16,7 @@ const ME = '168cd13f-884c-4138-bcec-bbc6ed47ea34';
 const DS1 = '25ab0da4-49f1-817c-903b-000b9aa2443b';
 const DS2 = '74bfb6cb-c769-4121-b1ec-887b2765d625';
 const DASHBOARD_NAME = 'Dashboard';
+const STATUS_FMT = Number(/var STATUS_FMT = (\d+)/.exec(SRC)[1]);
 
 // ---------------- mock Sheets ----------------
 const MAXR = 200, MAXC = 12;
@@ -886,6 +887,21 @@ t('bảng màu không đổi → lượt sync sau không đọc Notion, không g
   eq(ss.getSheetByName('06/2026').cfWrites, writes, 'không ghi lại rule');
   eq(schemaFetches(env).length, fetched, 'không gọi lại Notion');
 });
+t('cache đời cũ (format rule khác) → sync sau tự dựng lại rule theo format mới', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const sh = ss.insertSheet('06/2026');
+  sh.setConditionalFormatRules([ownStatusRule(sh, 'Ready to Test', '#FDECC8', '#CB912F')]);
+  const cache = JSON.stringify({ map: { 'Ready to Test': 'yellow' }, ts: T0, fmt: STATUS_FMT - 1 });
+  const schema = {}; schema[DS1] = [statusOption('Ready to Test', 'yellow')];
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Ready to Test', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '07/2026', ss, schema, pages, now: T0,
+                        props: { STATUS_COLOR_CACHE: cache } });
+  env.sandbox.syncNow();
+  const rules = ss.getSheetByName('06/2026').getConditionalFormatRules();
+  eq(rules.length, 1, 'không nhân đôi rule');
+  eq(rules[0].bold, true, 'rule đời cũ được dựng lại theo format mới');
+  eq(JSON.parse(env.props.STATUS_COLOR_CACHE).fmt, STATUS_FMT, 'cache ghi lại đúng format');
+});
 t('gặp status lạ → đọc lại Notion và cập nhật rule', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('06/2026');
   const schema = {}; schema[DS1] = [statusOption('Ready to Test', 'yellow')];
@@ -963,7 +979,7 @@ t('_TEMPLATE có rule → tab tháng mới clone ra là có màu sẵn', () => {
 });
 t('_TEMPLATE chưa có rule nhưng đã có cache → tab tháng mới vẫn được tô', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
-  const cache = JSON.stringify({ map: { 'Ready to Test': 'yellow' }, ts: T0 });
+  const cache = JSON.stringify({ map: { 'Ready to Test': 'yellow' }, ts: T0, fmt: STATUS_FMT });
   const schema = {}; schema[DS1] = [statusOption('Ready to Test', 'yellow')];
   const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Ready to Test', 3, 'Dev')];
   const env = makeEnv({ nowMonth: '07/2026', ss, schema, pages, now: T0,

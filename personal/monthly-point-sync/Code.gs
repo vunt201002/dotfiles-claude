@@ -343,6 +343,10 @@ function pinDashboardFirstMenu_() {
 var STATUS_COL = 2; // B
 var STATUS_CACHE_PROP = 'STATUS_COLOR_CACHE';
 var STATUS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// Format của rule do code sinh. Bảng màu không đổi thì code không ghi lại rule, nên
+// đổi cách VẼ rule (thêm bold, đổi font...) mà không bump số này thì sheet giữ rule đời
+// cũ vĩnh viễn. Bump = lượt sync kế tiếp dựng lại rule theo format mới.
+var STATUS_FMT = 2;
 // 10 tên màu Notion cho phép -> đúng chip màu light-mode của Notion (nền + chữ).
 var NOTION_CHIP = {
   'default': { bg: '#E3E2E0', fg: '#37352F' },
@@ -405,7 +409,8 @@ function readStatusCache_() {
   } catch (e) { return null; }
 }
 function writeStatusCache_(map, ts) {
-  PropertiesService.getScriptProperties().setProperty(STATUS_CACHE_PROP, JSON.stringify({ map: map, ts: ts }));
+  PropertiesService.getScriptProperties()
+    .setProperty(STATUS_CACHE_PROP, JSON.stringify({ map: map, ts: ts, fmt: STATUS_FMT }));
 }
 function sameMap_(a, b) {
   var ka = Object.keys(a), kb = Object.keys(b);
@@ -414,10 +419,12 @@ function sameMap_(a, b) {
   return true;
 }
 // Trigger chạy 10 phút/lần — gọi Notion mỗi lần là đốt quota vô ích. Chỉ đọc lại
-// schema khi: chưa có cache, gặp status chưa có trong cache (Notion vừa thêm), hoặc
-// cache quá 24h (bắt ca đổi MÀU bên Notion mà tên status không đổi).
+// schema khi: chưa có cache, gặp status chưa có trong cache (Notion vừa thêm), cache
+// quá 24h (bắt ca đổi MÀU bên Notion mà tên status không đổi), hoặc rule trong sheet
+// đang ở format đời cũ.
 function needStatusRefresh_(cache, seenStatuses) {
   if (!cache) return true;
+  if (cache.fmt !== STATUS_FMT) return true;
   if (now_() - cache.ts > STATUS_CACHE_TTL_MS) return true;
   for (var i = 0; i < seenStatuses.length; i++)
     if (!cache.map.hasOwnProperty(seenStatuses[i])) return true;
@@ -581,7 +588,7 @@ function syncStatusColors_(ss, seenStatuses) {
     Logger.log('Bỏ qua đồng bộ màu status: đọc schema Notion không đủ — giữ nguyên rule đang có.');
     return { refreshed: false, applied: 0 };
   }
-  var changed = !cache || !sameMap_(cache.map, sc.map);
+  var changed = !cache || cache.fmt !== STATUS_FMT || !sameMap_(cache.map, sc.map);
   writeStatusCache_(sc.map, now_());
   var orphans = orphanStatuses_(ss, sc.map);
   if (orphans.length)
