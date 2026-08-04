@@ -50,6 +50,16 @@ if [ -z "$CLAUDE_STOP_CHECK" ]; then
         exit 0  # không có root tsconfig thật để check — không giả bộ check
       fi
       ;;
+    *dotfiles-claude*)
+      # Repo harness không có build/tsc, nhưng monthly-point-sync CÓ test thật
+      # (logic-test.cjs, 35 case, nạp Code.gs thật vào node:vm). Chỉ gate khi
+      # turn này thực sự đụng thư mục đó — turn sửa skill/doc không phải trả giá.
+      if git diff --name-only HEAD 2>/dev/null | grep -q '^personal/monthly-point-sync/'; then
+        CLAUDE_STOP_CHECK="cd '$root/personal/monthly-point-sync' && node logic-test.cjs"
+      else
+        exit 0
+      fi
+      ;;
     *) exit 0 ;;
   esac
 fi
