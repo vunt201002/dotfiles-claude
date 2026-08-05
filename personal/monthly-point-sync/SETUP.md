@@ -30,6 +30,17 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
 - Hoặc dùng menu trong Sheet: reload sheet → menu **🔄 Point Sync → Install 10-min auto-sync**.
 - Menu **🔄 Point Sync → Sync now** để chạy tay bất cứ lúc nào.
 
+## Script Properties (Project Settings)
+| Property | Ai ghi | Nghĩa |
+|---|---|---|
+| `NOTION_TOKEN` | anh, 1 lần | Bí mật duy nhất. Không nằm trong code. |
+| `ACTIVE_MONTH` | menu ⏪ / ✅ | Ghim tháng đích cho dòng MỚI. **Vắng = tháng lịch.** |
+| `CLOSED_THROUGH` | menu ✅ | Chốt sổ tới hết tháng này; tab ≤ nó không nhận task mới. **Vắng = chưa chốt tháng nào.** |
+| `STATUS_COLOR_CACHE` | script | Cache bảng màu status, để khỏi gọi Notion mỗi 10 phút. |
+| `ROW_FORMAT_VERSION` | script | Phiên bản format dòng đã đặt (wrap cột tên + checkbox Have). Xoá đi = đặt lại ở lượt sync sau. |
+> Ba cái dưới do menu tự lo, không cần sửa tay. Vắng mặt luôn là trạng thái bình thường
+> và an toàn — xoá đi là quay về mặc định chứ không hỏng gì.
+
 ## Quét bù task bị sót
 - Sync tự động chỉ ghi task khi **bắt được lúc nó chuyển** sang Ready to Test trở đi.
   Task đi quá nhanh giữa 2 nhịp 10 phút, hoặc task không-cần-test kéo **thẳng** sang
@@ -47,13 +58,66 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   Mốc chốt không cố định nên không auto — anh tự bấm:
 - **⏪ Vẫn tính cho tháng trước (06/2026)**: từ lúc bấm, task MỚI được ghi vào tab
   tháng trước thay vì tháng lịch. Label tự điền đúng tháng, không phải gõ gì.
-- Chốt sổ xong: **✅ Chốt: sang tháng lịch (07/2026)** — gỡ ghim, về bình thường.
+- Chốt sổ xong: **✅ Chốt: sang tháng lịch (07/2026)** — gỡ ghim, về bình thường, **và
+  khoá luôn tháng 6**: từ đó tab tháng 6 (và mọi tab cũ hơn) **không nhận task mới nữa**.
 - **An toàn khi quên gỡ:** ghim cũ hơn tháng liền trước tự bị bỏ qua (quay về tháng
   lịch, lệch tối đa 1 tháng). Đang ghim thì mỗi lần mở sheet có toast nhắc, và tên
   menu luôn hiện tháng đang tính (`🔄 Point Sync — tháng 06/2026`).
 - Ghim chỉ đổi tab cho dòng MỚI (kể cả quét bù). Update dòng cũ / Have / Note giữ
   nguyên hành vi. Ghim lưu ở Script Property `ACTIVE_MONTH` — chỉ thao tác qua menu,
   không cần sửa tay.
+
+## Chốt sổ tháng — tháng cũ không nhận task mới nữa
+- Trước đây quên bấm "✅ Chốt" thì ghim tháng 6 còn hiệu lực hết tháng 7, task mới cứ
+  chảy vào tab tháng cũ. Giờ **nút ✅ làm luôn việc chốt**: một khi đã sang tháng mới
+  thì tháng cũ đóng, không phải nhớ thêm nút nào.
+- Mốc chốt lưu ở Script Property `CLOSED_THROUGH` (một tháng `MM/YYYY`) — **mọi tab
+  tháng ≤ mốc** đều đã chốt. Chưa bấm bao giờ = chưa chốt tháng nào, mọi thứ y như cũ.
+- Mốc **chỉ tăng, không bao giờ giảm** — bấm lại nút ✅ không mở lại tháng đã chốt.
+- **Tháng đã chốt vẫn được cập nhật đầy đủ:** Status / tên task / Point / Role vẫn sync
+  từ Notion như thường, vẫn được ghi note, vẫn được dọn dòng trùng. Chốt chặn đúng **một**
+  việc: **thêm dòng mới**. `Have` và `Note` anh tự gõ vẫn không bao giờ bị đè, y như trước.
+- Task đáng lẽ vào tháng đã chốt sẽ **không bị nuốt im lặng**: nó được đếm, ghi vào
+  Execution log, và hiện ngay trong alert của "quét bù".
+- **Lỡ chốt sớm?** Bấm **⏪ Vẫn tính cho tháng trước** — nếu tháng đó đã chốt, script
+  hỏi lại "Tháng MM/YYYY đã chốt sổ. Mở lại để tính tiếp?". Chọn Có là mở lại đúng tháng
+  đó rồi ghim luôn; chọn Không thì không đổi gì.
+- Tên menu luôn mang dấu mốc chốt (`🔄 Point Sync — tháng 08/2026 (đã chốt ≤ 07/2026)`).
+
+## Ghi chú tay ở cột Note (H)
+
+- Cứ **gõ thẳng vào ô H**. Script **không bao giờ** đè lên ô đã có chữ — cả 4 chỗ nó ghi
+  Note đều kiểm ô trống trước.
+- Cột Note được để kiểu **chữ ghi chú**: wrap (không tràn sang khối KPI ở cột I+), chữ
+  **nghiêng, xám, nhỏ hơn một cỡ** — ghi chú lùi ra sau chứ không tranh chỗ với task.
+  Cột đang hẹp thì script nới ra ~280px; anh đã tự kéo rộng hơn thì nó không đụng.
+- Note của script luôn mở đầu bằng **🤖**. Đó là dấu nhận diện duy nhất, nên **mọi icon
+  khác thuộc về anh**: `📝`, `ℹ️`, `✅`… gõ thoải mái, không bao giờ bị nhận vơ.
+  (Mac: `Ctrl + Cmd + Space` mở bảng emoji.)
+- **Đừng viết thêm vào sau một note 🤖 có sẵn.** Ô đó vẫn bị tính là của script, nên nếu
+  dòng ấy sau này bị dọn vì trùng thì chữ anh thêm mất theo. Muốn giữ thì xoá dấu 🤖 đi
+  rồi viết lại từ đầu.
+- Ô H **đã có chữ của anh thì script thôi ghi cảnh báo vào đó** — cảnh báo trùng của dòng
+  ấy chỉ còn trong Execution log, mà log chỉ giữ vài ngày.
+- Note nằm trong vùng A..H nên **một dòng chỉ có Note vẫn được tính là dòng đã dùng** —
+  task mới sẽ không rơi vào đó.
+
+## 🩺 Chẩn đoán sheet
+- Menu **🔄 Point Sync → 🩺 Chẩn đoán sheet** — **chỉ đọc**, không sửa gì trong sheet.
+  Tóm tắt hiện ra trong hộp thoại, chi tiết từng tab / từng dòng nằm ở Execution log
+  (Extensions → Apps Script → Executions).
+- Nó trả lời mấy câu chỉ nhìn sheet thật mới biết:
+  - Tab nào **không đúng dạng `MM/YYYY`** (bị đổi tên, `7/2026`, thừa khoảng trắng).
+    Tab như vậy **vô hình** với sync: task trong đó bị coi là chưa có nên bị add lại ở
+    tháng mới, lại còn không được tô màu. Đổi tên đúng dạng là hết.
+  - Dòng nào **trống cột A mà vẫn còn data** ở B..H (dòng anh sửa tay — thủ phạm cũ của
+    vụ bị ghi đè).
+  - Dòng nào **thiếu page id ở cột G** (không khớp được theo id → dễ bị add lại).
+  - **Page id / tên task trùng** giữa các tab.
+  - Rule màu status nào còn ở **đời cũ**.
+  - **Quét bù sẽ thêm bao nhiêu dòng** nếu bấm bây giờ — đo từ `_STATE`: task đã counted
+    mà chưa có dòng nào trong sheet. Đây là bán kính nổ, xem trước rồi hãy bấm.
+- Chạy một lần rồi gửi lại nội dung log là đủ để soi.
 
 ## Cách hoạt động
 - Quét các data source trong `WATCH_SOURCES`, lấy task anh là **Developer** hoặc **Reviewer**.
@@ -63,9 +127,49 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
 - Task **đã có** (khớp theo Notion page id, ở **bất kỳ** tab tháng nào) → cập nhật
   Status/Point/Role/tên ngay tại tab đó, kể cả tab tháng cũ; **giữ nguyên** Have và Note.
 - **Không bao giờ** thêm dòng mới vào tab tháng cũ — dòng mới chỉ vào tháng hiện tại.
+- **Task đã chuyển về tháng cũ thì không bị kéo lại.** Trước khi thêm, script quét mọi
+  tab tháng: task đã có ở tab **cũ hơn** tháng đang tính là thôi, không add. Nếu dòng cũ
+  đó **trống cột G** (anh gõ tay / cắt-dán thiếu cột nên không có id để khớp), script
+  khớp theo **tên** và **vá luôn page id vào ô G trống** — lần sau khớp bằng id, hết
+  cảnh mỗi lượt sync lại mọc thêm một dòng. Ô G đã có id thì **không bao giờ** bị ghi đè.
+  Khớp theo tên là **suy đoán**, nên mỗi lần vá script để lại dấu `🤖 Tự gán Notion id
+  theo tên task` ở cột **Note (H)** — hai task khác nhau mà trùng tên thì anh nhìn
+  sheet là thấy, xoá dấu đi là xong. Note anh tự gõ thì không bị đè.
+  Việc vá này chạy ở **mọi lượt sync**, kể cả trigger 10 phút — không phải đợi bấm "quét
+  bù". Nó không phụ thuộc vào việc task có đang vượt mốc hay không, nên dòng thiếu id tự
+  lành ở lượt sync kế tiếp thay vì nằm chờ người nhớ ra.
+- **Một task nằm ở 2 tab tháng: trùng rõ thì tự dọn, trùng mờ thì ghi chú.** Khớp bằng id
+  chỉ tìm ra task đang ở đâu, không biết nó có bản sao chỗ khác. Nếu bản sao ở tab kia lại
+  giữ id thì script bám vào đó mãi và dòng còn lại thành mồ côi. Giờ mỗi lượt sync còn so
+  theo **tên**, rồi phân loại theo **page id**:
+  - Bên kia **trống id hoặc trùng id** → cùng một task. Giữ dòng ở **tab tháng cũ nhất**,
+    **dọn** bản sao ở tháng mới hơn, vá id vào dòng giữ lại.
+  - Bên kia có **id khác hẳn** → hai task Notion khác nhau trùng tên. **Không dọn**, chỉ ghi
+    `🤖 Nghi trùng TÊN (page id khác)` vào cột **Note (H)** để anh tự quyết.
+
+  Dọn ở đây là **xoá nội dung A..H**, không xoá cả dòng — khối KPI nằm ở cột I+ trên cùng
+  những dòng đó, xoá dòng là mất luôn công thức. Note anh **tự gõ** trên dòng bị dọn vẫn
+  được giữ nguyên; chỉ note do script ghi mới bị dọn theo. Lỡ dọn nhầm thì File → Version
+  history khôi phục được.
+- **Dòng mới rơi vào dòng trống đầu tiên**, lấp lỗ do luật 8 dọn bản sao để lại thay vì
+  rơi xuống đáy. Vẫn không bao giờ ghi đè lên dòng còn nội dung — ghi vào ô trống thì
+  không mất gì. Dòng cuối tính theo cả vùng A..H,
+  nên dòng anh sửa tay (trống tên nhưng còn Status/Point/Note) **không bị ghi đè** nữa.
+  Block KPI ở cột I trở đi không tính, nên dòng mới cũng không bị đẩy xuống chỗ trống.
 - **Reviewer xử như Dev**: chỉ add khi status ≥ Ready to Test và chưa có ở tháng nào trước.
+  So status **không phân biệt hoa thường** — lệch một chữ cái (`Waiting to Launch` vs
+  `Waiting to launch`) từng đủ để task đi thẳng vào status đó không bao giờ được tính.
+- **Tên task dài tự xuống dòng** ở cột A thay vì bị cắt cụt, và **checkbox cột Have phủ hết
+  cột** — dòng thêm về sau hay dòng anh cắt-dán tay đều có ô tick như nhau, không còn cảnh
+  dòng có dòng không. **Chữ căn giữa theo chiều dọc** cho cả A..H và **căn giữa ngang** cho
+  Status→Card: tên task wrap thành 2-3 dòng làm dòng cao lên, ô một dòng bên cạnh mặc định
+  dính đáy nên nhìn lệch. Cột tên và cột Note giữ căn trái — chữ dài mà căn giữa thì khó đọc.
+  Tất cả đặt một lần cho cả cột, gắn số phiên bản `ROW_FORMAT_VERSION`.
+- **Dòng mất link Card được vá lại.** Đường update xưa nay chỉ ghi Status/Tên/Point/Role nên
+  dòng nào mất link (cắt-dán thiếu cột) là mất vĩnh viễn. Giờ ô Card **đang trống** thì được
+  điền lại từ Notion; link anh tự sửa thì không bao giờ bị đè.
 - **Nghi trùng** (cùng tên, khác id — vd task từ board cũ): vẫn add, nhưng ghi cảnh báo
-  `⚠ Nghi trùng "<tên>" ở tab MM/YYYY` vào cột **Note (H)**. Anh check rồi xoá tay nếu trùng thật.
+  `🤖 Nghi trùng "<tên>" ở tab MM/YYYY` vào cột **Note (H)**. Anh check rồi xoá tay nếu trùng thật.
 - Tab tháng mới được nhân bản từ sheet ẩn `_TEMPLATE` (giữ nguyên format/KPI). Cột H
   (Note) để trống trong template, code chỉ ghi khi có nghi trùng; summary/KPI ở cột I trở đi.
 
@@ -92,16 +196,26 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
 - **Chữ status in đậm.** Chữ của chip Notion là màu nhạt trên nền nhạt, để nét thường
   thì đọc bị mờ trong Sheets. Rule do code sinh luôn bật bold; rule đã sinh từ trước
   cũng được nâng lên đậm ở lượt sync kế tiếp, không cần anh chỉnh tay.
-- **Chỉ CỘNG THÊM, không sửa màu sẵn có.** Status nào anh đã tô rồi thì giữ y nguyên
-  màu của anh — code không đụng vào. Chỉ status **chưa có màu** mới được lấy màu từ
-  Notion. Rule của anh luôn được xếp **lên đầu** danh sách; Sheets xét rule từ trên
-  xuống và rule khớp đầu tiên thắng, nên màu của anh không bao giờ bị đè.
-- **Rule cũ bị chặn đuôi thì được nới ra hết cột.** Nếu rule anh set là `B2:B100` chẳng
-  hạn thì dòng thứ 101 trở đi rơi ra ngoài và hiện không màu — đây nhiều khả năng chính
-  là lý do mấy dòng mới bị trắng. Code nới range đó thành `B2:B` (không chặn đuôi),
-  **không đổi màu gì cả**, chỉ để màu của chính anh phủ luôn các dòng mới.
+- **Mọi tab dùng chung một bảng màu.** Trước đây script cố đoán "rule này của anh hay
+  của code" và giữ lại rule nó không nhận ra — mà anh thì có tô màu bao giờ đâu, nên
+  cái nó giữ lại chính là rule do bản script **đời cũ** sinh ra. Rule cũ chiếm chỗ status
+  đó nên tab ấy không bao giờ nhận được màu mới, trong khi tab vừa tạo lại nhận màu hiện
+  tại → mỗi sheet một màu. Giờ script **dựng lại** mọi rule màu status nó đọc được, nên
+  tab cũ tab mới hội tụ về đúng một bảng màu. Lần dán code mới, lượt sync kế tiếp tự
+  quét lại toàn bộ tab một lần.
+- **Cái gì không dựng lại được thì không đụng vào.** Rule dùng công thức / "chứa chữ",
+  và rule tô cho status mà Notion không còn — script giữ nguyên và vẫn xếp **lên đầu**
+  (Sheets xét từ trên xuống, rule khớp đầu tiên thắng). Xoá mấy rule đó đi là mất màu
+  của những dòng cũ mà không có gì thay thế.
+- **Rule cũ bị chặn đuôi tự hết.** Rule `B2:B100` làm dòng thứ 101 trở đi trắng màu; vì
+  rule luôn được dựng lại với range `B2:B` không chặn đuôi nên chuyện đó không còn đường
+  tái diễn.
 - Tô bằng **conditional formatting** trên cột **Status (B)**. Rule mới thêm cũng luôn
   dùng `B2:B` → dòng thêm sau này tự có màu.
+- **Dropdown cột Status cũng lớn theo Notion.** Danh sách data validation được dựng lại
+  từ đúng bảng status đó, nên status mới (`QA/UAT`, `Waiting to launch`…) không còn bị
+  Sheets gắn cờ đỏ "invalid" oan. Dropdown để **cảnh báo chứ không chặn** — chặn cứng thì
+  một status vừa đổi tên bên Notion sẽ khoá luôn lượt ghi của script, hỏng nặng hơn cờ đỏ.
 - Áp cho **mọi tab tháng** và cả `_TEMPLATE`. Tô `_TEMPLATE` là để tab tháng mới
   (nhân bản từ nó) sinh ra đã có màu.
 - **Không đè format tay của anh:** màu Role ở cột D và mọi rule cột khác giữ nguyên
@@ -110,6 +224,9 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   Chỉ đọc lại Notion khi cache chưa có / gặp status lạ / cache quá 24h (bắt ca đổi
   màu bên Notion mà không đổi tên) / rule trong sheet còn ở format đời cũ. Bảng màu
   không đổi và format không đổi thì **không** ghi lại rule.
+- **Tô lỗi giữa chừng thì lượt sau vá tiếp.** Cache chỉ được ghi *sau khi* tô xong. Nếu
+  Sheets nghẽn quota ở tab thứ ba, cache vẫn giữ bảng màu cũ nên lượt sync sau làm lại,
+  chứ không bỏ mấy tab lỡ dở kẹt màu sai vĩnh viễn.
 - Hai board đặt **cùng tên status khác màu** → lấy màu board đầu trong `WATCH_SOURCES`
   (ghi log, không hỏi).
 - **Notion lỗi thì không đụng gì:** chỉ cần **một** board đọc lỗi (429/500/token sai)
