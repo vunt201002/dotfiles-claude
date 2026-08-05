@@ -52,6 +52,10 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   không ghi lại).
 - Sau khi quét, nếu task thực tế đạt mốc ở tháng khác, **kéo dòng sang tab đúng** —
   nút này gán theo tháng đang tính lúc bấm, không phải tháng task thật sự chuyển trạng thái.
+- **Task anh đã xoá tay thì quét bù KHÔNG kéo về lại.** Script nhớ (trong sheet ẩn
+  `_STATE`) pid nào đã từng có dòng trong sheet; pid đó mà giờ không còn dòng nào nữa
+  nghĩa là anh đã xoá — quét bù bỏ qua và **nêu đích danh tên task** trong hộp thoại kết
+  quả, không bao giờ im lặng. Task sync bắt hụt (chưa từng có dòng) vẫn được cứu như thường.
 
 ## Đầu tháng mà vẫn tính cho tháng trước (ghim tháng)
 - KPI thường chốt sổ trễ vài ngày: sang đầu tháng 7 nhưng task vẫn tính cho tháng 6.
@@ -83,6 +87,17 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   hỏi lại "Tháng MM/YYYY đã chốt sổ. Mở lại để tính tiếp?". Chọn Có là mở lại đúng tháng
   đó rồi ghim luôn; chọn Không thì không đổi gì.
 - Tên menu luôn mang dấu mốc chốt (`🔄 Point Sync — tháng 08/2026 (đã chốt ≤ 07/2026)`).
+
+## Xoá task bằng tay — script không hồi sinh
+- Muốn bỏ một task khỏi KPI: **xoá nội dung dòng đó** là xong. Xoá tay là ý định — script
+  không bao giờ ghi lại nó: nếu cột G ẩn còn sót id thì dòng thành "bia mộ" (nằm im giữ
+  chỗ id, không được cập nhật lại); xoá sạch cả G thì `_STATE` vẫn nhớ pid đó từng có
+  dòng, nên quét bù cũng bỏ qua (và nêu tên trong hộp thoại để anh biết).
+- Chuyển task sang tháng khác bằng tay (xoá ở tab cũ + gõ lại ở tab mới) là an toàn —
+  dòng anh gõ tay (trống cột G) **không bao giờ** bị script tự xoá, kể cả khi nó trùng
+  tên với dòng ở tab khác.
+- Lưu ý: dòng gõ tay không có id nên Status/Point **không tự cập nhật** theo Notion nữa.
+  Muốn nó sống theo Notion thì dán page id của task vào ô cột G (ẩn) của dòng đó.
 
 ## Ghi chú tay ở cột Note (H)
 
@@ -143,7 +158,9 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   giữ id thì script bám vào đó mãi và dòng còn lại thành mồ côi. Giờ mỗi lượt sync còn so
   theo **tên**, rồi phân loại theo **page id**:
   - Bên kia **trống id hoặc trùng id** → cùng một task. Giữ dòng ở **tab tháng cũ nhất**,
-    **dọn** bản sao ở tháng mới hơn, vá id vào dòng giữ lại.
+    **dọn** bản sao ở tháng mới hơn **có id** (dòng script sinh ra luôn có id), vá id vào
+    dòng giữ lại. Bản sao **trống cột G** là dòng anh gõ tay — **không bao giờ tự dọn**,
+    chỉ ghi `🤖 Trùng với …` vào Note (H) để anh tự quyết.
   - Bên kia có **id khác hẳn** → hai task Notion khác nhau trùng tên. **Không dọn**, chỉ ghi
     `🤖 Nghi trùng TÊN (page id khác)` vào cột **Note (H)** để anh tự quyết.
 

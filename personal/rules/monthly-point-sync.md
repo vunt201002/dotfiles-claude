@@ -31,7 +31,15 @@ test đó khi diff đụng thư mục này.
 - Khớp theo TÊN chỉ được dùng cho dòng ở tab CŨ HƠN mà **trống cột G**, và mỗi lần vá id
   phải để lại dấu ⚠ ở Note khi H trống. Đó là suy đoán, không phải khớp chắc — bỏ dấu đi
   là hai task trùng tên buộc nhầm nhau trong im lặng.
-- Chốt sổ cấm **đúng một việc: thêm dòng mới**. Update 4 cột, ghi note, dọn dòng trùng đều
-  được (Garry chốt 2026-08-05, đã cân nhắc hệ quả). Đừng thêm guard "tháng chốt miễn dọn".
+- Chốt sổ cấm **đúng một việc: thêm dòng mới**. Update 4 cột, ghi note, dọn dòng trùng
+  (có id) đều được (Garry chốt 2026-08-05, đã cân nhắc hệ quả). Đừng thêm guard "tháng
+  chốt miễn dọn".
+- **Xoá tay = ý định (2026-08-06).** Script không hồi sinh task user đã xoá: dòng chỉ còn
+  id ở cột G = **bia mộ** (vẫn index vào `byPid` để ghim pid, nhưng update/heal/keeper
+  luật 8 bỏ qua — đếm `tombstones`); `_STATE` có cột `stamped` — pid từng được add mà
+  mất hết dòng thì cổng add bỏ qua kể cả quét bù (`skippedDeleted`, nêu tên trong alert).
+  Format state cũ 2 cột đọc được luôn: counted = coi như đã-từng-add. **Dòng tay (G
+  trống) không bao giờ bị script tự xoá** — luật 8 chỉ ghi note 🤖 (`dupHandKept`);
+  bản sao CÓ id vẫn dọn như cũ (ca sáng lập 2026-08-05 giữ nguyên kết cục).
 - Hàm gắn **menu / trigger** phải để tên **không có gạch dưới cuối**: Apps Script coi
   `tênHàm_` là private và `addItem` gọi không ra ("Script function not found").

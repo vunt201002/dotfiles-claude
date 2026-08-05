@@ -56,6 +56,12 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
 2. **Tháng cũ vẫn được update theo Notion.** Task nằm ở tab cũ mà Notion đổi
    Status / Point / Role → cập nhật tại chỗ ở tab cũ đó (vd Testing → Done).
    Checkbox **Have** và cột **Note** anh chỉnh tay không bao giờ bị đè.
+   **Ngoại lệ BIA MỘ (ca thật 2026-08-06):** dòng trống hết A..F và H mà cột G còn id
+   = anh đã xoá tay nhưng cột G ẩn sót lại. Update **bỏ qua hẳn** dòng đó — không ghi
+   lại tên/status/point/role, không vá link Card, không làm keeper của rule 8. Nó chỉ
+   nằm đó ghim pid trong `byPid` để task không bị add lại chỗ khác. Đếm vào
+   `tombstones` + log. Trước đây đường update "hồi sinh" đúng dòng anh vừa xoá — mọi
+   guard đều được tôn trọng mà kết quả vẫn ngược ý anh. Xem thêm rule 10.
 3. **Trước khi thêm, verify chưa từng add ở bất kỳ tháng nào.** Khớp theo Notion
    page id trên **tất cả** tab tháng. Đã có (cùng id) → update, **không** add lại.
 4. **Reviewer = Dev** về luật: chỉ được add khi status ≥ Ready to Test **và** chưa
@@ -97,7 +103,13 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
    là so khít, không có bậc "nghe tương tự" nào (fuzzy match bị loại từ rule 5, cố ý):
    - **id bên kia TRỐNG hoặc TRÙNG KHÍT** → cùng một task chiếm hai chỗ, trùng rõ ràng.
      **Giữ dòng ở tab tháng CŨ NHẤT** (đúng tinh thần rule 7), **dọn** các bản sao ở
-     tháng mới hơn, vá id vào dòng giữ lại. Đếm vào `dupCleared`.
+     tháng mới hơn **có id ở G** (id có từ lúc script sinh dòng — chắc chắn của script),
+     vá id vào dòng giữ lại. Đếm vào `dupCleared`. **Bản sao TRỐNG G thì KHÔNG BAO GIỜ
+     tự dọn** (ca thật 2026-08-06: anh xoá task khỏi 07/2026 rồi gõ tay lại vào 08/2026,
+     luật này từng dọn mất dòng tay đó): chỉ ghi `🤖 Trùng với …` vào Note khi H trống,
+     đếm vào `dupHandKept`. Dòng trống G là dòng tay — anh đặt nó ở đó là có ý.
+     Ca sáng lập 2026-08-05 vẫn ra đúng kết cục cũ: bản gốc tay ở July (trống G) làm
+     keeper, các bản sao CÓ id ở August vẫn bị dọn — có test regression khoá lại.
    - **id bên kia KHÁC HẲN** → hai page Notion khác nhau vô tình trùng tên (ca thật:
      "Fix translation … Loyalty Hub" tồn tại 2 lần, 2 id). **Không bao giờ tự dọn**, chỉ
      ghi `🤖 Nghi trùng TÊN (page id khác)` vào Note. Đếm vào `dupFlagged`.
@@ -120,6 +132,34 @@ Tháng = tháng của **ngày task chuyển sang "Ready to Test"** (lúc point �
    đi (KPI/summary) **không** tính — nó kéo dài xuống dưới vùng task và sẽ đẩy dòng add
    ra giữa khoảng trắng. Checkbox chưa tick trả `false`, coi như trống (cột Have thường
    kẻ sẵn checkbox cả trăm dòng). Trước khi ghi còn kiểm lại dòng đích trống A..H.
+10. **Xoá tay = ý định (ca thật 2026-08-06).** Anh xoá 2 task Reviewer khỏi `07/2026`
+    (đã chốt) rồi gõ tay lại vào `08/2026` — sync hồi sinh chúng ở July (đường update
+    khi G sót, hoặc quét bù trước lúc chốt khi G sạch) rồi rule 8 dọn luôn dòng tay
+    tháng 8. Không guard nào bị vi phạm; chính các luật khoá đảo ngược thao tác chủ
+    đích của anh. Gói an toàn — ba bất biến, theo thứ tự ưu tiên: (i) dòng tay (trống
+    G) không bao giờ bị script tự xoá; (ii) task anh đã xoá không bao giờ được script
+    hồi sinh; (iii) tháng chốt không nhận dòng mới (giữ nguyên). Ba chốt chặn:
+    - **Bia mộ** (rule 2): dòng chỉ còn id ở G vẫn vào `byPid` (ghim pid, chống re-add)
+      nhưng update / heal link / vai keeper rule 8 đều bỏ qua. Đếm `tombstones`.
+    - **Dấu đã-từng-add:** `_STATE` thêm cột `stamped` (A=pid, B=status như cũ) — bật
+      khi pid có dòng trong sheet: script add, khớp id (kể cả bia mộ), hoặc được vá id
+      theo rule 7; đã bật thì giữ suốt vòng đời state. Cổng add gặp pid có stamp mà
+      không còn dòng nào trên MỌI tab → **không re-add** (cả quét bù lẫn nhịp thường),
+      đếm `skippedDeleted` và **nêu đích danh tên task** trong alert quét bù — xoá
+      không bao giờ im lặng. Pid chưa từng thấy mà counted và thiếu dòng → quét bù vẫn
+      cứu như xưa (đúng việc của nó: vớt task sync bắt hụt).
+      **Migration:** `_STATE` format cũ (2 cột, thiếu header `stamped`) đọc thẳng —
+      pid có status counted coi như đã-từng-add, vì sheet thật lúc nâng cấp đã đầy đủ:
+      pid counted mà thiếu dòng chính là task anh vừa xoá. Đánh đổi chấp nhận: task
+      counted bị sync bắt hụt TRƯỚC lúc nâng cấp thì quét bù không cứu nữa, gõ tay.
+      Stamp sống theo vòng đời state (task rời query Notion thì stamp rơi theo, y như
+      cột status) — ca quay lại hiếm và rule 7 / khớp id đỡ được.
+    - **Luật tay của rule 8** (`dupHandKept`) — xem rule 8.
+    **Giới hạn đã chấp nhận:** bia mộ ở July + dòng tay cùng task ở August (tháng đang
+    tính) → bia mộ ghim pid (không re-add), dòng tay bất khả xâm phạm, và update từ
+    Notion **không tới được cả hai** (dòng tay không có id; title-heal của rule 7 chỉ
+    vá tab CŨ HƠN, August là tháng hiện tại). Muốn dòng tay sống theo Notion thì tự
+    dán page id vào ô G của nó.
 
 ## KPI mỗi tab (công thức sống)
 - Tổng point task = SUM(Point)
