@@ -158,6 +158,57 @@ result looks like an ad or PR piece, drop it.
 For any promising search hit where the title alone isn't enough, you may `WebFetch`
 the URL for a one-line "what is this" — but don't fetch everything (costs turns).
 
+## Step 2c — Social & practitioner sweep (X · Medium · LinkedIn)
+
+Excellent practitioner write-ups often appear on X and Medium publications before
+(or instead of) reaching HN. Sweep them with **2-4 extra WebSearch queries total**.
+This feeds the SAME Step 3 filter and the same ~10-15 cap — more candidates, never
+more items. These patterns were empirically validated; stick to them.
+
+**X (Twitter) — direct `site:` search works.** For 1-2 areas in scope this run
+(prioritize the user's work areas; rotate across days):
+
+- `site:x.com <topic> deep dive` · `site:x.com <topic> thread` · `site:x.com <topic> postmortem`
+- Official org accounts surface reliably too, e.g. `site:x.com Shopify developer changelog` → @ShopifyDevs updates.
+
+Freshness check (X results mix years freely): the long number in
+`x.com/<user>/status/<ID>` encodes post time — the durable rule is **bigger =
+newer**. Digit anchor as of 2026: a 19-digit ID starting `20` or higher ≈ 2026;
+starting `19` or lower (or with 18 digits) is 2025-or-older — drop it unless
+timeless and truly exceptional. If the current year (from Step 0's `date`) is
+past 2026, re-anchor first: grab the ID of one post you can see is from this
+month, and treat IDs well below it as old.
+Quality bar — KEEP: threads by recognized builders/maintainers, engineers
+describing their own systems and incidents, official project/org announcements
+with substance. DROP: course/product launch promos, agency content-marketing,
+opinion-only hot takes with no technical meat, engagement-bait threads
+("10 repos that will make you cracked").
+
+**Medium — search publications, never the open firehose.** `site:medium.com <topic>`
+returns content-farm slop; publication-scoped search returns real engineering
+deep-dives. One query shaped like:
+
+`site:medium.com/airbnb-engineering OR site:medium.com/pinterest-engineering OR site:netflixtechblog.com {year}`
+
+Swap/extend the paths to fit the areas in scope — any Medium-hosted company
+engineering publication you know the path of is fair game. Medium result titles
+carry `| by {author} | {publication} | {Month}, {Year}` — use that to check
+freshness and authorship without fetching. Quality bar for ANY medium.com hit,
+including ones arriving via Step 2b: KEEP only if it's from a named company /
+engineering publication OR a named practitioner writing about their own system
+or incident. DROP: personal-handle listicles ("43 Field Manuals…", "Top N…"),
+member-only paywall bait, and aggregator farms (Stackademic, Level Up Coding,
+"…in Plain English" pubs, Let's Code Future, and lookalikes).
+
+**LinkedIn — low yield, no dedicated query by default.** Tested both
+`site:linkedin.com/pulse <topic>` and `site:linkedin.com/posts <topic>`: results
+were mostly stale (1-2 years old), undated, or engagement-bait — nothing a daily
+digest needs. Don't spend a query on LinkedIn in a default run. If a LinkedIn URL
+arrives via another search, keep it only if it's a substantive practitioner post
+AND fresh; if the post merely links to an article, list the underlying article's
+URL instead. For `--wide` you may spend one `site:linkedin.com/posts <topic>`
+query on a work-relevant area, same bars apply.
+
 ---
 
 ## Step 3 — Filter and group (this is the "gu" — the judgement)
@@ -167,7 +218,9 @@ From the HN rows + search hits combined:
 1. **Drop** anything whose URL is in `$SEEN` (already shown before).
 2. **Pick the best ~10-15** (or ~20-30 for `--wide`; all-from-one-area for a topic
    scope). Judge by: genuinely new/important, substance over hype, primary source,
-   relevant to the user's areas. HN score is a hint, not the only signal.
+   relevant to the user's areas. HN score is a hint, not the only signal. Social
+   hits (X/Medium/LinkedIn) must also pass Step 2c's quality bars — likes, claps,
+   and virality are not substance signals.
 3. **Group into sections:**
    - 📌 **NỔI BẬT (từ nguồn theo dõi)** — new items from FOLLOWED sources (Step 2a).
      Goes FIRST, above everything. Omit the whole section if nothing new from follows
