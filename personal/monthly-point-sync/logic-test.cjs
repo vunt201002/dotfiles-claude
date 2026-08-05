@@ -1512,21 +1512,34 @@ t('phân loại rule màu status: script nhận vs lạ vs không đọc đượ
   eq(tab.foreignRules.join(), 'Testing', 'rule đời cũ bị coi là lạ');
   eq(tab.unreadableRules, 1, 'rule không đọc ra status');
 });
-t('đo trước bán kính nổ của quét bù (task counted chưa có dòng nào)', () => {
+t('đo trước bán kính nổ của quét bù: tách task sẽ thêm vs task anh đã xoá (stamped)', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
   const aug = ss.insertSheet('08/2026');
   aug.getRange(2, 1, 1, 7).setValues([['Có rồi', 'Done', 1, 'Dev', false, 'link', 'pcó']]);
   const st = ss.insertSheet('_STATE');
-  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
-  st.getRange(2, 1, 3, 2).setValues([
-    ['pcó', 'Done'],            // đã có dòng -> không tính
-    ['pthiếu1', 'Waiting to test'],  // counted, chưa có dòng -> tính
-    ['pchưa', 'In progress'],   // chưa tới mốc -> không tính
+  st.getRange(1, 1, 1, 3).setValues([['pageId', 'status', 'stamped']]);
+  st.getRange(2, 1, 4, 3).setValues([
+    ['pcó', 'Done', 1],              // đã có dòng -> không tính
+    ['pthiếu1', 'Waiting to test', ''], // counted, CHƯA TỪNG add -> quét bù sẽ thêm
+    ['pxoá', 'Done', 1],             // counted, từng add, giờ mất dòng -> anh đã xoá
+    ['pchưa', 'In progress', ''],    // chưa tới mốc -> không tính
   ]);
   const env = makeEnv({ nowMonth: '08/2026', ss });
   const d = env.sandbox.diagnoseSheet();
-  eq(d.pendingBackfill, 1, 'chỉ đếm task counted mà chưa có dòng nào');
+  eq(d.pendingBackfill, 1, 'chỉ đếm task counted chưa từng được add');
+  eq(d.deletedStamped, 1, 'task từng add mà mất dòng = đã xoá, không tính vào bán kính');
   ok(env.ui.alerts[0].indexOf('Quét bù sẽ thêm ~1') !== -1, 'alert nêu số: ' + env.ui.alerts[0]);
+  ok(env.ui.alerts[0].indexOf('đã xoá tay') !== -1, 'alert nêu số bị bỏ qua: ' + env.ui.alerts[0]);
+});
+t('bán kính nổ với _STATE format cũ: counted vắng dòng coi là đã xoá (khớp luật quét bù)', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
+  st.getRange(2, 1, 1, 2).setValues([['pthiếu1', 'Waiting to test']]);
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.pendingBackfill, 0, 'format cũ: counted vắng dòng không còn được quét bù thêm');
+  eq(d.deletedStamped, 1, 'nó rơi vào nhóm "anh đã xoá"');
 });
 t('chỉ ĐỌC: không sửa dòng nào, không đụng rule, không tạo tab', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
@@ -1926,6 +1939,231 @@ t('tên Notion có nháy cong, dòng tháng cũ gõ nháy thẳng → vẫn kh�
   eq(r.blockedOld, 1, 'nhận ra đã có ở tháng 7');
   eq(jul.getRange(2, 7).getValue(), 'pnotif', 'id được vá vào dòng tháng 7');
 });
+
+console.log('— Gói an toàn 2026-08-06: xoá tay là ý định, script không hồi sinh / không tự xoá dòng tay —');
+// Ca thật 2026-08-06: anh xoá 2 task Reviewer khỏi 07/2026 (đã chốt) rồi gõ tay lại vào
+// 08/2026. Bản cũ: cột G ẩn sót id thì đường update hồi sinh dòng July, hoặc quét bù
+// trước lúc chốt re-add; xong luật 8 "tháng cũ nhất thắng" DỌN luôn dòng tay tháng 8.
+// Gói an toàn khoá cả 3 đường: bia mộ (update), stamp trong _STATE (quét bù), luật tay (rule 8).
+const T1 = '[Refactor] Place order không xoá item khỏi wishlist';
+const T2 = '[Refactor] wishlist data model: soft-delete on remove';
+const WTL = 'Waiting to Launch';
+function handRow(title) { return [title, WTL, 8, 'Reviewer', false, '', '']; }
+function scriptRow(title, pid) { return [title, WTL, 8, 'Reviewer', false, 'link', pid]; }
+function incidentPages() {
+  const p = {};
+  p[DS1] = [page('p1', T1, WTL, 8, 'Reviewer'),
+            page('p2', T2, WTL, 8, 'Reviewer'),
+            page('p3', 'Other July task', 'Done', 3, 'Dev')];
+  return p;
+}
+function seedOldState(ss) { // format CŨ 2 cột — đúng _STATE thật lúc dán code mới
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
+  st.getRange(2, 1, 3, 2).setValues([['p1', WTL], ['p2', WTL], ['p3', 'Done']]);
+}
+
+t('bia mộ (chỉ còn id ở G) → update KHÔNG hồi sinh, không heal link, đếm tombstones', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1'); // anh xoá dòng, cột G ẩn còn sót
+  jul.getRange(3, 1, 1, 7).setValues([scriptRow('Other July task', 'p3')]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1, 'đếm bia mộ');
+  eq(r.added, 0, 'không add lại ở đâu cả');
+  const row = jul.getRange(2, 1, 1, 8).getValues()[0];
+  eq(row[0], '', 'tên KHÔNG bị hồi sinh');
+  eq(row[1], '', 'status trống');
+  eq(row[5], '', 'link Card không được vá vào bia mộ');
+  eq(row[6], 'p1', 'id vẫn nằm đó ghim pid');
+  eq(r.updated, 1, 'chỉ p3 (dòng thật) được update');
+  ok(env.logs.some(l => l.indexOf('Bia mộ') !== -1), 'log nêu đích danh: ' + env.logs.join('\n'));
+});
+t('bia mộ ghim pid: quét bù cũng không add lại task đó ở tab nào', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1');
+  jul.getRange(3, 1, 1, 7).setValues([scriptRow('Other July task', 'p3')]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không add');
+  eq(r.tombstones, 1, 'p1 ghim bởi bia mộ');
+  eq(r.skippedDeleted, 1, 'p2 (xoá sạch cả G) bị chặn bởi stamp format cũ');
+  ok(!ss.getSheetByName('08/2026'), 'không tạo tab 08/2026 để re-add');
+});
+t('bia mộ 07 + dòng tay 08 cùng task → cả hai đứng yên (giới hạn đã chấp nhận)', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([handRow(T1)]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1);
+  eq(r.dupCleared, 0, 'bia mộ không làm keeper, không kéo theo dọn dẹp');
+  eq(r.dupHandKept, 0, 'luật 8 không chạy — bia mộ bị bỏ qua trước đó');
+  eq(aug.getRange(2, 1).getValue(), T1, 'dòng tay tháng 8 nguyên vẹn');
+  eq(aug.getRange(2, 8).getValue(), '', 'không note vô cớ lên dòng tay');
+  eq(jul.getRange(2, 7).getValue(), 'p1', 'bia mộ vẫn ghim');
+});
+t('script add → anh xoá sạch dòng (cả G) → quét bù KHÔNG hồi sinh + alert nêu tên', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow(); // baseline
+  pages[DS1][0] = page('p1', 'Task A', 'Ready to Test', 3, 'Dev');
+  env.sandbox.syncNow(); // add vào 08/2026
+  const aug = ss.getSheetByName('08/2026');
+  eq(aug.getRange(2, 1).getValue(), 'Task A', 'đã add');
+  aug.getRange(2, 1, 1, 8).clearContent(); // anh xoá tay, sạch cả G
+  env.sandbox.syncNow(); // một nhịp 10' trôi qua — stamp phải sống sót qua writeState
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không hồi sinh');
+  eq(r.skippedDeleted, 1, 'đếm được');
+  ok(env.ui.alerts.some(a => a.indexOf('Task A') !== -1 && a.indexOf('hồi sinh') !== -1),
+     'alert nêu đích danh: ' + env.ui.alerts.join(' | '));
+  eq(aug.getRange(2, 1).getValue(), '', 'dòng vẫn trống');
+});
+t('status lùi rồi vượt mốc lại sau khi anh đã xoá → nhịp thường cũng không hồi sinh', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 3).setValues([['pageId', 'status', 'stamped']]);
+  st.getRange(2, 1, 1, 3).setValues([['p1', 'In progress', 1]]); // từng add, status đang lùi
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')]; // vượt mốc lại
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.added, 0, 'cross thật nhưng pid đã stamp + vắng dòng = anh đã xoá');
+  eq(r.skippedDeleted, 1);
+});
+t('migration format cũ: counted vắng dòng = đã xoá; task CHƯA TỪNG add vẫn được cứu', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]); // format cũ 2 cột
+  st.getRange(2, 1, 1, 2).setValues([['pdel', 'Done']]);
+  const pages = {}; pages[DS1] = [page('pdel', 'Task đã xoá', 'Done', 2, 'Dev'),
+                                  page('pnew', 'Task sót', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.backfillCounted();
+  eq(r.skippedDeleted, 1, 'pid counted format cũ + vắng dòng = anh đã xoá');
+  eq(r.added, 1, 'task chưa từng thấy vẫn được quét bù cứu');
+  eq(ss.getSheetByName('08/2026').getRange(2, 1).getValue(), 'Task sót');
+  eq(st.getRange(1, 3).getValue(), 'stamped', 'state được ghi lại theo format mới');
+  const sv = st.getRange(2, 1, 2, 3).getValues();
+  ok(sv.some(x => x[0] === 'pnew' && x[2]), 'task vừa add mang stamp: ' + JSON.stringify(sv));
+  ok(sv.some(x => x[0] === 'pdel' && x[2]), 'task đã xoá giữ stamp — chết là chết hẳn');
+});
+t('luật 8: bản sao TRỐNG G là dòng tay → KHÔNG dọn, chỉ note 🤖 + đếm dupHandKept', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([scriptRow('Fix cart', 'pfix')]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 5).setValues([['Fix cart', WTL, 8, 'Reviewer', false]]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 0, 'không dọn dòng tay');
+  eq(r.dupHandKept, 1, 'đếm riêng, không im lặng');
+  eq(aug.getRange(2, 1).getValue(), 'Fix cart', 'dòng tay còn nguyên');
+  const note = String(aug.getRange(2, 8).getValue());
+  ok(note.indexOf('🤖') === 0 && note.indexOf('07/2026') !== -1, 'note: ' + note);
+  eq(jul.getRange(2, 2).getValue(), 'Done', 'dòng giữ (July) vẫn được update');
+});
+t('luật 8 dòng tay: H đã có chữ của anh → không đè note, vẫn không dọn', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([scriptRow('Fix cart', 'pfix')]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 5).setValues([['Fix cart', WTL, 8, 'Reviewer', false]]);
+  aug.getRange(2, 8).setValue('note của anh');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupHandKept, 1);
+  eq(aug.getRange(2, 1).getValue(), 'Fix cart', 'không dọn');
+  eq(aug.getRange(2, 8).getValue(), 'note của anh', 'chữ của anh không bị đè');
+});
+// Ca sáng lập 2026-08-05 phải giữ NGUYÊN kết cục: bản gốc tay ở July (trống G) thắng,
+// bản sao CÓ id ở August bị dọn — luật tay chỉ che dòng TRỐNG G, không che dòng có id.
+t('ca 2026-08-05 (regression): bản sao CÓ id vẫn bị dọn, bản gốc tay July giữ + vá id', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 5).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', true]]);
+  jul.getRange(3, 1, 1, 5).setValues([['Fix translation', 'Done', 3, 'Reviewer', true]]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([scriptRow('Fix cart', 'pa')]);
+  aug.getRange(3, 1, 1, 7).setValues([['Fix translation', 'Done', 3, 'Reviewer', false, 'link', 'pb']]);
+  const pages = {}; pages[DS1] = [page('pa', 'Fix cart', 'Done', 2, 'Reviewer'),
+                                  page('pb', 'Fix translation', 'Done', 3, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 2, 'cả hai bản sao có id đều bị dọn');
+  eq(r.dupHandKept, 0, 'không có gì bị nhận nhầm là dòng tay');
+  eq(aug.getRange(2, 1).getValue(), '', 'bản sao tháng 8 sạch');
+  eq(aug.getRange(3, 1).getValue(), '');
+  eq(jul.getRange(2, 1).getValue(), 'Fix cart', 'bản gốc July giữ');
+  eq(jul.getRange(2, 7).getValue(), 'pa', 'vá id vào bản gốc');
+  eq(jul.getRange(3, 7).getValue(), 'pb');
+});
+t('ca 2026-08-06 đường G sót: July nằm yên bia mộ, August tay nguyên vẹn, chạy lặp vẫn vậy', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1');
+  jul.getRange(3, 1, 1, 7).setValues([scriptRow('Other July task', 'p3')]);
+  jul.getRange(4, 7).setValue('p2');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([handRow(T1)]);
+  aug.getRange(3, 1, 1, 7).setValues([handRow(T2)]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { CLOSED_THROUGH: '07/2026' } });
+  for (let i = 1; i <= 3; i++) {
+    const r = env.sandbox.syncNow();
+    eq(r.added, 0, 'lượt ' + i + ': không add');
+    eq(r.dupCleared, 0, 'lượt ' + i + ': không dọn gì');
+    eq(r.tombstones, 2, 'lượt ' + i + ': 2 bia mộ');
+  }
+  eq(jul.getRange(2, 1).getValue(), '', 'July không hồi sinh');
+  eq(jul.getRange(4, 1).getValue(), '');
+  eq(jul.getRange(2, 7).getValue(), 'p1', 'bia mộ còn ghim');
+  eq(jul.getRange(3, 1).getValue(), 'Other July task', 'dòng thật bên cạnh không bị vạ lây');
+  eq(aug.getRange(2, 1).getValue(), T1, 'dòng tay tháng 8 sống');
+  eq(aug.getRange(3, 1).getValue(), T2);
+  eq(aug.getRange(2, 8).getValue(), '', 'không note vô cớ lên dòng tay');
+});
+t('ca 2026-08-06 đường quét bù: xoá sạch + còn ghim 07 → không kéo về July nữa', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(3, 1, 1, 7).setValues([scriptRow('Other July task', 'p3')]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([handRow(T1)]);
+  aug.getRange(3, 1, 1, 7).setValues([handRow(T2)]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { ACTIVE_MONTH: '07/2026' } });
+  const r1 = env.sandbox.backfillCounted(); // đúng thao tác đã gây ra ca thật
+  eq(r1.added, 0, 'không hồi sinh vào July');
+  eq(r1.skippedDeleted, 2, 'cả 2 task anh xoá đều được nhận ra');
+  ok(env.ui.alerts[0].indexOf(T1) !== -1 && env.ui.alerts[0].indexOf(T2) !== -1,
+     'alert nêu đích danh cả hai: ' + env.ui.alerts[0]);
+  ok(rowEmpty_(jul, 2) && rowEmpty_(jul, 4), 'July trống nguyên');
+  env.sandbox.unpinMonth(); // ✅ Chốt
+  const r2 = env.sandbox.syncNow(); // nhịp 10 phút hôm sau
+  eq(r2.dupCleared, 0, 'không dọn dòng tay tháng 8');
+  eq(r2.added, 0);
+  eq(aug.getRange(2, 1).getValue(), T1, 'dòng tay sống sót');
+  eq(aug.getRange(3, 1).getValue(), T2);
+});
+function rowEmpty_(sh, r) {
+  return sh.getRange(r, 1, 1, 8).getValues()[0]
+    .every(v => v === '' || v === null || v === false);
+}
 
 // ---------------- kết quả ----------------
 console.log('');

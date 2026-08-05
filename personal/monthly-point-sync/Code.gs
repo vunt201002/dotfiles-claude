@@ -20,6 +20,11 @@
  * đã chốt và không nhận dòng MỚI nữa (update thì vẫn chạy). Vắng mặt = chưa chốt tháng
  * nào. Nút "✅ Chốt" nâng mốc này lên, chỉ nâng chứ không bao giờ hạ.
  *
+ * XOÁ TAY = Ý ĐỊNH (ca thật 2026-08-06): task anh đã xoá khỏi sheet không bao giờ được
+ * script hồi sinh. Dòng chỉ còn id ở cột G ẩn = BIA MỘ — vẫn ghim pid (chống add lại)
+ * nhưng update bỏ qua hẳn. _STATE có cột 'stamped' nhớ pid đã-từng-có-dòng để quét bù
+ * không kéo về. Và dòng tay (trống G) không bao giờ bị script tự dọn — luật 8 chỉ ghi note.
+ *
  * SETUP: see SETUP.md. Only secret is Script Property NOTION_TOKEN.
  */
 
@@ -248,6 +253,20 @@ function rowHasContent_(row) {
   }
   return false;
 }
+// BIA MỘ (ca thật 2026-08-06): dòng anh xoá tay nhưng cột G ẩn còn sót id — trống hết
+// A..F và H, chỉ còn G. Đó là dấu "anh đã xoá task này", không phải dòng hỏng cần vá.
+// H có chữ thì KHÔNG phải bia mộ: note còn đó nghĩa là dòng còn mang thông tin, đường
+// update cứ chạy như thường. false của checkbox tính là trống — cùng luật rowHasContent_.
+// row = mảng A..H (8 ô, index 6 = G).
+function isTombstoneRow_(row) {
+  if (!norm_(String(row[6] || ''))) return false;
+  for (var i = 0; i < row.length; i++) {
+    if (i === 6) continue;
+    var v = row[i];
+    if (v !== '' && v !== null && v !== undefined && v !== false) return false;
+  }
+  return true;
+}
 // Dòng cuối còn nội dung, quét A..H chứ không riêng cột A — xem FOOTPRINT_COLS.
 // Vùng này cũng là vùng buildIndex_ / orphanStatuses_ quét: dòng anh xoá tên nhưng
 // còn page id ở G phải được index, nếu không task đó bị coi là mất và bị add lại mãi.
@@ -289,12 +308,20 @@ function buildIndex_(ss, activeMonth) {
     if (last < 2) return;
     var ord = monthOrd_(name);
     var older = (activeOrd !== null && ord !== null && ord < activeOrd);
-    var v = sh.getRange(2, 1, last - 1, 7).getValues(); // A..G (Note col H is not indexed)
+    // Đọc cả H (NOTE_COL) vì nhận diện bia mộ cần biết ô Note có chữ hay không;
+    // title/pid vẫn chỉ lấy từ A và G như cũ, Note không được index.
+    var v = sh.getRange(2, 1, last - 1, NOTE_COL).getValues(); // A..H
     for (var i = 0; i < v.length; i++) {
       var ref = { sheet: sh, row: i + 2, month: name };
       var pid = norm_(String(v[i][6]));
       var nt = normTitle_(v[i][0]);
-      if (pid) byPid[pid] = ref;
+      if (pid) {
+        // Bia mộ vẫn PHẢI vào byPid — chính cái ghim đó giữ cho task không bị add
+        // lại ở tab khác (cùng lý do dòng trống tên còn id phải được index).
+        // Đường update thấy tomb thì bỏ qua hẳn — xem syncNow.
+        ref.tomb = isTombstoneRow_(v[i]);
+        byPid[pid] = ref;
+      }
       if (!nt) continue;
       byTitle[nt] = ref;
       (titleRows[nt] = titleRows[nt] || []).push(ref);
@@ -361,9 +388,23 @@ function resolveCrossTabTwins_(idx, nt, pid, ref) {
   // được. Hệ quả có thật và đã chấp nhận: hai bản sao ở hai tháng đều đã chốt thì dòng ở
   // tháng mới hơn bị dọn, KPI hai tháng đó đổi theo. Mỗi lần dọn đều vào `dupCleared` và
   // log, nên không bao giờ im lặng. Đừng thêm lại guard "tháng chốt thì miễn dọn".
-  var cleared = [];
+  var cleared = [], handKept = [];
   for (var k = 0; k < same.length; k++) {
     if (same[k] === keeper) continue;
+    // LUẬT TAY (ca thật 2026-08-06): bản sao TRỐNG cột G là dòng anh gõ tay — dòng
+    // script sinh ra luôn có id từ lúc chào đời, nên trống G là dấu người thật đặt nó
+    // ở đó có ý (anh xoá task khỏi 07/2026 rồi gõ lại vào 08/2026, luật này từng dọn
+    // mất dòng tay đó). Không bao giờ tự xoá dòng tay: chỉ ghi note khi H trống để
+    // anh tự quyết. Bản sao CÓ id (chắc chắn do script ghi) vẫn dọn y như cũ — ca
+    // sáng lập 2026-08-05 (bản gốc tay ở July, bản sao có id ở August) giữ nguyên kết cục.
+    if (!norm_(String(same[k].sheet.getRange(same[k].row, 7).getValue()))) {
+      var hcell = same[k].sheet.getRange(same[k].row, NOTE_COL);
+      if (!String(hcell.getValue() || '').trim())
+        hcell.setValue(SCRIPT_NOTE_MARK + ' Trùng với ' + keeper.month + ' dòng ' + keeper.row +
+                       ' (cùng task Notion) — dòng tay nên script không tự xoá, check rồi xoá tay nếu trùng');
+      handKept.push(same[k].month + ' dòng ' + same[k].row);
+      continue;
+    }
     clearTaskRow_(same[k]);
     cleared.push(same[k].month + ' dòng ' + same[k].row);
   }
@@ -375,30 +416,46 @@ function resolveCrossTabTwins_(idx, nt, pid, ref) {
       cell.setValue(SCRIPT_NOTE_MARK + ' Nghi trùng TÊN (page id khác): cũng có ở ' +
                     fuzzy.join(', ') + ' — check, xoá tay nếu đúng là trùng');
   }
-  return { keeper: keeper, cleared: cleared, fuzzy: fuzzy };
+  return { keeper: keeper, cleared: cleared, handKept: handKept, fuzzy: fuzzy };
 }
 
-// ---- state (hidden _STATE sheet: A=pageId, B=lastStatus) ----
+// ---- state (hidden _STATE sheet: A=pageId, B=lastStatus, C=stamped) ----
+// Cột C 'stamped' (2026-08-06): 1 = pid này đã TỪNG có dòng trong sheet (script add,
+// khớp được id, hoặc được vá id theo rule 7). Pid có stamp mà giờ không còn dòng nào
+// (kể cả bia mộ) trên MỌI tab = anh đã xoá tay → quét bù không được hồi sinh.
+// MIGRATION format cũ (2 cột, thiếu header 'stamped'): pid có status counted coi như
+// đã-từng-add. Sheet thật lúc nâng cấp đã đầy đủ, nên pid counted mà thiếu dòng chính
+// là task anh vừa xoá — coi ngược lại (chưa từng add) là quét bù hồi sinh đúng cái anh
+// xoá hôm 2026-08-06. Đánh đổi chấp nhận: task counted bị sync bắt hụt TRƯỚC lúc nâng
+// cấp thì quét bù không cứu nữa, phải gõ tay.
+// Stamp sống theo vòng đời state: task rời query Notion thì stamp rơi theo (state chỉ
+// giữ task đang thấy, y như cột status xưa nay) — ca quay lại hiếm, rule 7 đỡ được.
 function getState_(ss) {
   var sh = ss.getSheetByName(STATE);
   if (!sh) {
     sh = ss.insertSheet(STATE); sh.hideSheet();
-    sh.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
-    return { sheet: sh, map: {}, firstRun: true };
+    sh.getRange(1, 1, 1, 3).setValues([['pageId', 'status', 'stamped']]);
+    return { sheet: sh, map: {}, stamped: {}, firstRun: true };
   }
-  var last = sh.getLastRow(), map = {};
+  var last = sh.getLastRow(), map = {}, stamped = {};
+  var legacy = String(sh.getRange(1, 3).getValue() || '') !== 'stamped';
   if (last >= 2) {
-    var v = sh.getRange(2, 1, last - 1, 2).getValues();
-    for (var i = 0; i < v.length; i++) if (v[i][0]) map[norm_(String(v[i][0]))] = v[i][1];
+    var v = sh.getRange(2, 1, last - 1, 3).getValues();
+    for (var i = 0; i < v.length; i++) {
+      if (!v[i][0]) continue;
+      var pid = norm_(String(v[i][0]));
+      map[pid] = v[i][1];
+      if (legacy ? isCounted_(v[i][1]) : v[i][2]) stamped[pid] = true;
+    }
   }
-  return { sheet: sh, map: map, firstRun: (last < 2) };
+  return { sheet: sh, map: map, stamped: stamped, firstRun: (last < 2) };
 }
-function writeState_(sheet, map) {
+function writeState_(sheet, map, stamped) {
   var rows = [];
-  for (var k in map) rows.push([k, map[k]]);
+  for (var k in map) rows.push([k, map[k], stamped[k] ? 1 : '']);
   sheet.clearContents();
-  sheet.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
-  if (rows.length) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+  sheet.getRange(1, 1, 1, 3).setValues([['pageId', 'status', 'stamped']]);
+  if (rows.length) sheet.getRange(2, 1, rows.length, 3).setValues(rows);
 }
 
 // ---- main ----
@@ -406,16 +463,20 @@ function writeState_(sheet, map) {
 // the ones we catch crossing live. Used by the "Backfill counted" menu item to
 // rescue tasks that skipped Ready to Test (e.g. dev-only tasks dragged straight to
 // review) or crossed between two 10-min polls. Dedup is by the sheet index, so a
-// task already present in any month tab is updated, never re-stamped.
+// task already present in any month tab is updated, never re-stamped. A pid the
+// script once placed in the sheet (stamped in _STATE) that is now missing from
+// every tab was DELETED by the user — never re-added, counted as skippedDeleted.
 function syncNow(opts) {
   var backfill = !!(opts && opts.backfill);
   var ss = ss_();
-  var st = getState_(ss), firstRun = st.firstRun, prev = st.map, newState = {};
+  var st = getState_(ss), firstRun = st.firstRun, prev = st.map, stamped = st.stamped,
+      newState = {}, newStamped = {};
   var month = activeMonth_(); // tháng đang tính — tháng lịch, hoặc tháng ghim từ menu
   var monthClosed = isClosedMonth_(month);
   var idx = buildIndex_(ss, month);
   var added = 0, updated = 0, baseline = 0, waiting = 0, suspect = 0,
-      blockedClosed = 0, blockedOld = 0, dupFlagged = 0, dupCleared = 0, healedLink = 0, seenStatus = {};
+      blockedClosed = 0, blockedOld = 0, dupFlagged = 0, dupCleared = 0, dupHandKept = 0,
+      healedLink = 0, tombstones = 0, skippedDeleted = 0, skippedDeletedNames = [], seenStatus = {};
 
   WATCH_SOURCES.forEach(function (ds) {
     notionQuery_(ds).forEach(function (pg) {
@@ -424,6 +485,9 @@ function syncNow(opts) {
       var pid = norm_(pg.id), status = statusOf_(p), point = pointOf_(p),
           name = title_(p), nt = normTitle_(name), url = pg.url;
       newState[pid] = status;
+      // Dấu đã-từng-add là vĩnh viễn trong vòng đời state: anh xoá dòng thì dấu vẫn
+      // phải sống, không thì lượt sau quét bù lại hồi sinh đúng cái vừa xoá.
+      if (stamped[pid]) newStamped[pid] = true;
       if (status) seenStatus[status] = true;
 
       // RULE 2 (exact): this Notion page id already lives in SOME month tab (current
@@ -433,6 +497,18 @@ function syncNow(opts) {
       // (H) flag stays until Garry clears it by hand after checking the suspected dup.
       var pidRef = idx.byPid[pid];
       if (pidRef) {
+        newStamped[pid] = true; // pid đang có mặt trên sheet (dòng thật hoặc bia mộ)
+        // BIA MỘ (ca thật 2026-08-06): anh xoá dòng nhưng cột G ẩn còn sót id. Trước
+        // đây đường update "hồi sinh" nó — ghi lại tên/status/point/role rồi vá link —
+        // mọi guard đều được tôn trọng mà kết quả vẫn ngược ý anh. Giờ nó chỉ nằm đó
+        // ghim pid (chống add lại chỗ khác); update, heal link, vai keeper của luật 8
+        // đều bỏ qua hết.
+        if (pidRef.tomb) {
+          tombstones++;
+          Logger.log('Bia mộ "%s" ở %s dòng %s — anh đã xoá tay, không hồi sinh.',
+                     name, pidRef.month, pidRef.row);
+          return;
+        }
         // RULE 8 chạy TRƯỚC khi update: nó có thể dọn chính dòng vừa khớp id (bản sao ở
         // tháng mới hơn) và trả về dòng được giữ. Update sau, để giá trị rơi đúng chỗ
         // thay vì ghi vào một dòng sắp bị xoá.
@@ -442,6 +518,11 @@ function syncNow(opts) {
           idx.byPid[pid] = dup.keeper;
           Logger.log('Dọn bản sao "%s" ở %s — giữ dòng tháng cũ nhất %s dòng %s.',
                      name, dup.cleared.join(', '), dup.keeper.month, dup.keeper.row);
+        }
+        if (dup.handKept.length) {
+          dupHandKept += dup.handKept.length;
+          Logger.log('Bản sao "%s" ở %s là dòng tay (trống id) — không tự dọn, đã ghi Note.',
+                     name, dup.handKept.join(', '));
         }
         if (dup.fuzzy.length) {
           dupFlagged++;
@@ -498,6 +579,7 @@ function syncNow(opts) {
         }
         idx.byPid[pid] = oldRef;
         delete idx.olderByTitle[nt];
+        newStamped[pid] = true; // dòng cũ giờ mang id — pid coi như đã có mặt trên sheet
         blockedOld++;
         Logger.log('Không add "%s": đã có ở tab tháng cũ %s dòng %s — vá page id vào cột G.',
                    name, oldRef.month, oldRef.row);
@@ -508,6 +590,17 @@ function syncNow(opts) {
       // Test or beyond. Normal sync also requires observing the CROSS (prev not yet
       // counted); backfill stamps any counted task missing here.
       if (isCounted_(status) && (backfill || !isCounted_(prev[pid]))) {
+        // DẤU ĐÃ-TỪNG-ADD (ca thật 2026-08-06): tới được đây là pid không còn dòng nào
+        // (kể cả bia mộ) trên MỌI tab. Có stamp trong _STATE nghĩa là nó TỪNG có dòng
+        // — anh đã xoá tay, và xoá tay là ý định: không re-add, kể cả quét bù. Task
+        // chưa từng được add (không stamp) thì quét bù vẫn cứu như xưa — đúng việc
+        // của nó là vớt task sync bắt hụt.
+        if (stamped[pid]) {
+          skippedDeleted++;
+          skippedDeletedNames.push(name);
+          Logger.log('Không hồi sinh "%s": pid từng có dòng trong sheet, giờ không còn — anh đã xoá tay.', name);
+          return;
+        }
         // RULE 6 (2026-08): tháng đã CHỐT SỔ thì không nhận dòng mới nữa — kể cả việc
         // tạo tab tháng đó từ _TEMPLATE. Update dòng cũ vẫn chạy bình thường (rule 1),
         // chốt sổ chỉ chặn đúng một việc: ADD. Đếm + log để không bao giờ chặn im lặng.
@@ -540,6 +633,7 @@ function syncNow(opts) {
         }
         idx.byPid[pid] = { sheet: msh, row: r, month: month };
         idx.byTitle[nt] = { sheet: msh, row: r, month: month };
+        newStamped[pid] = true; // từ giờ pid này biến mất khỏi sheet = anh xoá, không re-add
         added++;
         return;
       }
@@ -547,18 +641,22 @@ function syncNow(opts) {
       waiting++; // not counted yet, not in sheet
     });
   });
-  writeState_(st.sheet, newState);
+  writeState_(st.sheet, newState, newStamped);
   // Format là việc trang trí — hỏng thì kệ, không được kéo sập lượt sync point.
   try { syncRowFormat_(ss); }
   catch (e) { Logger.log('Đặt format dòng lỗi (sync point vẫn xong): %s', e); }
   try { syncStatusColors_(ss, Object.keys(seenStatus)); }
   catch (e) { Logger.log('Đồng bộ màu status lỗi (sync point vẫn xong): %s', e); }
   Logger.log('Sync done. added=%s updated=%s baseline=%s waiting=%s suspect=%s ' +
-             'blockedClosed=%s blockedOld=%s dupFlagged=%s dupCleared=%s healedLink=%s firstRun=%s month=%s',
-             added, updated, baseline, waiting, suspect, blockedClosed, blockedOld, dupFlagged, dupCleared, healedLink, firstRun, month);
+             'blockedClosed=%s blockedOld=%s dupFlagged=%s dupCleared=%s dupHandKept=%s healedLink=%s ' +
+             'tombstones=%s skippedDeleted=%s firstRun=%s month=%s',
+             added, updated, baseline, waiting, suspect, blockedClosed, blockedOld, dupFlagged,
+             dupCleared, dupHandKept, healedLink, tombstones, skippedDeleted, firstRun, month);
   return { added: added, updated: updated, baseline: baseline, waiting: waiting, suspect: suspect,
            blockedClosed: blockedClosed, blockedOld: blockedOld,
-           dupFlagged: dupFlagged, dupCleared: dupCleared, healedLink: healedLink,
+           dupFlagged: dupFlagged, dupCleared: dupCleared, dupHandKept: dupHandKept,
+           healedLink: healedLink, tombstones: tombstones,
+           skippedDeleted: skippedDeleted, skippedDeletedNames: skippedDeletedNames,
            firstRun: firstRun, month: month, closedThrough: closedThrough_() };
 }
 
@@ -574,7 +672,10 @@ function backfillCounted() {
       'Cập nhật:      ' + r.updated + '\n' +
       'Nghi trùng:    ' + r.suspect + '\n' +
       (r.blockedOld ? 'Bỏ qua (đã có ở tháng cũ): ' + r.blockedOld + '\n' : '') +
+      (r.skippedDeleted ? '⛔ Không hồi sinh (anh đã xoá tay): ' + r.skippedDeleted + '\n   • ' +
+                          r.skippedDeletedNames.join('\n   • ') + '\n' : '') +
       (r.dupCleared ? 'Đã dọn bản sao trùng: ' + r.dupCleared + '\n' : '') +
+      (r.dupHandKept ? 'Dòng tay trùng (không tự xoá — xem Note H): ' + r.dupHandKept + '\n' : '') +
       (r.dupFlagged ? '⚠ Trùng tên khác id (xem Note H): ' + r.dupFlagged + '\n' : '') +
       (r.blockedClosed ? 'Bị chặn (tháng ' + r.month + ' đã chốt sổ tới hết ' +
                          r.closedThrough + '): ' + r.blockedClosed + '\n' : '') +
@@ -1103,17 +1204,24 @@ function diagnoseSheet() {
   // nên task counted trong đó mà không có dòng nào ở bất kỳ tab tháng nào chính là tập
   // quét bù sẽ thêm — và nó thêm tất cả vào THÁNG ĐANG TÍNH, kể cả task thật ra đã đạt
   // mốc từ tháng khác. Con số này nhỏ thì bấm yên tâm, lớn thì dừng lại xem đã.
-  var stSh = ss.getSheetByName(STATE), pendingBackfill = 0;
+  var stSh = ss.getSheetByName(STATE), pendingBackfill = 0, deletedStamped = 0;
   if (stSh && stSh.getLastRow() >= 2) {
-    var sv = stSh.getRange(2, 1, stSh.getLastRow() - 1, 2).getValues();
+    // Đọc _STATE đúng luật của getState_ (kể cả migration format cũ 2 cột), để con số
+    // in ra khớp với việc quét bù SẼ làm: pid có stamp mà mất dòng = anh đã xoá,
+    // quét bù bỏ qua chứ không thêm — không được đếm nó vào bán kính nổ.
+    var legacySt = String(stSh.getRange(1, 3).getValue() || '') !== 'stamped';
+    var sv = stSh.getRange(2, 1, stSh.getLastRow() - 1, 3).getValues();
     for (var m = 0; m < sv.length; m++) {
       var sp = norm_(String(sv[m][0]));
-      if (sp && isCounted_(sv[m][1]) && !pidWhere[sp]) pendingBackfill++;
+      if (!sp || !isCounted_(sv[m][1]) || pidWhere[sp]) continue;
+      if (legacySt || sv[m][2]) deletedStamped++;
+      else pendingBackfill++;
     }
   }
   L.push('Quét bù sẽ thêm khoảng ' + pendingBackfill + ' dòng vào tab ' + activeMonth_() +
-         ' (task đã counted mà chưa có dòng nào trong sheet). Task nào thật ra đạt mốc ở ' +
-         'tháng khác thì kéo dòng sang tab đúng sau khi quét.');
+         ' (task đã counted mà chưa có dòng nào trong sheet).' +
+         (deletedStamped ? ' Bỏ qua ' + deletedStamped + ' task anh đã xoá tay — không hồi sinh.' : '') +
+         ' Task nào thật ra đạt mốc ở tháng khác thì kéo dòng sang tab đúng sau khi quét.');
 
   Logger.log(L.join('\n'));
   alert_('🩺 Chẩn đoán xong (chỉ đọc, không sửa gì).\n\n' +
@@ -1128,12 +1236,14 @@ function diagnoseSheet() {
          'Page id trùng:              ' + dupPid.length + '\n' +
          'Tên task trùng:             ' + dupTitle.length + '\n' +
          'Rule màu status đời cũ:     ' + foreignRules + '\n\n' +
-         'Quét bù sẽ thêm ~' + pendingBackfill + ' dòng vào tab ' + activeMonth_() + '.\n\n' +
+         'Quét bù sẽ thêm ~' + pendingBackfill + ' dòng vào tab ' + activeMonth_() + '.' +
+         (deletedStamped ? ' (Bỏ qua ' + deletedStamped + ' task anh đã xoá tay.)' : '') + '\n\n' +
          'Chi tiết từng tab / từng dòng nằm trong Execution log ' +
          '(Extensions → Apps Script → Executions).');
   return { tabs: tabs, alienTabs: alienTabs, monthTabs: monthTabs, dataRows: dataRows,
            gapRows: gapRows, missingPid: missingPid, dupPid: dupPid, dupTitle: dupTitle,
-           foreignRules: foreignRules, pendingBackfill: pendingBackfill, lines: L };
+           foreignRules: foreignRules, pendingBackfill: pendingBackfill,
+           deletedStamped: deletedStamped, lines: L };
 }
 
 // ---- triggers / menu ----
