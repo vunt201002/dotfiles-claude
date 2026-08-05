@@ -57,6 +57,71 @@ Two things are required every time a code-work agent is spawned:
 Both steps apply regardless of how the agent was invoked (`Agent` tool,
 `Workflow`, or otherwise) whenever the work is a code change.
 
+## Cặp builder + judge: chấm điểm trước khi báo xong
+
+Gate `/review` ở trên bắt đúng-sai. Nó không bắt được **chất lượng**, vì người
+duy nhất đánh giá kết quả là chính agent đã làm ra nó. Với việc mà "đạt chưa"
+mang tính chủ quan, tự chấm gần như vô giá trị — một agent vừa dựng lại trang sẽ
+báo "xong, nhìn ổn" mà chưa từng mở trang ra nhìn.
+
+**Luật:** trước khi spawn agent cho việc non-trivial, phân loại việc thuộc domain
+nào. Domain đó có **nền chấm đã đăng ký** thì chạy cặp builder + judge với vòng
+chấm điểm. Chưa có nền thì giữ nguyên đường cũ (1 builder → `/review`) và **nói
+rõ là chưa chấm**, không bịa ra điểm.
+
+| Domain | Nền chấm | Ngưỡng |
+|---|---|---|
+| UI/design — improve · build · redesign | `design-eye §B` (5 dimension) + `§E` anti-slop | mọi dimension ≥9 |
+| còn lại | chưa có | không chấm |
+
+Thêm domain về sau = thêm một dòng + một file rubric. Một con `9/10` không có nền
+đằng sau là số bịa: nó tạo cảm giác an tâm sai, tệ hơn không có điểm.
+
+### Cách chạy cặp
+
+Spawn **cả hai trong một lượt**, background, đặt tên theo surface để hai vòng
+khác nhau không giẫm tên nhau (`builder-loyalty` / `judge-loyalty`). Spawn xong
+main rảnh luôn, không làm bưu tá giữa hai bên.
+
+1. **builder** — brief đầy đủ + rubric + hợp đồng bàn giao. Xong một vòng thì
+   `SendMessage` cho judge.
+2. **judge** — brief đầy đủ + rubric, nạp tiêu chí rồi kết thúc lượt, nằm chờ.
+   Builder ping là nó tỉnh dậy nguyên context.
+3. **judge tự mở `/my-chrome`**, tự chụp matrix 375/768/1280, tự đọc computed
+   styles. Không chấm trên ảnh builder nộp.
+4. Còn dimension <9 và còn lượt → `SendMessage` về builder kèm finding grounded.
+   Đạt, hoặc hết cap → `SendMessage` về `main`.
+5. Main chạy gate `/review` rồi mới report cho user.
+
+### Ba ràng buộc giữ cho judge còn giá trị
+
+- **Judge có đủ context tổng** (mục tiêu, case đang xử lý, ràng buộc, rubric)
+  nhưng **không** có quá trình implement của builder. Judge đo kết quả, không đọc
+  câu chuyện.
+- **Tin builder gửi judge chỉ chứa 2 thứ:** vòng thứ mấy + surface ở đâu
+  (URL/route), và danh sách file đã đụng. Không tự đánh giá. Cho builder tự thuật
+  là để builder đóng khung cách judge nhìn.
+- **Judge không bao giờ sửa code.** Report-only, như `/impact-review`,
+  `/tech-review`, `/qa-only`. Judge sửa code là vòng sau nó chấm chính nó.
+
+### Dừng
+
+Cap **3 vòng** (đúng tiền lệ `/fix-bug-loop`, và tripwire "3-4 lần fail cùng một
+thứ thì DỪNG, báo user"). Hết cap chưa đạt → dừng, báo còn thiếu gì và thiếu bao
+nhiêu, không lặp tiếp.
+
+Đóng khi **mọi dimension ≥9**. Đường thoát duy nhất: finding **thật sự không sửa
+được trong ràng buộc của task** (luật Polaris, giới hạn theme), và phải do
+**judge** quyết chứ không phải builder, judge phải nêu tên ràng buộc dưới dạng
+grounded, finding vẫn đi lên tới report. Không bao giờ im lặng bỏ qua.
+
+### Cỡ việc
+
+Chỉ áp cho việc non-trivial, theo đúng thước non-trivial của rule spawn ở trên.
+Sửa một dòng CSS, đổi màu, sửa chữ thì không vào vòng. Mặc định **một vòng tại
+một thời điểm** — hai vòng song song sẽ tranh Chrome thật; cần thì nói rõ rồi
+chạy nối tiếp. User bảo bỏ qua vòng chấm thì bỏ qua, y như rule spawn.
+
 ## Hard rule: no inline comments in code
 
 Code explains itself through naming and structure. A comment that restates what
