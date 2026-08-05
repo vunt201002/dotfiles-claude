@@ -238,6 +238,15 @@ From the HN rows + search hits combined:
 5. **Number every item sequentially across the whole digest** (1, 2, 3... continuing
    through all sections). This numbering is what `/tech-digest save <N>` references, so
    it must be visible in both the printed output and the saved file.
+6. **Spot follow candidates (max 1-2 per run).** While filtering, notice UNFOLLOWED
+   people whose post made the cut and who look like a recurring source for the user's
+   world — Shopify app founders/operators (loyalty, retention, post-purchase),
+   AI/devtool builders, engineers writing about their own systems. A candidate needs:
+   a post that earned its place in TODAY's digest, a handle/profile visible in this
+   run's actual results (never guessed), and not already in `$SOURCES`. One great post
+   from a random author is not enough — suggest someone the user would plausibly want
+   EVERY post from. No candidate most days is normal; suggest nothing rather than
+   stretching.
 
 ---
 
@@ -283,10 +292,17 @@ TECH DIGEST — {NICE_DATE}
 ────────────────────────────────────────
 📊 {N} mục · bỏ {M} bài (trùng/đã đọc/SEO) · lưu: personal/tech-digest/{TODAY}.md
 💾 Lưu đọc sau:  /tech-digest save <số>   (vd: save 1 3)
+💡 Đáng follow: {name} ({X: @handle | LinkedIn: slug}) — {1 dòng: vì sao nên nghe người này lâu dài}
+   → /tech-digest follow "{name}"
 ```
 
 The `save <N>` footer line is required whenever the digest has items — it's how the
 user knows the numbers map to the save command.
+
+The 💡 line appears only when Step 3 found a real follow candidate (most runs: none —
+omit the line entirely). Handle must come from this run's fetched results, same
+no-fabrication bar as everything else. If the user replies with the follow command,
+the normal `follow` sub-command flow stores it with the verified handle.
 
 Then append every URL you listed to `$SEEN` so tomorrow won't repeat them:
 
