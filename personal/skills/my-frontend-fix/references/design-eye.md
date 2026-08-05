@@ -156,6 +156,8 @@ nội bộ** + rubric 15 câu. Project có `DESIGN.md` → đó là chuẩn, đ�
 | 18 | Nút/link khó bấm mobile | target < chuẩn (44pt HIG / 24px WCAG floor) | đo hit area render GỒM padding, không phải icon | 0 |
 | 19 | Widget chỉ hỏng trên MỘT SỐ theme | CSS host page bleed (reset, `!important`, inherit) | repro theo theme; diff computed styles vs trang sạch; fix = scoping | 0 |
 | 20 | Modal/dropdown bị cắt ở mép container | ancestor `overflow:hidden` (hoặc transform) clip popout | popout đứt đúng biên 1 parent; walk ancestors | 0 |
+| 21 | Control nổi (close/back/FAB) chỉ đè content SAU KHI cuộn | control out-of-flow là SIBLING của scroller chứ không nằm trong nó → rect bất biến theo scroll, content trôi qua bên dưới | `getBoundingClientRect()` tại 3+ scrollTop: chỉ 1 giá trị `top` ⇒ bị ghim. Fix = đưa vào header `flex-shrink:0` ngoài scroller, KHÔNG phải chỉnh z-index/offset | 1 |
+| 22 | Cùng 1 component/state hiển thị khác nhau giữa các surface; QC chỉ báo 1 surface | markup+CSS duplicate nguyên si qua N surface, một bản drift sang bậc token khác | grep tên class → ra >1 file thì so *bậc token* từng bản TRƯỚC khi đổ tại theme/rem; fix phải quét đủ N bản | 1 |
 
 (Bản đầy đủ 28 pattern + nguồn từng dòng: `personal/docs/claude-smarter-research-2026-07-20.md` Phần 2.)
 
@@ -167,6 +169,8 @@ nội bộ** + rubric 15 câu. Project có `DESIGN.md` → đó là chuẩn, đ�
 - KHÔNG hiện lỗi bằng toast tự tắt — đỏ, inline, persistent (BFS reject).
 - KHÔNG sửa spacing 1 element mà bỏ qua siblings cùng hàng — alignment chấm theo CỤM.
 - KHÔNG đóng fix mobile khi mới nhìn viewport desktop (matrix bắt buộc — my-frontend-fix bước 2).
+- KHÔNG kết luận "sai size = do rem/62.5%" khi token đã là px — đọc *declared value* của rule (`sheet.cssRules`) trước rồi mới nghi cascade; nguyên nhân hay gặp hơn là chọn nhầm bậc trong type ramp.
+- KHÔNG đo overlap bằng `getBoundingClientRect()` thô khi element nằm trong scroller — rect không bị clip nên sinh false positive/negative; giao với client rect của scroll container trước.
 - *(append tại đây khi bug mới dạy được điều cấm mới)*
 
 ---
