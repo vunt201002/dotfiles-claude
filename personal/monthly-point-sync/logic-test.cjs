@@ -38,6 +38,24 @@ class MockRange {
   }
   getValue() { return this.s.data[this.r - 1][this.c - 1]; }
   setValue(v) { this.s.data[this.r - 1][this.c - 1] = v; return this; }
+  setWrapStrategy(w) {
+    this.s.wrapCalls.push({ row: this.r, col: this.c, nr: this.nr, nc: this.nc, strategy: w });
+    return this;
+  }
+  clearContent() {
+    for (let i = 0; i < this.nr; i++)
+      for (let j = 0; j < this.nc; j++) this.s.data[this.r - 1 + i][this.c - 1 + j] = '';
+    return this;
+  }
+  setFontStyle(v) { this.s.fonts.push({ kind: 'style', col: this.c, nr: this.nr, value: v }); return this; }
+  setFontSize(v) { this.s.fonts.push({ kind: 'size', col: this.c, nr: this.nr, value: v }); return this; }
+  setFontColor(v) { this.s.fonts.push({ kind: 'color', col: this.c, nr: this.nr, value: v }); return this; }
+  setVerticalAlignment(v) { this.s.aligns.push({ axis: 'v', row: this.r, col: this.c, nr: this.nr, nc: this.nc, value: v }); return this; }
+  setHorizontalAlignment(v) { this.s.aligns.push({ axis: 'h', row: this.r, col: this.c, nr: this.nr, nc: this.nc, value: v }); return this; }
+  setDataValidation(rule) {
+    this.s.validations.push({ row: this.r, col: this.c, nr: this.nr, rule: rule });
+    return this;
+  }
   getRow() { return this.r; }
   getColumn() { return this.c; }
   getNumRows() { return this.nr; }
@@ -87,38 +105,53 @@ function mkRule(o) {
 class MockSheet {
   constructor(name) {
     this.name = name; this.hidden = false; this.cfRules = []; this.cfWrites = 0;
+    this.wrapCalls = []; this.validations = []; this.aligns = []; this.fonts = []; this.widths = {};
+    this.maxRows = MAXR;
     this.data = Array.from({ length: MAXR }, () => Array(MAXC).fill(''));
   }
   getConditionalFormatRules() { return this.cfRules.slice(); }
   setConditionalFormatRules(rules) { this.cfRules = rules.slice(); this.cfWrites++; }
-  getMaxRows() { return MAXR; }
+  getMaxRows() { return this.maxRows; }
+  getMaxColumns() { return MAXC; }
+  getColumnWidth(c) { return this.widths[c] === undefined ? 100 : this.widths[c]; }
+  setColumnWidth(c, w) { this.widths[c] = w; return this; }
+  insertRowsAfter(after, n) {
+    for (let i = 0; i < n; i++) this.data.splice(after, 0, Array(MAXC).fill(''));
+    this.maxRows += n;
+    return this;
+  }
   getName() { return this.name; }
   setName(n) { this.name = n; return this; }
   showSheet() { this.hidden = false; return this; }
   hideSheet() { this.hidden = true; return this; }
   getRange(a, b, c, d) {
     if (typeof a === 'string') {
-      if (a === 'A2:A') return new MockRange(this, 2, 1, MAXR - 1, 1);
-      if (a === 'B2:B') return new MockRange(this, 2, 2, MAXR - 1, 1);
+      if (a === 'A2:A') return new MockRange(this, 2, 1, this.maxRows - 1, 1);
+      if (a === 'B2:B') return new MockRange(this, 2, 2, this.maxRows - 1, 1);
       throw new Error('A1 notation chưa mock: ' + a);
     }
     return new MockRange(this, a, b, c === undefined ? 1 : c, d === undefined ? 1 : d);
   }
   getLastRow() {
-    for (let i = MAXR - 1; i >= 0; i--)
+    for (let i = this.data.length - 1; i >= 0; i--)
       if (this.data[i].some(v => v !== '' && v !== null)) return i + 1;
     return 0;
   }
-  clearContents() { this.data = Array.from({ length: MAXR }, () => Array(MAXC).fill('')); }
+  clearContents() { this.data = Array.from({ length: this.maxRows }, () => Array(MAXC).fill('')); }
   copyTo(ss) {
     const c = new MockSheet('Copy of ' + this.name);
+    c.maxRows = this.maxRows;
     c.data = this.data.map(r => r.slice());
     c.cfRules = this.cfRules.slice(); // như Sheets thật: copyTo mang theo conditional formatting
+    c.wrapCalls = this.wrapCalls.slice(); // và mang theo cả format ô (wrap)
+    c.validations = this.validations.slice();
+    c.aligns = this.aligns.slice();
+    c.fonts = this.fonts.slice();
     ss.sheets.push(c); return c;
   }
   dataRowCount() { // helper riêng cho test: số dòng data (từ row 2, cột A)
     let n = 0;
-    for (let i = 1; i < MAXR; i++) if (this.data[i][0] !== '' && this.data[i][0] !== null) n++;
+    for (let i = 1; i < this.data.length; i++) if (this.data[i][0] !== '' && this.data[i][0] !== null) n++;
     return n;
   }
 }
@@ -138,8 +171,17 @@ class MockSS {
   toast(msg, title) { this.toasts.push({ title: title || '', msg: msg }); }
 }
 class MockUi {
-  constructor() { this.alerts = []; this.menus = []; }
-  alert(msg) { this.alerts.push(msg); }
+  constructor() {
+    this.alerts = []; this.menus = []; this.answer = 'NO';
+    this.ButtonSet = { OK: 'OK', YES_NO: 'YES_NO' };
+    this.Button = { OK: 'OK', YES: 'YES', NO: 'NO' };
+  }
+  // alert(msg) = thông báo; alert(title, msg, buttonSet) = hỏi Yes/No (trả this.answer).
+  alert(a, b) {
+    if (b === undefined) { this.alerts.push(a); return this.Button.OK; }
+    this.alerts.push(a + '\n' + b);
+    return this.answer;
+  }
   createMenu(title) {
     const ui = this, menu = { title: title, items: [] };
     const b = {
@@ -153,15 +195,18 @@ class MockUi {
 
 // ---------------- sandbox ----------------
 // opts: { nowMonth: 'MM/yyyy', props?: {..}, pages?: {dsId: [page..]}, ss?: MockSS,
-//         schema?: {dsId: [statusOption..] | null}, now?: <epoch ms>, noUi?: bool }
+//         schema?: {dsId: [statusOption..] | null}, now?: <epoch ms>, noUi?: bool,
+//         uiAnswer?: 'YES'|'NO' }
 //   schema[ds] = null  → board đó trả HTTP lỗi (khác với [] = board không có option).
 //   now                → mốc thời gian ban đầu; chỉnh env.clock.ms để "già hoá" cache.
 //   noUi               → getUi() ném lỗi, mô phỏng lúc trigger chạy (không có UI).
+//   uiAnswer           → nút anh bấm trong hộp thoại Yes/No (mặc định NO).
 function makeEnv(opts) {
   const props = Object.assign({ NOTION_TOKEN: 'ntn_test' }, opts.props || {});
   const ss = opts.ss || new MockSS();
   if (!ss.getSheetByName('_TEMPLATE')) ss.insertSheet('_TEMPLATE');
   const ui = new MockUi();
+  if (opts.uiAnswer) ui.answer = opts.uiAnswer;
   const logs = [];
   const fetches = [];
   const clock = { ms: opts.now === undefined ? Date.now() : opts.now };
@@ -196,6 +241,17 @@ function makeEnv(opts) {
       getUi: () => { if (opts.noUi) throw new Error('Cannot call SpreadsheetApp.getUi() from this context'); return ui; },
       newConditionalFormatRule: () => newCfRuleBuilder(),
       BooleanCriteria: { TEXT_EQUAL_TO: TEXT_EQUAL_TO, TEXT_CONTAINS: TEXT_CONTAINS },
+      WrapStrategy: { WRAP: 'WRAP', OVERFLOW: 'OVERFLOW', CLIP: 'CLIP' },
+      newDataValidation: () => {
+        const s = { values: [], allowInvalid: null, kind: null };
+        const b = {
+          requireValueInList(v, showDropdown) { s.kind = 'list'; s.values = v.slice(); s.showDropdown = showDropdown; return b; },
+          requireCheckbox() { s.kind = 'checkbox'; return b; },
+          setAllowInvalid(v) { s.allowInvalid = v; return b; },
+          build: () => s,
+        };
+        return b;
+      },
     },
     ScriptApp: { getProjectTriggers: () => [], newTrigger: () => ({ timeBased: () => ({ everyMinutes: () => ({ create: () => {} }) }) }) },
   };
@@ -479,19 +535,19 @@ t('không có tab Dashboard → không lỗi, hành vi cũ giữ nguyên', () =>
   env.sandbox.syncNow();
   ok(ss.getSheetByName('07/2026'), 'tab tháng vẫn được tạo bình thường');
 });
-t('pinDashboardFirstMenu_: Dashboard bị lệch vị trí → đưa về đầu + toast xác nhận', () => {
+t('pinDashboardFirstMenu: Dashboard bị lệch vị trí → đưa về đầu + toast xác nhận', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
   ss.insertSheet('06/2026'); ss.insertSheet(DASHBOARD_NAME); ss.insertSheet('07/2026');
   const env = makeEnv({ nowMonth: '07/2026', ss });
-  env.sandbox.pinDashboardFirstMenu_();
+  env.sandbox.pinDashboardFirstMenu();
   eq(ss.getSheets()[0].getName(), DASHBOARD_NAME);
   eq(env.ss.toasts.length, 1);
   ok(env.ss.toasts[0].msg.indexOf(DASHBOARD_NAME) !== -1, env.ss.toasts[0].msg);
 });
-t('pinDashboardFirstMenu_: không có tab Dashboard → toast báo không tìm thấy, không lỗi', () => {
+t('pinDashboardFirstMenu: không có tab Dashboard → toast báo không tìm thấy, không lỗi', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
   const env = makeEnv({ nowMonth: '07/2026', ss });
-  env.sandbox.pinDashboardFirstMenu_();
+  env.sandbox.pinDashboardFirstMenu();
   eq(env.ss.toasts.length, 1);
   ok(env.ss.toasts[0].msg.indexOf('Không tìm thấy') !== -1, env.ss.toasts[0].msg);
 });
@@ -677,7 +733,11 @@ t('không có UI (trigger chạy) → báo cáo rơi xuống Logger, không ném
   ok(env.logs.some(l => l.indexOf('Status lạ') !== -1), 'nội dung báo cáo vào log: ' + env.logs.join('\n'));
 });
 
-console.log('— Tô màu status: CỘNG THÊM, màu sẵn có không bị đổi —');
+// Garry không tự tô màu status bao giờ ("để script lo hết") → mọi rule TEXT_EQUAL_TO ở
+// cột B đều do chính script sinh, chỉ khác đời. Rule đọc được thì dựng lại theo palette
+// hiện tại; rule không dựng lại được (công thức / TEXT_CONTAINS / status Notion đã bỏ)
+// thì không đụng tới và vẫn đứng trước.
+console.log('— Tô màu status: dựng lại rule đọc được, không đụng rule không dựng lại nổi —');
 function ssWithRules(rulesFn, rows) {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
   const sh = ss.insertSheet('07/2026');
@@ -687,17 +747,17 @@ function ssWithRules(rulesFn, rows) {
   return { ss, sh };
 }
 
-t('status anh đã tô rồi → giữ nguyên màu của anh, KHÔNG thêm rule thứ hai', () => {
+t('rule status lệch bảng màu hiện tại → dựng lại theo Notion, KHÔNG nhân đôi', () => {
   const { ss, sh } = ssWithRules(s => [ownStatusRule(s, 'Done', '#123456', '#654321')], ['Done']);
   const schema = {}; schema[DS1] = [statusOption('Done', 'green')];
   const env = colorEnv(null, schema, ss);
   env.sandbox.colorStatusesFromNotion();
   const rules = sh.getConditionalFormatRules().filter(r => r.text === 'Done');
   eq(rules.length, 1, 'chỉ 1 rule cho Done');
-  eq(rules[0].bg, '#123456', 'nền của anh giữ nguyên');
-  eq(rules[0].fg, '#654321', 'chữ của anh giữ nguyên');
+  eq(rules[0].bg, '#DBEDDB', 'nền về đúng green của Notion');
+  eq(rules[0].fg, '#448361', 'chữ về đúng green của Notion');
 });
-t('rule của anh luôn đứng TRƯỚC rule Notion (rule khớp đầu tiên thắng)', () => {
+t('rule ngoài cột Status vẫn đứng TRƯỚC và không bị đụng', () => {
   const { ss, sh } = ssWithRules(s => [
     ownStatusRule(s, 'Done', '#123456', '#654321'),
     foreignRule(s),
@@ -706,12 +766,13 @@ t('rule của anh luôn đứng TRƯỚC rule Notion (rule khớp đầu tiên t
   const env = colorEnv(null, schema, ss);
   const r = env.sandbox.colorStatusesFromNotion();
   const rules = sh.getConditionalFormatRules();
-  eq(rules[0].bg, '#123456', 'rule Done của anh vẫn ở index 0');
-  eq(rules[1].bg, '#000000', 'rule Role của anh vẫn ở index 1');
-  eq(rules.length, 3, 'chỉ thêm 1 rule cho Testing');
-  eq(rules[2].text, 'Testing', 'rule Notion nằm cuối');
-  eq(r.kept, 2, 'giữ 2 rule của anh');
-  eq(r.appended, 3, 'thêm Testing ở tab tháng + cả 2 status ở _TEMPLATE (đang trắng)');
+  eq(rules.length, 3, 'rule màu Role cột D + 2 rule status');
+  eq(rules[0].bg, '#000000', 'rule cột D vẫn ở index 0');
+  eq(rules.find(x => x.text === 'Done').bg, '#DBEDDB', 'Done về green');
+  eq(rules.find(x => x.text === 'Testing').bg, '#D3E5EF', 'Testing về blue');
+  eq(r.kept, 1, 'chỉ giữ rule cột D');
+  eq(r.rebuilt, 1, 'dựng lại rule Done đời cũ');
+  eq(r.appended, 4, '2 status × (tab tháng + _TEMPLATE)');
 });
 t('status chưa có màu → được thêm màu Notion', () => {
   const { ss, sh } = ssWithRules(s => [ownStatusRule(s, 'Done', '#123456', '#654321')],
@@ -723,7 +784,7 @@ t('status chưa có màu → được thêm màu Notion', () => {
   ok(wtl, 'có rule mới cho Waiting to live');
   eq(wtl.bg, '#E8DEEE', 'purple bg'); eq(wtl.fg, '#9065B0', 'purple fg');
 });
-t('rule cũ bị chặn đuôi (B2:B51) → nới hết cột, màu giữ nguyên từng byte', () => {
+t('rule cũ bị chặn đuôi (B2:B51) → dựng lại: chạy hết cột + đúng màu Notion', () => {
   const { ss, sh } = ssWithRules(s => [ownStatusRule(s, 'Testing', '#AA0011', '#BB2233', 51)], ['Testing']);
   const before = sh.getConditionalFormatRules()[0];
   eq(before.getRanges()[0].getRow() + before.getRanges()[0].getNumRows() - 1, 51, 'trước: chặn ở dòng 51');
@@ -732,13 +793,13 @@ t('rule cũ bị chặn đuôi (B2:B51) → nới hết cột, màu giữ nguyê
   const r = env.sandbox.colorStatusesFromNotion();
   const after = sh.getConditionalFormatRules()[0];
   const rg = after.getRanges()[0];
+  eq(sh.getConditionalFormatRules().length, 1, 'không nhân đôi');
   eq(rg.getRow() + rg.getNumRows() - 1, sh.getMaxRows(), 'sau: chạy hết cột B');
   eq(rg.getColumn(), 2, 'vẫn cột B');
-  eq(after.bg, '#AA0011', 'nền không đổi'); eq(after.fg, '#BB2233', 'chữ không đổi');
-  eq(after.criteria, TEXT_EQUAL_TO, 'criteria không đổi');
-  eq(after.values.join(), 'Testing', 'giá trị khớp không đổi');
-  eq(r.extended, 1, 'báo cáo có nới 1 rule');
-  ok(env.logs.some(l => l.indexOf('Nới range') !== -1 && l.indexOf('Testing') !== -1), env.logs.join('\n'));
+  eq(after.bg, '#D3E5EF', 'nền về đúng blue'); eq(after.fg, '#337EA9', 'chữ về đúng blue');
+  eq(after.criteria, TEXT_EQUAL_TO, 'vẫn khớp text tuyệt đối');
+  eq(after.values.join(), 'Testing', 'vẫn phủ đúng status đó');
+  eq(r.rebuilt, 1, 'báo cáo có dựng lại 1 rule');
 });
 t('rule của anh không đọc ra được status (công thức / TEXT_CONTAINS) → giữ, vẫn đứng trước', () => {
   const { ss, sh } = ssWithRules(s => [
@@ -768,7 +829,8 @@ t('chạy 3 lần liên tiếp không làm phình danh sách rule', () => {
   env.sandbox.colorStatusesFromNotion();
   env.sandbox.colorStatusesFromNotion();
   eq(sh.getConditionalFormatRules().length, n, 'số rule không đổi');
-  eq(sh.getConditionalFormatRules()[0].bg, '#123456', 'màu của anh vẫn nguyên sau 3 lần');
+  eq(sh.getConditionalFormatRules()[0].bg, '#000000', 'rule cột D vẫn nguyên sau 3 lần');
+  eq(sh.getConditionalFormatRules().find(r => r.text === 'Done').bg, '#DBEDDB', 'màu status ổn định');
 });
 t('status anh đã tô mà Notion không còn → KHÔNG bị báo là thiếu màu', () => {
   const { ss, sh } = ssWithRules(s => [ownStatusRule(s, 'Status cũ của anh', '#123456', '#654321')],
@@ -791,15 +853,15 @@ t('nhận ra rule của chính code khi Sheets trả hex 8 ký tự (#aarrggbb) 
   eq(rules.length, 1, 'dựng lại chứ không nhân đôi');
   eq(rules[0].bg, '#DBEDDB', 'màu green chuẩn');
 });
-t('log tổng kết nêu rõ giữ / nới / thêm bao nhiêu rule', () => {
+t('log tổng kết nêu rõ giữ / dựng lại / ghi bao nhiêu rule', () => {
   const { ss } = ssWithRules(s => [ownStatusRule(s, 'Done', '#123456', '#654321', 51)], ['Done']);
   const schema = {}; schema[DS1] = [statusOption('Done', 'green'), statusOption('Testing', 'blue')];
   const env = colorEnv(null, schema, ss);
   env.sandbox.colorStatusesFromNotion();
-  ok(env.logs.some(l => l.indexOf('giữ nguyên') !== -1 && l.indexOf('nới range') !== -1 &&
-                        l.indexOf('thêm mới') !== -1), env.logs.join('\n'));
+  ok(env.logs.some(l => l.indexOf('giữ nguyên') !== -1 && l.indexOf('dựng lại') !== -1 &&
+                        l.indexOf('rule màu') !== -1), env.logs.join('\n'));
 });
-t('đường tự động trong syncNow cũng chỉ cộng thêm, không đổi màu sẵn có', () => {
+t('đường tự động trong syncNow cũng dựng lại rule đời cũ về đúng palette', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
   const old = ss.insertSheet('06/2026');
   old.getRange(2, 1, 1, 7).setValues([['T', 'Ready to Test', 1, 'Dev', false, 'link', 'z']]);
@@ -809,10 +871,11 @@ t('đường tự động trong syncNow cũng chỉ cộng thêm, không đổi 
   const env = makeEnv({ nowMonth: '07/2026', ss, schema, pages, now: T0 });
   env.sandbox.syncNow();
   const rules = old.getConditionalFormatRules();
-  eq(rules[0].bg, '#123456', 'màu Ready to Test của anh giữ nguyên');
-  eq(rules[0].getRanges()[0].getNumRows(), old.getMaxRows() - 1, 'range được nới hết cột');
-  eq(rules.length, 2, 'chỉ thêm rule cho Done');
-  eq(rules[1].text, 'Done');
+  eq(rules.length, 2, 'đúng 2 rule: Ready to Test + Done');
+  const rtt = rules.find(x => x.text === 'Ready to Test');
+  eq(rtt.bg, '#FDECC8', 'về đúng yellow của Notion');
+  eq(rtt.getRanges()[0].getNumRows(), old.getMaxRows() - 1, 'range chạy hết cột');
+  ok(rules.find(x => x.text === 'Done'), 'status còn lại cũng có màu');
 });
 
 console.log('— Tô màu status: Notion lỗi thì không đụng vào rule —');
@@ -989,6 +1052,879 @@ t('_TEMPLATE chưa có rule nhưng đã có cache → tab tháng mới vẫn đ�
   const fresh = ss.getSheetByName('07/2026');
   eq(fresh.getConditionalFormatRules().length, 1, 'tab mới vẫn có màu nhờ cache');
   eq(fresh.getConditionalFormatRules()[0].bg, '#FDECC8', 'yellow bg');
+});
+
+console.log('— Dòng add: chỉ được rơi vào dòng TRỐNG hết A..H —');
+function ssWithMonth(tab, rowsFn) {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const sh = ss.insertSheet(tab);
+  rowsFn(sh);
+  return { ss, sh };
+}
+function addOnce(ss, nowMonth, props) {
+  const pages = {}; pages[DS1] = [page('p9', 'Task mới', 'Ready to Test', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: nowMonth || '07/2026', pages, ss, props });
+  return { env, r: env.sandbox.syncNow({ backfill: true }) };
+}
+
+t('dòng cuối trống cột A nhưng B..H còn data → add KHÔNG được đè lên nó', () => {
+  const { ss, sh } = ssWithMonth('07/2026', s => {
+    s.getRange(2, 1, 1, 7).setValues([['Task cũ', 'Done', 1, 'Dev', true, 'link', 'old1']]);
+    s.getRange(3, 2, 1, 6).setValues([['Testing', 2, 'Dev', true, 'link', 'old2']]);
+    s.getRange(3, 8).setValue('note anh gõ tay');
+  });
+  const { r } = addOnce(ss);
+  eq(r.added, 1, 'task mới vẫn được thêm');
+  eq(sh.getRange(3, 7).getValue(), 'old2', 'page id dòng 3 còn nguyên');
+  eq(sh.getRange(3, 5).getValue(), true, 'Have dòng 3 còn nguyên');
+  eq(sh.getRange(3, 8).getValue(), 'note anh gõ tay', 'Note dòng 3 còn nguyên');
+  eq(sh.getRange(4, 1).getValue(), 'Task mới', 'task mới xuống dòng 4');
+});
+t('dòng dưới chỉ có Note (H) → add vẫn phải nhảy qua', () => {
+  const { ss, sh } = ssWithMonth('07/2026', s => {
+    s.getRange(2, 1, 1, 7).setValues([['Task cũ', 'Done', 1, 'Dev', true, 'link', 'old1']]);
+    s.getRange(3, 8).setValue('⚠ ghi chú lạc dòng');
+  });
+  addOnce(ss);
+  eq(sh.getRange(3, 8).getValue(), '⚠ ghi chú lạc dòng', 'note không bị đè');
+  eq(sh.getRange(3, 1).getValue(), '', 'dòng 3 không bị ghi task');
+  eq(sh.getRange(4, 1).getValue(), 'Task mới', 'task mới xuống dòng 4');
+});
+t('KPI ở cột I+ kéo xuống dưới vùng task → KHÔNG đẩy dòng add xuống', () => {
+  const { ss, sh } = ssWithMonth('07/2026', s => {
+    s.getRange(2, 1, 1, 7).setValues([['Task cũ', 'Done', 1, 'Dev', true, 'link', 'old1']]);
+    s.getRange(30, 9).setValue('KPI tháng');
+    s.getRange(31, 10).setValue(45000);
+  });
+  addOnce(ss);
+  eq(sh.getRange(3, 1).getValue(), 'Task mới', 'add ngay dòng 3, không nhảy qua block KPI');
+});
+t('checkbox trống sẵn ở cột E (Sheets trả false) KHÔNG được tính là dòng có data', () => {
+  const { ss, sh } = ssWithMonth('07/2026', s => {
+    s.getRange(2, 1, 1, 7).setValues([['Task cũ', 'Done', 1, 'Dev', true, 'link', 'old1']]);
+    for (let r = 3; r <= 50; r++) s.getRange(r, 5).setValue(false); // checkbox chưa tick
+  });
+  addOnce(ss);
+  eq(sh.getRange(3, 1).getValue(), 'Task mới', 'add ngay dòng 3, không nhảy xuống dòng 51');
+});
+t('tab đã kín lưới → nới lưới rồi mới ghi, không kéo sập cả lượt sync', () => {
+  const { ss, sh } = ssWithMonth('07/2026', s => {
+    for (let r = 2; r <= s.getMaxRows(); r++) s.getRange(r, 1).setValue('cũ ' + r);
+  });
+  const before = sh.getMaxRows();
+  const { r } = addOnce(ss);
+  eq(r.added, 1, 'vẫn add được, không ném lỗi');
+  ok(sh.getMaxRows() > before, 'lưới được nới: ' + before + ' → ' + sh.getMaxRows());
+  eq(sh.getRange(before, 1).getValue(), 'cũ ' + before, 'dòng cuối cũ không bị đè');
+  eq(sh.getRange(before + 1, 1).getValue(), 'Task mới', 'task mới nằm đúng dòng kế tiếp');
+});
+// Ca thật 2026-08-05: luật 8 dọn bản sao xong để lại lỗ ở dòng 2-9, data còn ở 10-12.
+// Bản cũ nhảy xuống sau dòng cuối (13) nên lỗ nằm trống mãi.
+t('có lỗ trống phía trên, data ở dưới → add LẤP LỖ, không rơi xuống đáy', () => {
+  const { ss, sh } = ssWithMonth('07/2026', s => {
+    s.getRange(10, 1, 1, 7).setValues([['Task cũ 1', 'Done', 1, 'Dev', true, 'link', 'old1']]);
+    s.getRange(11, 1, 1, 7).setValues([['Task cũ 2', 'Done', 2, 'Dev', true, 'link', 'old2']]);
+  });
+  const { r } = addOnce(ss);
+  eq(r.added, 1);
+  eq(sh.getRange(2, 1).getValue(), 'Task mới', 'phải lấp vào dòng trống đầu tiên');
+  eq(sh.getRange(10, 1).getValue(), 'Task cũ 1', 'data cũ không bị đụng');
+  eq(sh.getRange(11, 7).getValue(), 'old2', 'và không bị đè');
+});
+t('lỗ trống ở GIỮA hai vùng data → vẫn lấp đúng lỗ đó', () => {
+  const { ss, sh } = ssWithMonth('07/2026', s => {
+    s.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 1, 'Dev', true, 'link', 'a1']]);
+    s.getRange(5, 1, 1, 7).setValues([['Task B', 'Done', 2, 'Dev', true, 'link', 'b1']]);
+  });
+  addOnce(ss);
+  eq(sh.getRange(3, 1).getValue(), 'Task mới', 'lấp dòng 3');
+  eq(sh.getRange(5, 1).getValue(), 'Task B', 'dòng 5 nguyên vẹn');
+});
+t('tab trống hoàn toàn → dòng đầu tiên là dòng 2', () => {
+  const { ss, sh } = ssWithMonth('07/2026', () => {});
+  addOnce(ss);
+  eq(sh.getRange(2, 1).getValue(), 'Task mới');
+});
+t('hai task trong cùng lượt → hai dòng liên tiếp, không đè nhau', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('pa', 'Task A', 'Done', 1, 'Dev'),
+                                  page('pb', 'Task B', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '07/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 2);
+  const sh = ss.getSheetByName('07/2026');
+  eq(sh.getRange(2, 1).getValue(), 'Task A'); eq(sh.getRange(3, 1).getValue(), 'Task B');
+});
+
+console.log('— Index: dòng còn page id nhưng trống cột A vẫn phải khớp được —');
+t('dòng trống tên mà còn page id → update tại chỗ, không add lại', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const old = ss.insertSheet('06/2026');
+  old.getRange(2, 1, 1, 7).setValues([['Neo', 'Done', 1, 'Dev', false, 'link', 'anchor']]);
+  old.getRange(3, 2, 1, 6).setValues([['Testing', 2, 'Dev', true, 'link', 'px']]);
+  const pages = {}; pages[DS1] = [page('px', 'Task X', 'Done', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '07/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.updated, 1, 'update'); eq(r.added, 0, 'không add lại');
+  eq(old.getRange(3, 1).getValue(), 'Task X', 'tên được heal vào cột A');
+  eq(old.getRange(3, 5).getValue(), true, 'Have giữ nguyên');
+  ok(!ss.getSheetByName('07/2026'), 'không tạo tab tháng mới');
+});
+
+console.log('— Rule 6: task đã nằm ở tab tháng CŨ HƠN thì không kéo về tháng đang tính —');
+function julWithHandRow(values) {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, values.length).setValues([values]);
+  return { ss, jul };
+}
+t('tên trùng ở tab cũ, cột G TRỐNG → không add, page id được vá vào G', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'Done', 2, 'Dev', true]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 0, 'không add');
+  eq(r.blockedOld, 1, 'đếm được ca bị chặn');
+  eq(jul.getRange(2, 7).getValue(), 'pfix', 'page id được vá vào cột G');
+  eq(jul.getRange(2, 5).getValue(), true, 'Have không bị đụng');
+  ok(!ss.getSheetByName('08/2026'), 'không tạo tab tháng 8');
+  ok(env.logs.some(l => l.indexOf('Fix cart') !== -1 && l.indexOf('07/2026') !== -1),
+     'log nêu đích danh: ' + env.logs.join('\n'));
+});
+// Ca thật 2026-08-05: 4 task đã counted từ lâu, dòng tháng 7 bị cắt-dán thiếu cột G.
+// Vá id nằm trong cổng "có vừa vượt mốc không" thì lượt sync 10 phút KHÔNG BAO GIỜ vào
+// được (prev đã counted) → sheet nằm hỏng vĩnh viễn, phải có người nhớ bấm quét bù.
+t('Sync now thường (KHÔNG backfill), task đã counted từ trước → vẫn tự vá id', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'Done', 2, 'Dev', true]);
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
+  st.getRange(2, 1, 1, 2).setValues([['pfix', 'Done']]); // đã counted ở lượt trước
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow(); // đúng đường trigger 10 phút chạy
+  eq(jul.getRange(2, 7).getValue(), 'pfix', 'id phải được vá dù không bấm quét bù');
+  eq(r.added, 0, 'không add sang tháng 8');
+  eq(r.blockedOld, 1, 'đếm được ca nối lại với tháng cũ');
+  ok(!ss.getSheetByName('08/2026'), 'không tạo tab tháng 8');
+});
+// Đúng cấu hình sheet thật lúc 2026-08-05: đã bấm ✅ nên 07/2026 đã chốt sổ. Chốt sổ
+// chỉ chặn ADD dòng mới vào tab đó — vá id là UPDATE dòng sẵn có, phải vẫn chạy.
+t('July đã chốt sổ → Sync now vẫn vá được id vào dòng July', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'Done', 2, 'Dev', true]);
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
+  st.getRange(2, 1, 1, 2).setValues([['pfix', 'Done']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow();
+  eq(jul.getRange(2, 7).getValue(), 'pfix', 'chốt sổ không được chặn việc vá id');
+  eq(jul.getRange(2, 5).getValue(), true, 'Have vẫn nguyên');
+  eq(r.added, 0);
+});
+t('Sync now thường, task CHƯA counted → vẫn vá id, vẫn không add', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'In progress', 2, 'Dev', true]);
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
+  st.getRange(2, 1, 1, 2).setValues([['pfix', 'In progress']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'In progress', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(jul.getRange(2, 7).getValue(), 'pfix', 'nối lại được thì nối, khỏi đợi tới lúc vượt mốc');
+  eq(r.added, 0);
+});
+t('vá id theo tên → để lại dấu 🤖 ở cột Note để anh check được', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'Done', 2, 'Dev', true]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow({ backfill: true });
+  const note = String(jul.getRange(2, 8).getValue());
+  ok(note.indexOf('\uD83E\uDD16') === 0 && note.indexOf('tên') !== -1,
+     'Note phải mở đầu bằng dấu của script và nêu rõ gán theo tên: ' + note);
+});
+t('vá id theo tên → note anh tự gõ KHÔNG bị đè', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'Done', 2, 'Dev', true]);
+  jul.getRange(2, 8).setValue('note của anh');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow({ backfill: true });
+  eq(jul.getRange(2, 8).getValue(), 'note của anh', 'Note cũ còn nguyên');
+  eq(jul.getRange(2, 7).getValue(), 'pfix', 'id vẫn được vá');
+});
+t('vá xong → lượt sau khớp bằng id, update tại chỗ ở tab cũ', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'Testing', 2, 'Dev', true]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow({ backfill: true });
+  const r2 = env.sandbox.syncNow({ backfill: true });
+  eq(r2.blockedOld, 0, 'không còn phải chặn theo tên');
+  eq(r2.updated, 1, 'khớp bằng id');
+  eq(jul.getRange(2, 2).getValue(), 'Done', 'status update tại tab cũ');
+  eq(jul.getRange(2, 5).getValue(), true, 'Have vẫn nguyên');
+});
+t('tên trùng ở tab cũ nhưng G có id KHÁC → vẫn add + cờ ⚠ (rule 5 còn nguyên)', () => {
+  const { ss, jul } = julWithHandRow(['Fix cart', 'Done', 2, 'Dev', true, 'link', 'idcu']);
+  const pages = {}; pages[DS1] = [page('idmoi', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 1, 'vẫn add'); eq(r.suspect, 1, 'vẫn cảnh báo');
+  eq(jul.getRange(2, 7).getValue(), 'idcu', 'G có sẵn KHÔNG bị ghi đè');
+  const note = ss.getSheetByName('08/2026').getRange(2, 8).getValue();
+  ok(String(note).indexOf('Nghi trùng') !== -1, 'cờ ⚠: ' + note);
+});
+t('tên trùng ở CHÍNH tab đang tính (G trống) → vẫn add, chỉ chặn tab cũ hơn', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 5).setValues([['Fix cart', 'Done', 2, 'Dev', true]]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 1, 'add bình thường'); eq(r.blockedOld, 0);
+  eq(aug.getRange(2, 7).getValue(), '', 'không vá id vào dòng cùng tháng');
+});
+t('tên trùng ở tab MỚI HƠN (G trống) → vẫn add vào tháng đang tính', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const sep = ss.insertSheet('09/2026');
+  sep.getRange(2, 1, 1, 5).setValues([['Fix cart', 'Done', 2, 'Dev', true]]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 1); eq(r.blockedOld, 0);
+});
+
+console.log('— Chốt sổ tháng (CLOSED_THROUGH) —');
+t('vắng CLOSED_THROUGH = chưa chốt tháng nào → hành vi như cũ', () => {
+  const { sandbox } = makeEnv({ nowMonth: '08/2026' });
+  eq(sandbox.closedThrough_(), null, 'không có watermark');
+  eq(sandbox.isClosedMonth_('01/2020'), false, 'tháng cũ nhất cũng chưa chốt');
+  eq(sandbox.activeMonth_(), '08/2026');
+});
+t('so tháng bằng số thứ tự, không so chuỗi (12/2025 < 01/2026)', () => {
+  const { sandbox } = makeEnv({ nowMonth: '01/2026', props: { CLOSED_THROUGH: '12/2025' } });
+  eq(sandbox.isClosedMonth_('12/2025'), true, '12/2025 đã chốt');
+  eq(sandbox.isClosedMonth_('01/2026'), false, '01/2026 chưa chốt');
+});
+t('unpinMonth: gỡ ghim VÀ nâng watermark lên tháng liền trước', () => {
+  const env = makeEnv({ nowMonth: '08/2026', props: { ACTIVE_MONTH: '07/2026' } });
+  env.sandbox.unpinMonth();
+  ok(!('ACTIVE_MONTH' in env.props), 'ghim đã gỡ');
+  eq(env.props.CLOSED_THROUGH, '07/2026', 'chốt tới hết tháng 7');
+  ok(env.ss.toasts[0].msg.indexOf('07/2026') !== -1, env.ss.toasts[0].msg);
+});
+t('unpinMonth monotonic: bấm lại ở tháng cũ hơn không hạ watermark', () => {
+  const env = makeEnv({ nowMonth: '08/2026', props: { CLOSED_THROUGH: '08/2026' } });
+  env.sandbox.unpinMonth();
+  eq(env.props.CLOSED_THROUGH, '08/2026', 'không hạ xuống 07/2026');
+});
+t('unpinMonth bấm nhiều lần cùng tháng → idempotent', () => {
+  const env = makeEnv({ nowMonth: '08/2026' });
+  env.sandbox.unpinMonth(); env.sandbox.unpinMonth(); env.sandbox.unpinMonth();
+  eq(env.props.CLOSED_THROUGH, '07/2026');
+});
+t('ghim trỏ vào tháng đã chốt → bỏ qua ghim, add vào tháng lịch', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('07/2026');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', ss, pages,
+                        props: { ACTIVE_MONTH: '07/2026', CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.month, '08/2026', 'tháng đang tính quay về tháng lịch');
+  eq(r.added, 1);
+  eq(ss.getSheetByName('07/2026').dataRowCount(), 0, 'tab tháng 7 không nhận dòng mới');
+  ok(env.logs.some(l => l.indexOf('chốt sổ') !== -1), 'có log nêu lý do: ' + env.logs.join('\n'));
+});
+t('tháng đang tính đã chốt → KHÔNG add, KHÔNG tạo tab, đếm blockedClosed', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', ss, pages, props: { CLOSED_THROUGH: '08/2026' } });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 0, 'không add'); eq(r.blockedClosed, 1, 'đếm được');
+  ok(!ss.getSheetByName('08/2026'), 'không tạo tab tháng đã chốt');
+  ok(env.logs.some(l => l.indexOf('Chặn add') !== -1), env.logs.join('\n'));
+});
+t('tháng đã chốt vẫn UPDATE Status/Tên/Point/Role; Have + Note bất khả xâm phạm', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Tên cũ', 'Testing', 2, 'Reviewer', true, 'link', 'px']]);
+  jul.getRange(2, 8).setValue('note của anh');
+  const pages = {}; pages[DS1] = [page('px', 'Tên mới', 'Done', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', ss, pages, props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.updated, 1);
+  const row = jul.getRange(2, 1, 1, 8).getValues()[0];
+  eq(row[0], 'Tên mới', 'tên'); eq(row[1], 'Done', 'status');
+  eq(row[2], 5, 'point'); eq(row[3], 'Dev', 'role');
+  eq(row[4], true, 'Have giữ nguyên'); eq(row[7], 'note của anh', 'Note giữ nguyên');
+});
+t('backfillCounted: alert nêu số task bị chặn vì tháng đã chốt', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', ss, pages, props: { CLOSED_THROUGH: '08/2026' } });
+  env.sandbox.backfillCounted();
+  ok(env.ui.alerts[0].indexOf('chốt') !== -1 && env.ui.alerts[0].indexOf('08/2026') !== -1,
+     'alert: ' + env.ui.alerts[0]);
+});
+t('backfillCounted: alert nêu số task bỏ qua vì đã có ở tháng cũ', () => {
+  const { ss } = julWithHandRow(['Fix cart', 'Done', 2, 'Dev', true]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', ss, pages });
+  env.sandbox.backfillCounted();
+  ok(env.ui.alerts[0].indexOf('tháng cũ') !== -1, 'alert: ' + env.ui.alerts[0]);
+});
+t('pinPrevMonth khi tháng trước đã chốt: bấm Không → không ghim, không hạ watermark', () => {
+  const env = makeEnv({ nowMonth: '08/2026', props: { CLOSED_THROUGH: '07/2026' }, uiAnswer: 'NO' });
+  env.sandbox.pinPrevMonth();
+  ok(!('ACTIVE_MONTH' in env.props), 'không ghim');
+  eq(env.props.CLOSED_THROUGH, '07/2026', 'watermark giữ nguyên');
+  ok(env.ui.alerts[0].indexOf('07/2026') !== -1, 'có hỏi: ' + env.ui.alerts[0]);
+});
+t('pinPrevMonth khi tháng trước đã chốt: bấm Có → hạ watermark + ghim', () => {
+  const env = makeEnv({ nowMonth: '08/2026', props: { CLOSED_THROUGH: '07/2026' }, uiAnswer: 'YES' });
+  env.sandbox.pinPrevMonth();
+  eq(env.props.ACTIVE_MONTH, '07/2026', 'đã ghim lại');
+  eq(env.props.CLOSED_THROUGH, '06/2026', 'chỉ mở lại đúng tháng 7');
+  eq(env.sandbox.activeMonth_(), '07/2026', 'ghim có hiệu lực trở lại');
+});
+t('pinPrevMonth khi đã chốt mà KHÔNG có UI → không tự mở lại', () => {
+  const env = makeEnv({ nowMonth: '08/2026', props: { CLOSED_THROUGH: '07/2026' }, noUi: true });
+  env.sandbox.pinPrevMonth();
+  ok(!('ACTIVE_MONTH' in env.props), 'không ghim');
+  eq(env.props.CLOSED_THROUGH, '07/2026', 'watermark giữ nguyên');
+});
+t('pinPrevMonth khi tháng trước CHƯA chốt → ghim thẳng, không hỏi', () => {
+  const env = makeEnv({ nowMonth: '08/2026', props: { CLOSED_THROUGH: '06/2026' } });
+  env.sandbox.pinPrevMonth();
+  eq(env.props.ACTIVE_MONTH, '07/2026');
+  eq(env.ui.alerts.length, 0, 'không hỏi gì');
+});
+t('onOpen: đang có watermark → tên menu mang dấu đã chốt', () => {
+  const env = makeEnv({ nowMonth: '08/2026', props: { CLOSED_THROUGH: '07/2026' } });
+  env.sandbox.onOpen();
+  ok(env.ui.menus[0].title.indexOf('07/2026') !== -1, 'title: ' + env.ui.menus[0].title);
+});
+t('onOpen: ghim bị bỏ vì tháng đó đã chốt → toast nhắc', () => {
+  const env = makeEnv({ nowMonth: '08/2026',
+                        props: { ACTIVE_MONTH: '07/2026', CLOSED_THROUGH: '07/2026' } });
+  env.sandbox.onOpen();
+  eq(env.ss.toasts.length, 1, 'có toast nhắc');
+  ok(env.ss.toasts[0].msg.indexOf('07/2026') !== -1, env.ss.toasts[0].msg);
+});
+t('onOpen: chưa chốt gì → menu không nhắc chốt, không toast', () => {
+  const env = makeEnv({ nowMonth: '08/2026' });
+  env.sandbox.onOpen();
+  ok(env.ui.menus[0].title.indexOf('chốt') === -1, 'title: ' + env.ui.menus[0].title);
+  eq(env.ss.toasts.length, 0);
+});
+
+console.log('— 🩺 Chẩn đoán sheet (chỉ đọc) —');
+t('có trong menu', () => {
+  const env = makeEnv({ nowMonth: '07/2026' });
+  env.sandbox.onOpen();
+  const items = env.ui.menus[0].items.filter(i => !i.sep);
+  ok(items.some(i => i.fn === 'diagnoseSheet'), 'menu: ' + items.map(i => i.label).join(' | '));
+});
+t('điểm mặt tab KHÔNG khớp MM/YYYY (đổi tên / thiếu số 0 / thừa khoảng trắng)', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  ss.insertSheet('07/2026'); ss.insertSheet('7/2026'); ss.insertSheet('06/2026 (chốt)');
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.monthTabs, 1, 'chỉ 1 tab hợp lệ');
+  eq(d.alienTabs.length, 2, 'điểm mặt 2 tab lạ');
+  ok(d.alienTabs.indexOf('7/2026') !== -1 && d.alienTabs.indexOf('06/2026 (chốt)') !== -1,
+     d.alienTabs.join(' | '));
+  ok(env.ui.alerts[0].indexOf('7/2026') !== -1, 'alert nêu tên tab lạ: ' + env.ui.alerts[0]);
+});
+t('tab thường (tên không giống tháng, không giữ task) KHÔNG bị bắt đổi tên', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  ss.insertSheet('07/2026'); ss.insertSheet('Ghi chú'); ss.insertSheet('7/2026');
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.alienTabs.length, 1, 'chỉ tab gõ sai tên bị điểm mặt: ' + d.alienTabs.join(' | '));
+  eq(d.alienTabs[0], '7/2026');
+  ok(d.lines.join('\n').indexOf('"Ghi chú" — tab thường') !== -1,
+     'tab thường chỉ được ghi nhận trung tính');
+});
+t('tab thường NHƯNG đang giữ dòng task → vẫn phải bị điểm mặt', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('07/2026');
+  const stray = ss.insertSheet('Ghi chú');
+  stray.getRange(2, 1, 1, 7).setValues([['Task lạc', 'Done', 1, 'Dev', false, 'link', 'plac']]);
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.alienTabs.length, 1, 'tab giữ task thì không được bỏ qua');
+  eq(d.alienTabs[0], 'Ghi chú');
+});
+t('đếm dòng trống cột A và dòng thiếu page id', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const sh = ss.insertSheet('07/2026');
+  sh.getRange(2, 1, 1, 7).setValues([['A', 'Done', 1, 'Dev', false, 'link', 'p1']]);
+  sh.getRange(3, 2, 1, 6).setValues([['Done', 1, 'Dev', false, 'link', 'p2']]); // trống cột A
+  sh.getRange(4, 1, 1, 5).setValues([['C', 'Done', 1, 'Dev', false]]);          // trống cột G
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.gapRows, 1, 'dòng trống tên'); eq(d.missingPid, 1, 'dòng thiếu page id');
+  eq(d.dataRows, 3, 'tổng dòng data');
+});
+t('so dòng cuối theo cột A với dòng cuối theo A..H', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const sh = ss.insertSheet('07/2026');
+  sh.getRange(2, 1, 1, 7).setValues([['A', 'Done', 1, 'Dev', false, 'link', 'p1']]);
+  sh.getRange(5, 2).setValue('Done');
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  const tab = d.tabs.find(x => x.name === '07/2026');
+  eq(tab.lastByA, 2, 'cột A dừng ở dòng 2'); eq(tab.lastByAH, 5, 'A..H tới dòng 5');
+});
+t('phát hiện page id trùng và tên trùng giữa các tab', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const a = ss.insertSheet('06/2026'), b = ss.insertSheet('07/2026');
+  a.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 1, 'Dev', false, 'link', 'dup']]);
+  b.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 1, 'Dev', false, 'link', 'dup']]);
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.dupPid.length, 1, 'trùng id'); eq(d.dupTitle.length, 1, 'trùng tên');
+  ok(d.dupPid[0].indexOf('06/2026') !== -1 && d.dupPid[0].indexOf('07/2026') !== -1, d.dupPid[0]);
+});
+t('tab LẠ cũng được quét → bắt được task bị add lại từ tab lạ sang tab tháng', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const alien = ss.insertSheet('7/2026'), aug = ss.insertSheet('08/2026');
+  alien.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, 'link', 'pfix']]);
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', false, 'link', 'pfix']]);
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.monthTabs, 1, 'chỉ 08/2026 là tab tháng hợp lệ');
+  eq(d.dupPid.length, 1, 'thấy page id trùng dù một bên nằm ở tab lạ');
+  ok(d.dupPid[0].indexOf('7/2026') !== -1 && d.dupPid[0].indexOf('08/2026') !== -1, d.dupPid[0]);
+});
+t('phân loại rule màu status: script nhận vs lạ vs không đọc được', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const sh = ss.insertSheet('07/2026');
+  sh.setConditionalFormatRules([
+    mkRule({ text: 'Done', bg: '#DBEDDB', fg: '#448361', criteria: TEXT_EQUAL_TO,
+             values: ['Done'], ranges: [sh.getRange('B2:B')] }),          // đúng chip Notion
+    mkRule({ text: 'Testing', bg: '#123456', criteria: TEXT_EQUAL_TO,
+             values: ['Testing'], ranges: [sh.getRange('B2:B')] }),       // đời cũ: thiếu màu chữ
+    mkRule({ text: 'x', bg: '#111111', fg: '#eeeeee', criteria: TEXT_CONTAINS,
+             values: ['Test'], ranges: [sh.getRange('B2:B')] }),          // không đọc ra status
+    foreignRule(sh),                                                      // cột D, không tính
+  ]);
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  const tab = d.tabs.find(x => x.name === '07/2026');
+  eq(tab.ownRules.join(), 'Done', 'script nhận là của mình');
+  eq(tab.foreignRules.join(), 'Testing', 'rule đời cũ bị coi là lạ');
+  eq(tab.unreadableRules, 1, 'rule không đọc ra status');
+});
+t('đo trước bán kính nổ của quét bù (task counted chưa có dòng nào)', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Có rồi', 'Done', 1, 'Dev', false, 'link', 'pcó']]);
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
+  st.getRange(2, 1, 3, 2).setValues([
+    ['pcó', 'Done'],            // đã có dòng -> không tính
+    ['pthiếu1', 'Waiting to test'],  // counted, chưa có dòng -> tính
+    ['pchưa', 'In progress'],   // chưa tới mốc -> không tính
+  ]);
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.pendingBackfill, 1, 'chỉ đếm task counted mà chưa có dòng nào');
+  ok(env.ui.alerts[0].indexOf('Quét bù sẽ thêm ~1') !== -1, 'alert nêu số: ' + env.ui.alerts[0]);
+});
+t('chỉ ĐỌC: không sửa dòng nào, không đụng rule, không tạo tab', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const sh = ss.insertSheet('07/2026');
+  sh.getRange(2, 1, 1, 5).setValues([['A', 'Done', 1, 'Dev', true]]);
+  sh.setConditionalFormatRules([foreignRule(sh)]);
+  const before = JSON.stringify(sh.data), tabs = ss.getSheets().length;
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  env.sandbox.diagnoseSheet();
+  eq(JSON.stringify(sh.data), before, 'không đổi 1 ô nào');
+  eq(sh.cfWrites, 1, 'không ghi lại rule (1 lần là do test set trước)');
+  eq(ss.getSheets().length, tabs, 'không tạo tab');
+});
+t('không có UI (chạy từ editor) → báo cáo rơi xuống log, không ném lỗi', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('7/2026');
+  const env = makeEnv({ nowMonth: '07/2026', ss, noUi: true });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.alienTabs.length, 1);
+  ok(env.logs.some(l => l.indexOf('7/2026') !== -1), 'log có nội dung: ' + env.logs.join('\n'));
+});
+
+console.log('— Màu status: mọi tab phải hội tụ về cùng bảng màu —');
+t('rule đời cũ chỉ có nền (thiếu màu chữ) → dựng lại theo palette hiện tại', () => {
+  const { ss, sh } = ssWithRules(s => [
+    mkRule({ text: 'Done', bg: '#AABBCC', criteria: TEXT_EQUAL_TO, values: ['Done'],
+             ranges: [s.getRange('B2:B')] }),
+  ], ['Done']);
+  const schema = {}; schema[DS1] = [statusOption('Done', 'green')];
+  const env = colorEnv(null, schema, ss);
+  env.sandbox.colorStatusesFromNotion();
+  const rules = sh.getConditionalFormatRules().filter(r => r.text === 'Done');
+  eq(rules.length, 1, 'không nhân đôi');
+  eq(rules[0].bg, '#DBEDDB', 'nền theo palette hiện tại');
+  eq(rules[0].fg, '#448361', 'chữ theo palette hiện tại');
+});
+t('tab cũ (rule đời cũ) và tab mới (rule sạch) → sau sync giống hệt nhau', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const oldTab = ss.insertSheet('05/2026'), newTab = ss.insertSheet('06/2026');
+  oldTab.getRange(2, 1, 1, 7).setValues([['T', 'Done', 1, 'Dev', false, 'link', 'a']]);
+  newTab.getRange(2, 1, 1, 7).setValues([['T2', 'Done', 1, 'Dev', false, 'link', 'b']]);
+  // Rule đời cũ THẬT: chỉ set nền, chưa có màu chữ, range còn chặn đuôi.
+  oldTab.setConditionalFormatRules([
+    mkRule({ text: 'Done', bg: '#FDECC8', criteria: TEXT_EQUAL_TO,
+             values: ['Done'], ranges: [oldTab.getRange(2, 2, 50, 1)] }),
+  ]);
+  const schema = {}; schema[DS1] = [statusOption('Done', 'green')];
+  const env = colorEnv(null, schema, ss);
+  env.sandbox.colorStatusesFromNotion();
+  const a = oldTab.getConditionalFormatRules(), b = newTab.getConditionalFormatRules();
+  eq(a.length, 1); eq(b.length, 1);
+  eq(a[0].bg, b[0].bg, 'cùng nền'); eq(a[0].fg, b[0].fg, 'cùng chữ');
+  eq(a[0].getRanges()[0].getNumRows(), oldTab.getMaxRows() - 1, 'range cũ chặn đuôi được dựng lại hết cột');
+});
+t('tab tháng MỚI tạo ra cùng màu với tab đã có (đường cache)', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const old = ss.insertSheet('06/2026');
+  old.getRange(2, 1, 1, 7).setValues([['T', 'Ready to Test', 1, 'Dev', false, 'link', 'a']]);
+  const schema = {}; schema[DS1] = [statusOption('Ready to Test', 'yellow')];
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Ready to Test', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '07/2026', ss, schema, pages, now: T0 });
+  env.sandbox.syncNow({ backfill: true });
+  const fresh = ss.getSheetByName('07/2026');
+  eq(fresh.getConditionalFormatRules().length, old.getConditionalFormatRules().length, 'cùng số rule');
+  eq(fresh.getConditionalFormatRules()[0].bg, old.getConditionalFormatRules()[0].bg, 'cùng màu');
+});
+t('rule màu cho status Notion KHÔNG còn → giữ nguyên, không bị xoá màu', () => {
+  const { ss, sh } = ssWithRules(s => [
+    ownStatusRule(s, 'Status Notion đã bỏ', '#123456', '#654321'),
+  ], ['Status Notion đã bỏ']);
+  const schema = {}; schema[DS1] = [statusOption('Done', 'green')];
+  const env = colorEnv(null, schema, ss);
+  const r = env.sandbox.colorStatusesFromNotion();
+  const kept = sh.getConditionalFormatRules().find(x => x.text === 'Status Notion đã bỏ');
+  ok(kept, 'rule còn đó'); eq(kept.bg, '#123456', 'màu không đổi');
+  eq(r.orphans.length, 0, 'đã có rule trên tab nên không báo thiếu màu');
+});
+t('applyToTabs_ lỗi giữa chừng → cache KHÔNG claim thành công, lượt sau thử lại', () => {
+  const ss = new MockSS(); const tpl = ss.insertSheet('_TEMPLATE');
+  const a = ss.insertSheet('05/2026'), b = ss.insertSheet('06/2026');
+  a.getRange(2, 1, 1, 7).setValues([['T', 'Done', 1, 'Dev', false, 'link', 'a']]);
+  b.getRange(2, 1, 1, 7).setValues([['T2', 'Done', 1, 'Dev', false, 'link', 'b']]);
+  const schema = {}; schema[DS1] = [statusOption('Done', 'green')];
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '07/2026', ss, schema, pages, now: T0 });
+  const boom = b.setConditionalFormatRules.bind(b);
+  b.setConditionalFormatRules = () => { throw new Error('Sheets quota'); };
+  env.sandbox.syncNow();
+  ok(!env.props.STATUS_COLOR_CACHE, 'cache không được ghi khi áp lỗi');
+  eq(b.getConditionalFormatRules().length, 0, 'tab lỗi chưa có màu');
+  b.setConditionalFormatRules = boom;
+  env.sandbox.syncNow();
+  eq(b.getConditionalFormatRules().length, 1, 'lượt sau tự vá lại tab lỗi');
+  eq(a.getConditionalFormatRules().length, 1, 'tab kia không bị nhân đôi rule');
+  ok(env.props.STATUS_COLOR_CACHE, 'áp xong mới ghi cache');
+  eq(tpl.getConditionalFormatRules().length, 1, '_TEMPLATE cũng đủ màu');
+});
+
+console.log('— Rule 8: cùng task nằm ở 2 tab tháng → phải bị chỉ mặt, không im lặng —');
+// Ca thật 2026-08-05: id nằm ở dòng tháng 8, dòng tháng 7 trống id. byPid bám tháng 8
+// rồi return, nên luật 7 không bao giờ với tới dòng tháng 7 — nó mồ côi vĩnh viễn.
+function twoTabTwin(julNote) {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 6).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', true, 'link']]);
+  if (julNote) jul.getRange(2, 8).setValue(julNote);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', false, 'link', 'pfix']]);
+  return { ss, jul, aug };
+}
+t('trùng RÕ RÀNG (id bên kia trống) → DỌN bản sao tháng 8, giữ tháng 7, vá id', () => {
+  const { ss, jul, aug } = twoTabTwin();
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 1, 'phải dọn đúng 1 bản sao');
+  eq(r.added, 0, 'không add thêm');
+  eq(aug.getRange(2, 1).getValue(), '', 'dòng tháng 8 bị dọn sạch tên');
+  eq(aug.getRange(2, 7).getValue(), '', 'và sạch cả page id');
+  eq(jul.getRange(2, 1).getValue(), 'Fix cart', 'dòng tháng 7 còn nguyên');
+  eq(jul.getRange(2, 7).getValue(), 'pfix', 'tháng 7 được vá id');
+  eq(jul.getRange(2, 2).getValue(), 'Done', 'update rơi vào dòng được giữ, không phải dòng bị dọn');
+  eq(jul.getRange(2, 5).getValue(), true, 'Have của tháng 7 nguyên vẹn');
+});
+t('KPI ở cột I+ cùng dòng với bản sao → KHÔNG bị dọn theo', () => {
+  const { ss, aug } = twoTabTwin();
+  aug.getRange(2, 9).setValue('Tổng số task');
+  aug.getRange(2, 10).setValue(9);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  eq(aug.getRange(2, 1).getValue(), '', 'task bị dọn');
+  eq(aug.getRange(2, 9).getValue(), 'Tổng số task', 'khối KPI còn nguyên');
+  eq(aug.getRange(2, 10).getValue(), 9, 'số KPI còn nguyên');
+});
+// Garry chốt 2026-08-05: chốt sổ cấm ĐÚNG MỘT việc là thêm dòng mới. Dọn bản sao vẫn
+// chạy kể cả trong tháng đã chốt. Test này khoá quyết định đó lại — hệ quả (KPI hai
+// tháng đã chốt đổi theo) là đã biết và đã chấp nhận.
+t('bản sao nằm ở tháng ĐÃ CHỐT → vẫn dọn, chốt sổ chỉ cấm thêm dòng mới', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jun = ss.insertSheet('06/2026');
+  jun.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, 'link', '']]);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, 'link', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 1, 'tháng đã chốt vẫn được dọn bản sao');
+  eq(jun.getRange(2, 1).getValue(), 'Fix cart', 'giữ dòng ở tháng cũ nhất');
+  eq(jun.getRange(2, 7).getValue(), 'pfix', 'và vá id vào dòng giữ');
+  eq(jul.getRange(2, 1).getValue(), '', 'dòng tháng 7 bị dọn dù tháng 7 đã chốt');
+  eq(r.added, 0, 'nhưng tuyệt đối không thêm dòng mới vào tháng đã chốt');
+});
+t('tháng đã chốt: cấm THÊM dòng, không cấm gì khác', () => {
+  const { ss, jul } = julWithHandRow(['Task cũ', 'Done', 2, 'Dev', true]);
+  const pages = {}; pages[DS1] = [page('pmoi', 'Task hoàn toàn mới', 'Done', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '07/2026', pages, ss, props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 0, 'không add vào tháng đã chốt');
+  eq(r.blockedClosed, 1, 'và đếm được ca bị chặn');
+  eq(jul.getRange(3, 1).getValue(), '', 'không có dòng mới nào mọc ra');
+});
+t('trùng MỜ (id khác hẳn) → KHÔNG dọn, chỉ ghi Note', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, 'link', 'idkhac']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Waiting to test', 2, 'Dev', false, 'link', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 0, 'hai page Notion khác nhau — không được tự dọn');
+  eq(r.dupFlagged, 1, 'nhưng phải cảnh báo');
+  eq(jul.getRange(2, 1).getValue(), 'Fix cart', 'dòng tháng 7 còn nguyên');
+  eq(aug.getRange(2, 1).getValue(), 'Fix cart', 'dòng tháng 8 cũng còn nguyên');
+  ok(String(aug.getRange(2, 8).getValue()).indexOf('07/2026') !== -1, 'Note chỉ đích danh tab kia');
+});
+t('không có bản sao ở tab khác → không ghi Note gì cả', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Waiting to test', 2, 'Dev', false, 'link', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupFlagged, 0);
+  eq(aug.getRange(2, 8).getValue(), '', 'không được bôi Note vô cớ');
+});
+t('dọn bản sao nhưng Note anh tự gõ trên dòng đó → GIỮ lại', () => {
+  const { ss, aug } = twoTabTwin();
+  aug.getRange(2, 8).setValue('note của anh');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 1, 'vẫn dọn');
+  eq(aug.getRange(2, 1).getValue(), '', 'task bị dọn');
+  eq(aug.getRange(2, 8).getValue(), 'note của anh', 'chữ của anh không bao giờ bị xoá');
+  ok(env.logs.some(l => l.indexOf('GIỮ lại note') !== -1), 'log báo đã giữ note: ' + env.logs.join('\n'));
+});
+t('note anh gõ mở đầu bằng icon KHÁC → vẫn là của anh, không bị dọn', () => {
+  const { ss, aug } = twoTabTwin();
+  aug.getRange(2, 8).setValue('📝 Task trống, không đánh point, không ảnh hưởng');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  eq(aug.getRange(2, 8).getValue(), '📝 Task trống, không đánh point, không ảnh hưởng',
+     'icon của anh không được nhận vơ thành note script');
+});
+t('note đời cũ (tiền tố ⚠ tiếng Việt) vẫn được nhận là của script', () => {
+  const { ss, aug } = twoTabTwin();
+  aug.getRange(2, 8).setValue('⚠ Nghi trùng "Fix cart" ở tab 07/2026 — check & xoá nếu trùng');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  eq(aug.getRange(2, 8).getValue(), '', 'note đời cũ vẫn dọn được, không kẹt vĩnh viễn');
+});
+t('note do CHÍNH script ghi thì dọn được, không để lại rác', () => {
+  const { ss, aug } = twoTabTwin();
+  aug.getRange(2, 8).setValue('\uD83E\uDD16 Nghi trùng: task này cũng nằm ở 07/2026 dòng 2');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  eq(aug.getRange(2, 8).getValue(), '', 'note của script bị dọn theo');
+});
+
+console.log('— Dropdown status: danh sách phải lớn theo Notion, không gắn cờ oan —');
+function validationOn(sh) { return sh.validations.filter(v => v.col === 2 && v.row === 2); }
+t('dropdown cột Status dựng từ đúng danh sách status của Notion', () => {
+  const ss = new MockSS(); const tpl = ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  const env = makeEnv({ nowMonth: '07/2026', ss,
+    schema: { [DS1]: [{ name: 'QA/UAT', color: 'blue' }, { name: 'Waiting to launch', color: 'pink' }],
+              [DS2]: [{ name: 'Done', color: 'green' }] } });
+  env.sandbox.syncNow({ backfill: true });
+  [tpl, jul].forEach(sh => {
+    const v = validationOn(sh);
+    ok(v.length >= 1, 'thiếu dropdown ở tab ' + sh.getName());
+    const vals = v[v.length - 1].rule.values;
+    ok(vals.indexOf('QA/UAT') !== -1 && vals.indexOf('Waiting to launch') !== -1,
+       'dropdown thiếu status mới: ' + vals.join(', '));
+  });
+});
+t('dropdown chỉ cảnh báo, KHÔNG chặn ghi', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); const jul = ss.insertSheet('07/2026');
+  const env = makeEnv({ nowMonth: '07/2026', ss,
+    schema: { [DS1]: [{ name: 'Done', color: 'green' }], [DS2]: [] } });
+  env.sandbox.syncNow({ backfill: true });
+  eq(validationOn(jul)[0].rule.allowInvalid, true, 'phải allowInvalid');
+});
+t('dropdown phủ hết cột, không chặn đuôi', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); const jul = ss.insertSheet('07/2026');
+  const env = makeEnv({ nowMonth: '07/2026', ss,
+    schema: { [DS1]: [{ name: 'Done', color: 'green' }], [DS2]: [] } });
+  env.sandbox.syncNow({ backfill: true });
+  eq(validationOn(jul)[0].nr, jul.getMaxRows() - 1);
+});
+
+console.log('— COUNTED so không phân biệt hoa thường —');
+t('status lệch hoa thường ("Waiting to launch") vẫn được tính', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('pw2', 'Task L', 'Waiting to launch', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '07/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 1, 'phải được stamp, không rơi vào "chưa tới mốc"');
+});
+
+console.log('— Vá link Card: dòng mất link phải mọc lại, link anh sửa thì không —');
+// Ca thật 2026-08-05: 3 dòng ở 08/2026 có page id nhưng cột F rỗng. Đường update xưa nay
+// chỉ ghi A..D nên chúng mất link vĩnh viễn, sync bao nhiêu lượt cũng không mọc lại.
+t('dòng có page id nhưng TRỐNG cột Card → được vá link', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', false, '', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.healedLink, 1, 'phải đếm được ca vá link');
+  ok(String(aug.getRange(2, 6).getValue()).indexOf('pfix') !== -1,
+     'F phải mang link Notion: ' + aug.getRange(2, 6).getValue());
+});
+t('link anh tự sửa → KHÔNG bị đè', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', false, 'link của anh', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.healedLink, 0);
+  eq(aug.getRange(2, 6).getValue(), 'link của anh');
+});
+
+console.log('— Checkbox cột Have phủ hết cột, không chỉ vùng _TEMPLATE vẽ sẵn —');
+t('đặt checkbox cột E cho mọi tab tháng và _TEMPLATE', () => {
+  const ss = new MockSS(); const tpl = ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  env.sandbox.syncNow();
+  [tpl, aug].forEach(sh => {
+    const cb = sh.validations.filter(v => v.col === 5 && v.rule.kind === 'checkbox');
+    ok(cb.length >= 1, 'thiếu checkbox ở tab ' + sh.getName());
+    eq(cb[0].nr, sh.getMaxRows() - 1, 'checkbox phải phủ hết cột, không chặn đuôi');
+  });
+});
+
+console.log('— Căn chữ: dòng cao do wrap thì ô một dòng bên cạnh phải nằm giữa —');
+t('căn giữa dọc cả A..H, căn giữa ngang chỉ B..F', () => {
+  const ss = new MockSS(); const tpl = ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  env.sandbox.syncNow();
+  [tpl, aug].forEach(sh => {
+    const v = sh.aligns.filter(a => a.axis === 'v');
+    const h = sh.aligns.filter(a => a.axis === 'h');
+    ok(v.length >= 1 && v[0].value === 'middle', 'thiếu căn giữa dọc ở ' + sh.getName());
+    eq(v[0].col, 1, 'căn dọc bắt đầu từ cột A');
+    eq(v[0].nc, 8, 'căn dọc phủ A..H');
+    ok(h.length >= 1 && h[0].value === 'center', 'thiếu căn giữa ngang ở ' + sh.getName());
+    eq(h[0].col, 2, 'căn ngang bắt đầu từ Status (B)');
+    eq(h[0].nc, 5, 'căn ngang dừng ở Card (F) — không đụng tên task và Note');
+  });
+});
+
+console.log('— Cột Note: chữ ghi chú phải lùi ra sau, không tràn sang khối KPI —');
+t('cột Note được wrap + nghiêng + xám + nhỏ hơn một cỡ', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  env.sandbox.syncNow();
+  ok(aug.wrapCalls.some(w => w.col === 8), 'Note phải wrap, không được tràn sang cột I+ (khối KPI)');
+  const f = aug.fonts.filter(x => x.col === 8);
+  ok(f.some(x => x.kind === 'style' && x.value === 'italic'), 'nghiêng');
+  ok(f.some(x => x.kind === 'size' && x.value < 10), 'nhỏ hơn cỡ chữ dữ liệu');
+  ok(f.some(x => x.kind === 'color' && x.value === '#787774'), 'xám của Notion');
+});
+t('cột Note quá hẹp thì nới ra, đã đủ rộng thì KHÔNG đụng', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const hep = ss.insertSheet('08/2026');
+  const rong = ss.insertSheet('07/2026');
+  rong.setColumnWidth(8, 420); // anh đã tự kéo rộng
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  env.sandbox.syncNow();
+  ok(hep.getColumnWidth(8) >= 200, 'cột hẹp được nới: ' + hep.getColumnWidth(8));
+  eq(rong.getColumnWidth(8), 420, 'độ rộng anh tự đặt không bị đè');
+});
+
+console.log('— Wrap cột tên task: tiêu đề dài phải xuống dòng, không bị cắt cụt —');
+function wrapOnTitleCol(sh) {
+  return sh.wrapCalls.filter(w => w.col === 1 && w.row === 2 && w.strategy === 'WRAP');
+}
+t('đặt wrap cột A cho mọi tab tháng VÀ _TEMPLATE', () => {
+  const ss = new MockSS(); const tpl = ss.insertSheet('_TEMPLATE');
+  const jun = ss.insertSheet('06/2026'), jul = ss.insertSheet('07/2026');
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  env.sandbox.syncNow({ backfill: true });
+  [tpl, jun, jul].forEach(sh => ok(wrapOnTitleCol(sh).length >= 1, 'thiếu wrap ở tab ' + sh.getName()));
+  eq(wrapOnTitleCol(jul)[0].nr, jul.getMaxRows() - 1, 'wrap phủ hết cột, không chặn đuôi');
+});
+t('không đặt lại wrap ở lượt sync sau (đã có số phiên bản)', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  env.sandbox.syncNow({ backfill: true });
+  const after1 = jul.wrapCalls.length;
+  env.sandbox.syncNow({ backfill: true });
+  eq(jul.wrapCalls.length, after1, 'lượt 2 không đụng lại format');
+});
+t('đặt wrap lỗi giữa chừng → KHÔNG ghi số phiên bản, lượt sau thử lại', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  const realGetRange = jul.getRange.bind(jul); // chỉ phá đúng setWrapStrategy, đọc/ghi vẫn chạy
+  jul.getRange = function () {
+    const rg = realGetRange.apply(null, arguments);
+    rg.setWrapStrategy = () => { throw new Error('quota'); };
+    return rg;
+  };
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  ok(!env.props.ROW_FORMAT_VERSION, 'không được claim là đã đặt xong');
+  ok(r && typeof r.added === 'number', 'lỗi format không được kéo sập lượt sync point');
+});
+t('tab tháng mới tạo cũng được wrap', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('pw', 'Task', 'Done', 1, 'Dev')];
+  const env = makeEnv({ nowMonth: '09/2026', pages, ss });
+  env.sandbox.syncNow({ backfill: true });
+  ok(wrapOnTitleCol(ss.getSheetByName('09/2026')).length >= 1, 'tab mới thiếu wrap');
+});
+
+console.log('— So tên: nháy cong / gạch dài của Notion phải khớp với nháy thẳng gõ tay —');
+t('tên Notion có nháy cong, dòng tháng cũ gõ nháy thẳng → vẫn khớp, không add lại', () => {
+  const { ss, jul } = julWithHandRow(
+    ['[Notifications] "Notify me" Button & Back-in-Stock Product Scope', 'Done', 3, 'Dev', true]);
+  const pages = {}; pages[DS1] = [page(
+    'pnotif', '[Notifications] “Notify me” Button & Back–in–Stock Product Scope',
+    'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow({ backfill: true });
+  eq(r.added, 0, 'không được kéo sang tháng 8');
+  eq(r.blockedOld, 1, 'nhận ra đã có ở tháng 7');
+  eq(jul.getRange(2, 7).getValue(), 'pnotif', 'id được vá vào dòng tháng 7');
 });
 
 // ---------------- kết quả ----------------
