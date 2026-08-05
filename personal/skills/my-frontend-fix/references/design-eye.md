@@ -70,6 +70,8 @@ lệch). Fix hệ = 1 lần; fix property lẻ khi hệ sai = whack-a-mole — Q
 ### Chấm điểm + điều kiện dừng loop
 
 - Gom thành 5 dimension, chấm **0-10** mỗi cái: `spacing · alignment · hierarchy · states · mobile`.
+- Nếu việc là **improve/build/redesign** (không phải fix bug): thêm dimension thứ 6 **anti-slop**
+  từ §E, và ngưỡng đóng là **≥9** mọi dimension chứ không phải ≥8. Fix bug giữ nguyên 5 dimension ≥8.
 - **Ngưỡng đóng fix: mọi dimension ≥ 8** — HOẶC finding còn lại được phân loại severity và GHI
   NHẬN rõ ràng (không bao giờ im lặng bỏ qua). "Nhìn ổn rồi" không phải điểm dừng; điểm số mới là.
 - **Severity:** `[Blocker]` `[High]` `[Medium]` `[Nitpick]`. Trong phiên FIX BUG chỉ
@@ -166,3 +168,71 @@ nội bộ** + rubric 15 câu. Project có `DESIGN.md` → đó là chuẩn, đ�
 - KHÔNG sửa spacing 1 element mà bỏ qua siblings cùng hàng — alignment chấm theo CỤM.
 - KHÔNG đóng fix mobile khi mới nhìn viewport desktop (matrix bắt buộc — my-frontend-fix bước 2).
 - *(append tại đây khi bug mới dạy được điều cấm mới)*
+
+---
+
+## §E. Anti-slop — dimension thứ 6, CHỈ cho improve/build/redesign
+
+> **Ai dùng:** `judge` agent trong vòng builder+judge (rule trong `personal/global-CLAUDE.md`).
+> **KHÔNG áp cho fix bug.** Fix bug giữ nguyên 5 dimension của §B ở ngưỡng ≥8. Mục này chỉ
+> bật khi việc là *làm mới / cải tổ / redesign* một surface.
+
+**Vì sao phải tách khỏi §B:** 5 dimension của §B đo *đúng và nhất quán*. Một trang đạt 10/10
+cả 5 vẫn có thể là slop generic — spacing hoàn hảo, alignment chuẩn, mà vẫn ba card đều nhau,
+vẫn eyebrow `001 · Capabilities`, vẫn dashboard giả dựng bằng div. "Có bị nhìn ra là AI làm
+không" là trục khác, nên nó có điểm riêng.
+
+**Luật grounded áp y nguyên:** mỗi Tell phải chỉ được selector/vùng + screenshot. "Trang trông
+AI quá" không localize được = không tính, không trừ điểm.
+
+**Ngoại lệ:** brief yêu cầu rõ pattern nào thì pattern đó KHÔNG tính là Tell. Phải trích đúng
+câu trong brief, không được tự suy diễn "chắc user muốn thế".
+
+### §E1. Tell NẶNG (structural — sửa phải đụng layout hoặc nội dung)
+
+| # | Tell | Nhận diện |
+|---|---|---|
+| 1 | Ba card feature đều nhau xếp ngang | hàng 3 card cùng width/cùng cấu trúc làm section "tính năng" |
+| 2 | Fake product UI dựng bằng div | hero có dashboard/terminal/task-list giả ghép từ div styled |
+| 3 | Em-dash `—` / en-dash `–` ở bất kỳ đâu user thấy | grep ký tự trong text node đã render, kể cả alt và button |
+| 4 | Section-number eyebrow | `00 / INDEX`, `001 · Capabilities`, `06 · how it works` |
+| 5 | Scroll cue | `Scroll`, `↓ scroll`, `Scroll to explore`, icon chuột cuộn |
+| 6 | Locale / time / weather strip | `LIS 14:23 · 18°C`, `Lisbon, working with founders` ở nav/hero/footer |
+| 7 | Decoration text strip đáy hero | `BRAND. MOTION. SPATIAL.`, `TYPE / FORM / MOTION` mono-caps, không phải link thật |
+| 8 | Version label trong hero | `V0.6`, `BETA`, `EARLY ACCESS` khi brief không nói về trạng thái launch |
+| 9 | Generic step label | `Stage 1/2/3`, `Step 1/2/3`, `Phase 01/02/03` — nội dung bước chính là nhãn |
+| 10 | Vertical rotated text trang trí | text xoay 90° không phục vụ bố cục thật |
+| 11 | `border-t` + `border-b` trên MỌI row của list/spec table dài | chọn 1 trong 2, dùng thưa |
+
+### §E2. Tell NHẸ (cosmetic — sửa bằng đổi chữ hoặc token)
+
+| # | Tell | Nhận diện |
+|---|---|---|
+| 1 | Middle-dot `·` làm separator mặc định | >1 dấu mỗi dòng metadata |
+| 2 | Status dot màu trang trí | chấm màu trước nav/list/badge không mang nghĩa trạng thái thật |
+| 3 | Tên generic | "John/Jane Doe", "Acme", "Nexus", "SmartFlow" |
+| 4 | Số đẹp giả | `99.99%`, `50%`, `1234567` — số thật thì lẻ |
+| 5 | Động từ rỗng | "Elevate", "Seamless", "Unleash", "Next-Gen", "Revolutionize" |
+| 6 | `#000000` thuần / neon glow / accent quá bão hoà | đọc computed color |
+| 7 | Pill/label đè lên ảnh, photo-credit giả | `Brand · 02`, `Frame XII · 35mm` dưới ảnh stock |
+| 8 | Nhãn section kiểu thơ | "From the field", "Field notes", "On our desks" |
+| 9 | Gradient text cho header lớn, H1 quá khổ | hierarchy phải bằng weight + màu, không phải scale thô |
+| 10 | Custom mouse cursor | `cursor:` trỏ ảnh tự chế |
+| 11 | Micro-meta-sentence dưới eyebrow | câu giải thích thừa kẹp giữa eyebrow và headline |
+
+### §E3. Thang điểm
+
+| Điểm | Điều kiện |
+|---|---|
+| 10 | Không Tell nào |
+| 9 | ≤1 Tell nhẹ, **0** Tell nặng |
+| 7-8 | 2-3 Tell nhẹ và 0 nặng — HOẶC đúng 1 Tell nặng |
+| 4-6 | ≥4 Tell nhẹ — HOẶC 1 nặng kèm ≥2 nhẹ |
+| ≤3 | ≥2 Tell nặng |
+
+**Ngưỡng đóng vòng improve/build là ≥9 mọi dimension**, nên ở §E nghĩa là: **zero Tell nặng,
+nhiều nhất 1 Tell nhẹ.** Đây là ngưỡng cố ý siết hơn §B (≥8) vì việc làm mới không có áp lực
+minimal-fix như lúc fix bug — không có lý do gì để lại Tell.
+
+Danh sách đầy đủ kèm giải thích từng dòng: `~/Project/github/dotfiles-claude/personal/docs/taste-skill-v2.md`
+§9. Builder đọc file đó lúc generate; **judge không cần**, §E này đã đủ để chấm.
