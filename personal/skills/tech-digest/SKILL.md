@@ -123,7 +123,7 @@ for what's NEW from it this run:
 | kind | how to fetch what's new |
 |---|---|
 | `site` (blog/domain) | `WebSearch` scoped to it: `site:<domain> {month} {year}` — or `WebFetch <domain>` if it's a small blog index, to read recent post titles. |
-| `author` (person) | `WebSearch "<name>" {month} {year}` — latest posts/talks/releases by them. |
+| `author` (person) | If the entry carries a verified platform handle, fetch that surface directly: `(X: @handle)` → `WebSearch site:x.com/<handle>` (apply Step 2c's status-ID freshness check — bigger = newer); `(LinkedIn: slug)` → `WebSearch site:linkedin.com/posts/<slug>` — person-scoped LinkedIn DOES surface someone's own posts (unlike topic search), but only if they post natively there; `activity-<ID>` follows the same bigger-is-newer rule. Results by OTHER people about the person don't count as new-from-them. No handle → `WebSearch "<name>" {month} {year}` — latest posts/talks/releases by them. |
 | `repo` (owner/name) | `WebFetch https://github.com/<owner>/<name>/releases` (or search `<owner>/<name> release {month} {year}`) for a new version/changelog. |
 | `topic` (subject) | `WebSearch "<topic>" {month} {year}` — fresh developments in that subject. |
 
@@ -364,6 +364,11 @@ Line format (Edit-insert after the marker; keep it one line per source):
 ```
 - [{kind}] {identifier} — {ghi chú: theo dõi vì gì — hỏi user 1 câu ngắn nếu không rõ}
 ```
+
+For an `author`, try to attach their main platform handle — `(X: @handle)` or
+`(LinkedIn: slug)` after the name — so Step 2a can fetch their page directly. Use a
+handle the user supplied, or verify one with a single WebSearch (their own profile in
+the results). No verified handle → store just the name; never guess a handle.
 
 Before adding, read `$SOURCES` and skip if the identifier already exists (report "đã
 follow rồi"). Confirm: `ĐANG THEO DÕI [{kind}] {identifier}` + note that the next digest
