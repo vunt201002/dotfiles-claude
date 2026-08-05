@@ -34,6 +34,13 @@ pushes — that's what makes the deploy actually happen.
 - **Guard the source branch.** If the current branch is `main`/`master`/`production`
   or a base branch, STOP and confirm with the user — you almost never deploy those
   to a staging slot.
+- **One branch holds at most ONE slot.** Before deploying to slot N, release every
+  OTHER slot whose ref is already the current branch (Step 3.5). Skipping this is how
+  one branch ends up occupying two slots: both slots' jobs match the same push.
+- **Park a released slot on a ref that can never match.** Never hand it to `master`,
+  `main`, or any real branch — that just delays the deploy until someone pushes that
+  branch, and pointing a staging job at `master` deploys on every master commit. Use
+  `parked/no-deploy` (a branch name that must not exist in the repo).
 - **Show the plan before committing.** List every job you'll change and the
   old→new ref, show the diff, then commit + push.
 
@@ -74,10 +81,14 @@ GitLab CI at the root.)
 
 ---
 
-## Step 2 — Find every job belonging to staging N
+## Step 2 — Inventory EVERY staging slot, not just N
 
-Read `.gitlab-ci.yml` and identify all jobs for the requested staging number. The
-two target repos use different naming conventions, so **detect, don't hardcode**:
+Read `.gitlab-ci.yml` and map **all** staging slots in the file: slot number → its
+jobs → each job's current branch ref. You need the whole picture, not only slot N —
+Step 3.5 uses it to find slots your branch is already squatting on.
+
+Identify jobs by staging number. The two target repos use different naming
+conventions, so **detect, don't hardcode**:
 
 **Primary signal — `environment.name`:**
 - Staging **1** → `name: staging` (joy) or `name: staging1` (wishlist).
@@ -104,7 +115,9 @@ find each branch ref. Do not rely on grep alone — open the YAML and verify eac
 
 Collect the full set: for staging N, you want **every** job in that environment
 (main deploy + all `_only*` variants + the shopify-extension job, per the user's
-"all jobs of that staging" rule).
+"all jobs of that staging" rule). Do the same pass for the other slots — you only
+need their refs, so a lighter read is fine, but every slot must appear in the
+inventory or Step 3.5 can't see a leak.
 
 ---
 
@@ -143,22 +156,74 @@ ref line number, and the current value.
 
 ---
 
+## Step 3.5 — Release slots your branch already holds
+
+A staging job runs whenever a commit lands on the branch in its ref. So if slot 9 is
+still pointed at your branch and you now claim slot 5, the single push at Step 6 fires
+**both** — your branch silently occupies two shared slots, and whoever needed slot 9
+finds it busy.
+
+Using the Step 2 inventory, list every slot **other than N** whose ref equals the
+current branch. Each one gets re-pointed to the parked ref:
+
+```bash
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Every ref line in the file that names the current branch — the target slot's jobs
+# will be in here too; exclude those, the rest are leaks to release.
+grep -nF -- "$BRANCH" .gitlab-ci.yml
+```
+
+Map each hit back to its owning job (walk up to the nearest job header) and then to
+its slot number, exactly as in Step 2. Do not classify on the grep line alone — the
+branch name can also appear in a comment or a variable.
+
+**Park them on `parked/no-deploy`.** GitLab runs the job only when a commit lands on
+the named branch, so a branch name that doesn't exist in the repo can never fire it.
+That is the whole point: the slot must stop deploying, not deploy later.
+
+- **Never park on a real branch.** `master`/`main` turns the slot into a
+  deploy-on-every-master-commit job. Another dev's branch hands them a slot they
+  didn't ask for and re-triggers on their next push.
+- **Confirm the parked ref really doesn't exist** before writing it:
+  ```bash
+  git ls-remote --heads origin 'parked/no-deploy'   # expect NO output
+  ```
+  If it does exist, pick another obviously-dead name and say which one you used.
+- **Releasing needs no extra confirmation.** By definition the slot is pointed at
+  *your own* branch, so releasing it can't disturb anyone else's deploy. Show it in
+  the Step 4 plan and the Step 7 report; don't stop to ask.
+- **Nothing to release is the normal case.** Say so in one line and move on.
+
+If the user wants the slot handed back to whoever had it before instead of parked,
+the old ref is recoverable — `git log -p -- .gitlab-ci.yml` shows the commit where
+this skill claimed it. That's a manual call, not the default: a stale branch restored
+into a live slot starts deploying again on its next push.
+
+---
+
 ## Step 4 — Show the plan (confirmation gate)
 
 Before editing, show the user exactly what will change:
 
 ```
-DEPLOY PLAN — staging N → branch "<BRANCH>"
+DEPLOY PLAN — staging 5 → branch "<BRANCH>"
 ────────────────────────────────
-Jobs to update (M):
-  deploy_staging_9                  intercom/old-ref      → <BRANCH>
-  deploy_staging_9_only             old-ref               → <BRANCH>
-  deploy_staging_9_only_hosting     old-ref               → <BRANCH>
-  deploy_staging_9_only_functions   old-ref               → <BRANCH>
-  deploy-shopify-extension:staging9 old-ref               → <BRANCH>
+CLAIM staging 5 (M jobs):
+  deploy_staging_5                  intercom/old-ref      → <BRANCH>
+  deploy_staging_5_only             old-ref               → <BRANCH>
+  deploy_staging_5_only_hosting     old-ref               → <BRANCH>
+  deploy_staging_5_only_functions   old-ref               → <BRANCH>
+  deploy-shopify-extension:staging5 old-ref               → <BRANCH>
+
+RELEASE staging 9 — still held by this branch (2 jobs):
+  deploy_staging_9                  <BRANCH>              → parked/no-deploy
+  deploy-shopify-extension:staging9 <BRANCH>              → parked/no-deploy
 ────────────────────────────────
-Then: commit ".gitlab-ci.yml" as "deploy: staging N" and push origin <BRANCH>.
+Then: commit ".gitlab-ci.yml" as "deploy: staging 5" and push origin <BRANCH>.
 ```
+
+Drop the RELEASE block entirely when there's nothing to release (the normal case) —
+print `No other slot held by this branch.` instead.
 
 If the source-branch guard tripped (Step 0) or you weren't able to confidently map
 all jobs, ask the user to confirm before proceeding. Otherwise this plan is a heads-up
@@ -187,7 +252,14 @@ replacements:
 - Only use `replace_all` when you've confirmed the old ref string appears **only**
   inside staging N's jobs and every occurrence should change.
 
-Never replace a ref that lives in a production job or a different staging.
+Never replace a ref that lives in a production job.
+
+**Release edits are the same shape, opposite direction** — anchor on the released
+job's unique header down through its ref line, and write `parked/no-deploy` in place
+of the current branch. Watch the ordering trap: after Step 5 the current branch
+appears in slot N's jobs too, so a `replace_all` on the branch string would park the
+slot you just claimed. Anchor every release edit on its own job header, or do all
+releases **before** claiming N so the only occurrences of the branch are the leaks.
 
 ---
 
@@ -197,9 +269,15 @@ Never replace a ref that lives in a production job or a different staging.
 git diff -- .gitlab-ci.yml
 ```
 
-Confirm the diff shows ONLY branch-ref changes inside staging N's jobs (no variable
-conditions, no other jobs, no other files). If anything extra changed, fix it before
-committing.
+Confirm the diff shows ONLY branch-ref changes — inside staging N's jobs, plus the
+released slots' jobs if Step 3.5 found any (no variable conditions, no unrelated jobs,
+no other files). Two specific things to check before committing:
+
+- The current branch now appears **only** under slot N's jobs. Any other slot still
+  naming it means a release was missed and the push will occupy two slots.
+- No released job got `master`/`main` or a real branch instead of the parked ref.
+
+If anything extra changed, fix it before committing.
 
 Then commit **only** the CI file and push the current branch to trigger the pipeline.
 Pass the path straight to `git commit` so the commit captures `.gitlab-ci.yml` and
@@ -232,14 +310,19 @@ git status --short    # expect just " M .gitlab-ci.yml" (other dirty files stay 
 ## Step 7 — Report
 
 ```
-DEPLOYED — staging N
+DEPLOYED — staging 5
 ────────────────────────────────
-Branch:  <BRANCH>
-Jobs:    M refs pointed at <BRANCH>
-Commit:  <hash> deploy: staging N
-Push:    origin/<BRANCH> ✓ — pipeline should now run staging N
+Branch:   <BRANCH>
+Jobs:     M refs pointed at <BRANCH>
+Released: staging 9 → parked/no-deploy (was held by this branch)
+Commit:   <hash> deploy: staging 5
+Push:     origin/<BRANCH> ✓ — pipeline runs staging 5 only
 ────────────────────────────────
 ```
+
+Omit the `Released:` line when nothing was released. When something was, say so
+plainly — the user needs to know slot 9 stopped deploying, especially if they had a
+tab open on it.
 
 Point the user at their GitLab pipelines page to watch it run. If the push was
 rejected (non-fast-forward), report it — don't force-push; the user decides.
@@ -260,3 +343,13 @@ rejected (non-fast-forward), report it — don't force-push; the user decides.
   so this skill never touches them.
 - **Commit + push is the deploy.** The CI ref change is inert until pushed; pushing
   the branch is what makes GitLab run the staging job.
+- **A branch holds one slot, and moving is a move — not a copy.** Claiming a slot
+  doesn't release the last one, and the ref left behind isn't dormant: it matches the
+  very same push. Two slots burn on one branch, and the leak only shows up when a
+  teammate finds a slot busy for a deploy nobody meant to run. Releasing belongs in
+  the same commit as the claim, so the file never describes a state we didn't intend.
+- **Parked, not reassigned.** "Point it at some other branch" reads like it solves
+  this, but any *real* branch just moves the unwanted deploy to whenever that branch
+  is next pushed — and `master` would fire on every commit to master. A ref that
+  matches no existing branch is the only value that actually means "this slot is
+  idle".
