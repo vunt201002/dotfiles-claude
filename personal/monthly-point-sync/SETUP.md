@@ -37,7 +37,8 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
 | `ACTIVE_MONTH` | menu ⏪ / ✅ | Ghim tháng đích cho dòng MỚI. **Vắng = tháng lịch.** |
 | `CLOSED_THROUGH` | menu ✅ | Chốt sổ tới hết tháng này; tab ≤ nó không nhận task mới. **Vắng = chưa chốt tháng nào.** |
 | `STATUS_COLOR_CACHE` | script | Cache bảng màu status, để khỏi gọi Notion mỗi 10 phút. |
-| `ROW_FORMAT_VERSION` | script | Phiên bản format dòng đã đặt (wrap cột tên + checkbox Have). Xoá đi = đặt lại ở lượt sync sau. |
+| `ROW_FORMAT_VERSION` | script | Phiên bản format dòng đã đặt (wrap cột tên + checkbox Have + ẩn cột G). Xoá đi = đặt lại ở lượt sync sau. |
+| `SCRIPT_NOTE_ACK` | script | Nhớ dòng nào đã được ghi note 🤖 rồi, để note không mọc lại sau khi anh xoá. |
 > Ba cái dưới do menu tự lo, không cần sửa tay. Vắng mặt luôn là trạng thái bình thường
 > và an toàn — xoá đi là quay về mặc định chứ không hỏng gì.
 
@@ -56,6 +57,13 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   `_STATE`) pid nào đã từng có dòng trong sheet; pid đó mà giờ không còn dòng nào nữa
   nghĩa là anh đã xoá — quét bù bỏ qua và **nêu đích danh tên task** trong hộp thoại kết
   quả, không bao giờ im lặng. Task sync bắt hụt (chưa từng có dòng) vẫn được cứu như thường.
+- **Đừng gõ tay vào sheet ẩn `_STATE`** — nó là bộ nhớ của script, không phải chỗ để sửa.
+  Ẩn chứ không khoá nên anh mở ra xem thoải mái, nhưng **cột C là dấu "pid này từng có
+  dòng"**: gõ số `1` vào một dòng ở đó là task tương ứng bị coi như anh đã xoá tay, và quét
+  bù **không bao giờ** kéo nó về nữa. Script chỉ nhận đúng số `1` là dấu (gõ nhầm chữ khác
+  thì nó bỏ qua, không bị hiểu thành lệnh xoá), nhưng cứ để `_STATE` yên là chắc nhất — mọi
+  thứ trong đó script tự ghi tự đọc, không có việc gì cần anh sửa tay. Muốn xoá task thì
+  dùng đúng hai cách ở mục "Xoá task bằng tay" bên dưới.
 
 ## Đầu tháng mà vẫn tính cho tháng trước (ghim tháng)
 - KPI thường chốt sổ trễ vài ngày: sang đầu tháng 7 nhưng task vẫn tính cho tháng 6.
@@ -89,20 +97,104 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
 - Tên menu luôn mang dấu mốc chốt (`🔄 Point Sync — tháng 08/2026 (đã chốt ≤ 07/2026)`).
 
 ## Xoá task bằng tay — script không hồi sinh
-- Muốn bỏ một task khỏi KPI: **xoá nội dung dòng đó** là xong. Xoá tay là ý định — script
-  không bao giờ ghi lại nó: nếu cột G ẩn còn sót id thì dòng thành "bia mộ" (nằm im giữ
-  chỗ id, không được cập nhật lại); xoá sạch cả G thì `_STATE` vẫn nhớ pid đó từng có
-  dòng, nên quét bù cũng bỏ qua (và nêu tên trong hộp thoại để anh biết).
+
+> **ĐỔI TỪ 2026-08-06 (vòng 2) — đọc kỹ chỗ này, thao tác cũ của anh giờ đã đủ.**
+> Trước đây phải xoá cho bằng hết A..F **và** cả ô Note (H) thì script mới hiểu là anh xoá.
+> Quét mấy cột nhìn thấy (A..D) rồi Delete là **chưa đủ**: ô tick `Have` và link Card còn
+> sót nên dòng vẫn bị coi là còn sống, và cứ 10 phút script lại ghi lại tên/Status/Point/
+> Role từ Notion. Đúng ca 2 task Reviewer ở `07/2026` mọc lại trong khi anh đã gõ tay chúng
+> sang `08/2026` — KPI hai tháng cùng đếm.
+
+**Cách xoá bây giờ — chọn một trong hai, cái nào cũng đúng:**
+
+1. **Bôi đen dòng rồi bấm Delete.** Chỉ cần **A, B, C, D** (Tên / Status / Point / Role)
+   trống là script hiểu ngay: task này anh đã xoá. Ô tick `Have`, link Card, ghi chú ở
+   cột Note còn hay không **không quan trọng nữa**. Cột **G (page id) được ẩn** — không phải
+   đụng tới, id nằm nguyên trong đó chính là thứ ghim cho task không bị kéo về lại.
+2. **Menu 🔄 Point Sync → 🗑 Xoá task khỏi tháng này.** Bôi đen dòng (các ô trong vùng
+   A..H), bấm menu, xác nhận. Nó dọn A..F và H, giữ lại id ở G, **và ghi dấu "task này đã
+   xoá" ngay lập tức** — nên kể cả sau này anh có dọn nốt ô G thì quét bù cũng không kéo
+   task về. Xong nó báo lại đã xoá mấy dòng.
+   - Không xoá cả dòng bao giờ (khối KPI ở cột I+ nằm **trên cùng những dòng đó**).
+   - Nó từ chối và **không xoá gì** khi: tab không phải dạng `MM/YYYY`; vùng chọn tràn
+     sang cột I+ (đừng bấm số dòng để chọn cả dòng — bôi đen `A5:H6` chẳng hạn); vùng chọn
+     không có dòng nào mang page id ở G (dòng anh gõ tay — script không tự dọn dòng tay,
+     anh cứ bấm Delete thẳng); hoặc script chưa chạy lượt sync nào.
+   - Chọn lẫn dòng tay vào cũng không sao: nó chỉ xoá dòng có id và **nói rõ đã bỏ qua
+     dòng nào**.
+   - Nó dọn **cả ô Note (H)**, kể cả ghi chú anh tự gõ — hộp thoại xác nhận nói thẳng
+     chuyện đó. Đây là chỗ duy nhất script đè lên chữ của anh ở cột Note.
+   - Bấm nút này **trước lượt sync đầu tiên sau khi dán code mới** cũng không sao: nó ghi
+     dấu nhưng chừa lại phần "đang nâng cấp `_STATE`" cho lượt sync thật, nên phép nhận
+     dòng-tay-theo-tên ở gạch đầu dòng dưới vẫn chạy đủ.
+
+- Dù xoá kiểu nào, script cũng **không bao giờ ghi lại** task đó: dòng còn id ở G thì
+  thành "bia mộ" (nằm im giữ chỗ, không được cập nhật lại); xoá sạch cả G thì `_STATE` vẫn
+  nhớ pid đó từng có dòng, nên quét bù cũng bỏ qua (và nêu tên trong hộp thoại để anh biết).
+- **Lỡ tay thì gọi lại được, không mất gì.** Dòng bị đóng băng mà anh **gõ lại tên task vào
+  cột A** là nó sống lại ngay lượt sync kế tiếp: Status / Point / Role / link Card về đầy
+  đủ từ Notion, ô tick `Have` của anh không bị đụng. Không phải xoá ô G, không phải bấm gì.
+- **Đóng băng KHÔNG ghi note lên sheet** (đổi 2026-08-06). Dòng bia mộ là dòng **trống** —
+  một ghi chú nằm đó đọc ra thành "không có task mà vẫn có note", nên script để ô Note (H)
+  hoàn toàn yên. Muốn biết dòng nào đang đóng băng thì xem hai chỗ đọc được bất cứ lúc nào:
+  - hộp thoại **quét bù** liệt kê `❄ Đang đóng băng` kèm tab + số dòng + tên task;
+  - **🩺 Chẩn đoán sheet** có dòng `Dòng đang đóng băng` cùng danh sách chi tiết theo từng tab.
+
+  Execution log cũng ghi từng dòng bia mộ, nhưng log chỉ giữ vài ngày — hai hộp thoại trên
+  mới là đường chính thức.
+- **Còn sót note 🤖 "đang được coi là ĐÃ XOÁ" từ bản trước?** Bản cũ có ghi note đó vào ô H.
+  Script **không tự dọn chữ đã ghi** (luật cột Note), nên vài dòng bia mộ trên sheet có thể
+  còn note cũ nằm lại. Cứ **xoá tay ô H** đi cho sạch — không ảnh hưởng gì, việc nhận diện
+  bia mộ không nhìn cột H bao giờ.
+- **Đúng lượt đầu tiên sau khi dán code mới**, `_STATE` chưa có cột dấu nên script dựng lại
+  dấu từ chính sheet. Riêng lượt đó nó còn nhận thêm theo **TÊN**: task trùng tên một dòng
+  anh gõ tay ở tab tháng **mới hơn** tháng đang tính cũng bị coi là "đã từng có dòng" (đúng
+  ca anh ghim về tháng trước rồi gõ tay lại vào tháng này). Đó là **suy đoán theo tên**, nên
+  nó ghi thẳng tên task + dòng tay khớp vào Execution log, và dòng của nó trong hộp thoại
+  quét bù nói rõ *"khớp theo tên, không phải page id"*. Thấy dòng đó mà anh biết mình chưa
+  xoá gì: **dán page id của task vào ô G của chính dòng tay đó** — lượt sync kế tiếp
+  nhận ra nó và cập nhật Status/Point/Role + vá link như một dòng bình thường. (Xoá dòng
+  tay đi thì **không** gỡ được: dấu "từng có dòng" là vĩnh viễn, đúng như luật xoá tay.)
+- Dấu "pid này từng có dòng" **không rơi vì lỗi vặt**: Notion trả lỗi một lượt, anh bỏ
+  assign một hôm, page chuyển board — dấu vẫn còn, quét bù vẫn không hồi sinh. Lượt sync
+  nào đọc Notion không đầy đủ sẽ nói thẳng trong Execution log và trong hộp thoại quét bù.
 - Chuyển task sang tháng khác bằng tay (xoá ở tab cũ + gõ lại ở tab mới) là an toàn —
-  dòng anh gõ tay (trống cột G) **không bao giờ** bị script tự xoá, kể cả khi nó trùng
-  tên với dòng ở tab khác.
+  dòng anh gõ tay **không bao giờ** bị script tự xoá, kể cả khi nó trùng tên với dòng ở
+  tab khác. Script nhận ra dòng của chính nó bằng **cặp** ô Card (F) + page id (G) —
+  nó ghi cả hai cùng một lúc lúc sinh dòng. Dòng gõ tay thiếu một trong hai nên vẫn
+  được bảo vệ **kể cả sau khi anh dán id vào G**.
 - Lưu ý: dòng gõ tay không có id nên Status/Point **không tự cập nhật** theo Notion nữa.
-  Muốn nó sống theo Notion thì dán page id của task vào ô cột G (ẩn) của dòng đó.
+  Muốn nó sống theo Notion thì dán page id của task vào ô cột G của dòng đó — lượt
+  sync kế tiếp sẽ cập nhật Status/Point/Role và vá luôn link Card cho dòng đó.
+  - Dán id vào một dòng **trống trơn** cũng được: script sẽ điền cả dòng cho anh. Trừ
+    **hai** ca:
+    - pid đó trước đây script đã từng đặt dòng rồi anh xoá đi — lúc ấy ô id lẻ loi là
+      "bia mộ", script giữ nguyên chứ không hồi sinh. Muốn kéo lại thì xoá ô G đó đi rồi
+      bấm quét bù.
+    - task đó còn một **dòng gõ tay ở tab tháng CŨ HƠN**. Luật 8 giữ dòng tháng cũ làm bản
+      chính, mà dòng tay thì không bao giờ bị tự dọn — nên **không có gì bị dọn**, và ô G
+      của dòng cũ chỉ được vá id khi có thứ gì đó bị dọn. Kết quả từng lượt:
+      - **Lượt đầu:** dòng ở tab tháng cũ được cập nhật một lần (tên/Status/Point/Role +
+        vá link Card). Dòng trống của anh **vẫn trống**, chỉ nhận một note `🤖 Trùng với …`
+        và giữ nguyên id anh vừa dán.
+      - **Từ lượt sau:** dòng trống mang id lẻ loi đó bị xếp là **bia mộ**, nên task ngừng
+        được cập nhật ở cả hai chỗ. Không có gì bị xoá hay bị đè — chỉ là nó đứng yên, và
+        🩺 Chẩn đoán sheet nêu nó ra trong danh sách `Dòng đang đóng băng`.
+      Muốn task sống theo Notion: dán id vào ô G của **chính dòng ở tab tháng cũ** (đúng
+      cách ở gạch đầu dòng trên), hoặc xoá dòng ở tab tháng cũ trước rồi mới dán id vào
+      dòng mới. Đừng để một dòng trống A..D chỉ có mỗi ô G.
+  - Nếu task đó **đã có dòng ở một tab tháng CŨ HƠN**, dán id xong script sẽ coi dòng
+    tháng cũ là bản chính (luật 8: giữ tháng cũ nhất) và ghi một note 🤖 vào dòng mới của
+    anh thay vì cập nhật nó. Dòng của anh không bị xoá, nhưng muốn task "chuyển hẳn"
+    sang tháng mới thì **xoá dòng ở tab tháng cũ trước**, rồi mới dán id.
 
 ## Ghi chú tay ở cột Note (H)
 
 - Cứ **gõ thẳng vào ô H**. Script **không bao giờ** đè lên ô đã có chữ — cả 4 chỗ nó ghi
   Note đều kiểm ô trống trước.
+- **Ngoại lệ duy nhất: nút 🗑 Xoá task khỏi tháng này.** Nút đó dọn ô H **kể cả chữ anh tự
+  gõ** — hộp thoại xác nhận nói thẳng chuyện đó và anh phải bấm Yes. Mọi đường còn lại (xoá
+  tay bằng phím Delete, script dọn dòng trùng theo luật 8) đều giữ nguyên chữ của anh.
 - Cột Note được để kiểu **chữ ghi chú**: wrap (không tràn sang khối KPI ở cột I+), chữ
   **nghiêng, xám, nhỏ hơn một cỡ** — ghi chú lùi ra sau chứ không tranh chỗ với task.
   Cột đang hẹp thì script nới ra ~280px; anh đã tự kéo rộng hơn thì nó không đụng.
@@ -114,8 +206,23 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   rồi viết lại từ đầu.
 - Ô H **đã có chữ của anh thì script thôi ghi cảnh báo vào đó** — cảnh báo trùng của dòng
   ấy chỉ còn trong Execution log, mà log chỉ giữ vài ngày.
+- **Xoá một note 🤖 đi = anh đã đọc và thấy ổn.** Script ghi note trùng cho mỗi dòng đúng
+  **một lần**; xoá rồi thì nó không mọc lại nữa (dù tình huống trùng vẫn còn). Sự kiện
+  thì vẫn được đếm và ghi Execution log mỗi lượt, nên không có gì bị giấu.
+  Dấu "đã ghi rồi" này gắn theo **ô** (`tháng!dòng`), và Google chỉ cho script giữ ~9KB
+  cho nó. Nên script tự dọn dấu của những dòng đã **trống trơn cả A..H** hoặc nằm ở tab
+  không còn tồn tại — chúng không bao giờ được ghi note lại nữa nên giữ cũng vô ích.
+  Hệ quả anh có thể thấy: xoá **cả dòng** (chứ không phải mỗi ô H) rồi sau này có task
+  mới rơi vào đúng dòng đó thì nó được ghi note như một dòng mới. Xoá **mỗi ô H** thì dấu
+  vẫn còn nguyên — note đã đọc không mọc lại. Kể cả lúc dấu ghi hỏng (đầy chỗ, quota),
+  lượt sync vẫn chạy xong bình thường: point vẫn được cộng, `_STATE` vẫn được ghi.
 - Note nằm trong vùng A..H nên **một dòng chỉ có Note vẫn được tính là dòng đã dùng** —
   task mới sẽ không rơi vào đó.
+- **Note ở H KHÔNG còn giữ một dòng "sống" nữa** (đổi 2026-08-06 vòng 2). Trước đây ô H có
+  chữ của anh thì dòng đó vẫn được coi là còn dùng và vẫn bị sync đè lên. Giờ chỉ **A..D**
+  quyết định: A..D trống + còn id ở G = anh đã xoá, dù H có viết gì. Đúng là để anh xoá
+  dòng rồi ghi lại lý do ("đã chuyển sang tháng 8") mà không bị script cãi mỗi 10 phút.
+  Chữ anh gõ ở H vẫn **không bao giờ bị đè** — chỗ đó không đổi.
 
 ## 🩺 Chẩn đoán sheet
 - Menu **🔄 Point Sync → 🩺 Chẩn đoán sheet** — **chỉ đọc**, không sửa gì trong sheet.
@@ -153,6 +260,10 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   Việc vá này chạy ở **mọi lượt sync**, kể cả trigger 10 phút — không phải đợi bấm "quét
   bù". Nó không phụ thuộc vào việc task có đang vượt mốc hay không, nên dòng thiếu id tự
   lành ở lượt sync kế tiếp thay vì nằm chờ người nhớ ra.
+  **Trừ task anh đã xoá tay.** Nếu pid đó đang là "bia mộ" (dòng cũ trống A..D, còn ô G) thì script
+  **không** vá id theo tên nữa: vá xong dòng anh gõ tay sẽ mang id của task đã xoá, và lượt
+  sync kế tiếp ghi đè Tên/Status/Point/Role lên chính dòng đó. Dòng tay nằm im đúng như anh
+  gõ; muốn nó sống theo Notion thì tự dán page id vào ô G của nó.
 - **Một task nằm ở 2 tab tháng: trùng rõ thì tự dọn, trùng mờ thì ghi chú.** Khớp bằng id
   chỉ tìm ra task đang ở đâu, không biết nó có bản sao chỗ khác. Nếu bản sao ở tab kia lại
   giữ id thì script bám vào đó mãi và dòng còn lại thành mồ côi. Giờ mỗi lượt sync còn so
@@ -182,6 +293,11 @@ Chạy 1 lần. Sau đó cứ thao tác task trên Notion, sheet tự cập nh�
   Status→Card: tên task wrap thành 2-3 dòng làm dòng cao lên, ô một dòng bên cạnh mặc định
   dính đáy nên nhìn lệch. Cột tên và cột Note giữ căn trái — chữ dài mà căn giữa thì khó đọc.
   Tất cả đặt một lần cho cả cột, gắn số phiên bản `ROW_FORMAT_VERSION`.
+- **Cột G (page id) được ẩn.** Nó là sổ sách của script, không phải chỗ anh đọc. Có một đời
+  bản trước bỏ ẩn nó, vì hồi đó tín hiệu xoá đòi trống hết A..F nên ô id khuất là cái bẫy
+  im lặng; từ khi tín hiệu thu về **A..D** thì quét mấy cột nhìn thấy rồi Delete đã là thao
+  tác đúng, nên không cần bày ô id ra nữa. Đây là việc **một lần** theo `ROW_FORMAT_VERSION`:
+  anh tự bỏ ẩn lại thì script không ẩn đè mỗi 10 phút.
 - **Dòng mất link Card được vá lại.** Đường update xưa nay chỉ ghi Status/Tên/Point/Role nên
   dòng nào mất link (cắt-dán thiếu cột) là mất vĩnh viễn. Giờ ô Card **đang trống** thì được
   điền lại từ Notion; link anh tự sửa thì không bao giờ bị đè.
