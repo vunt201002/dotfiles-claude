@@ -895,6 +895,99 @@ function backfillCounted() {
   return r;
 }
 
+// ---- xoá task khỏi một tháng (menu) ----
+// Đường xoá CHÍNH THỨC: dọn A..F và H, GIỮ id ở cột G (đúng hình bia mộ) và đóng dấu
+// `stamped` cho pid — có dấu thì quét bù về sau không kéo task đó về nữa, kể cả khi anh
+// dọn nốt ô G. Xoá tay bằng phím Delete vẫn chạy như thường (bia mộ lo), nút này chỉ chắc
+// thêm một nấc: nó ghi dấu ngay chứ không đợi lượt sync kế tiếp nhìn thấy dòng.
+// TUYỆT ĐỐI không deleteRow — khối KPI ở cột I+ nằm TRÊN CÙNG những dòng đó.
+// Tên hàm KHÔNG có gạch dưới cuối: Apps Script coi hàm `tên_` là private và addItem gọi
+// không ra ("Script function not found") — xem pinDashboardFirstMenu.
+function confirmDeleteTasks_(month, rowList, skipped) {
+  var ui;
+  try { ui = SpreadsheetApp.getUi(); }
+  catch (e) {
+    Logger.log('Xoá task khỏi %s: không có UI để xác nhận — không xoá gì cả.', month);
+    return false;
+  }
+  return ui.alert(
+    'Xoá ' + rowList.length + ' task khỏi tháng ' + month + '?',
+    'Dòng ' + rowList.join(', ') + '.\n\n' +
+    'Sẽ xoá nội dung A..F và H (kể cả ghi chú anh gõ ở cột Note), GIỮ page id ở cột G để ' +
+    'task không bị kéo về lại. Khối KPI ở cột I trở đi không bị đụng.' +
+    (skipped.length ? '\n\nBỏ qua dòng ' + skipped.join(', ') + ' (không có page id ở cột G ' +
+                      '— dòng anh gõ tay, script không tự dọn).' : ''),
+    ui.ButtonSet.YES_NO) === ui.Button.YES;
+}
+function deleteTasksFromMonth() {
+  var ss = ss_(), sh = ss.getActiveSheet(), rng = ss.getActiveRange();
+  if (!sh || !rng) {
+    alert_('Chưa chọn dòng nào — bôi đen dòng task cần xoá rồi bấm lại.');
+    return { cleared: 0, skipped: 0 };
+  }
+  var month = sh.getName();
+  if (!isMonthTab_(month)) {
+    alert_('Tab "' + month + '" không phải tab tháng (dạng MM/YYYY) — không xoá gì cả.');
+    return { cleared: 0, skipped: 0 };
+  }
+  if (rng.getColumn() + rng.getNumColumns() - 1 > FOOTPRINT_COLS) {
+    alert_('Vùng chọn chạm sang khối KPI (cột I trở đi) — không xoá gì cả.\n\n' +
+           'Bôi đen các ô trong vùng A..H của dòng cần xoá (vd A5:H6) rồi bấm lại — ' +
+           'đừng bấm số dòng để chọn cả dòng.');
+    return { cleared: 0, skipped: 0 };
+  }
+  var first = rng.getRow(), n = rng.getNumRows(), targets = [], skipped = [];
+  for (var i = 0; i < n; i++) {
+    var r = first + i;
+    if (r < 2) continue; // dòng 1 là header
+    var pid = norm_(String(sh.getRange(r, PID_COL).getValue() || ''));
+    if (pid) targets.push({ sheet: sh, row: r, month: month, pid: pid });
+    else if (rowHasContent_(sh.getRange(r, 1, 1, FOOTPRINT_COLS).getValues()[0])) skipped.push(r);
+  }
+  if (!targets.length) {
+    alert_('Không dòng nào trong vùng chọn có page id ở cột G — không xoá gì cả.\n\n' +
+           (skipped.length ? 'Dòng ' + skipped.join(', ') + ' là dòng anh gõ tay (không có id): ' +
+                             'script không tự dọn dòng tay, xoá thẳng bằng phím Delete là xong.\n\n' : '') +
+           'Cột G đã được bỏ ẩn — chọn dòng có id rồi bấm lại.');
+    return { cleared: 0, skipped: skipped.length };
+  }
+  // Chưa có state nghĩa là script chưa chạy lượt sync nào. Ghi dấu lúc này sẽ dựng _STATE
+  // có dòng, làm lượt sync đầu tiên mất tư cách "firstRun" — và lượt đó vốn chỉ ghi baseline,
+  // mất nó là mọi task counted bị kéo về tháng đang tính một lượt.
+  var st = getState_(ss);
+  if (st.firstRun) {
+    alert_('Script chưa chạy lượt sync nào nên chưa có chỗ ghi dấu "task này đã xoá".\n\n' +
+           'Bấm 🔄 Point Sync → Sync now một lượt trước, rồi xoá.');
+    return { cleared: 0, skipped: skipped.length };
+  }
+  var rowList = targets.map(function (t) { return t.row; });
+  if (!confirmDeleteTasks_(month, rowList, skipped)) {
+    toast_('Không xoá gì cả.', '🗑 Point Sync');
+    return { cleared: 0, skipped: skipped.length };
+  }
+  targets.forEach(function (t) {
+    t.sheet.getRange(t.row, 1, 1, CARD_COL).clearContent(); // A..F, chừa G
+    t.sheet.getRange(t.row, NOTE_COL).clearContent();
+  });
+  // Dựng lại dấu từ sheet khi _STATE còn ở format cũ — y hệt syncNow. Ghi đè bằng một tập
+  // stamped rỗng sẽ làm hẹp ký ức xoá tay của mọi pid khác, đúng thứ writeState_ sinh ra để chặn.
+  // Và CHỪA header lại cho một lượt sync thật: nâng header ở đây là lượt sync đầu tiên hết
+  // "đang migrate" và phép suy dấu theo TÊN không bao giờ nổ. Dấu vẫn ghi vào cột C.
+  var stamped = st.stamped;
+  if (st.needsSeed) {
+    var seeded = stampsFromRows_(scanMonthRows_(ss, activeMonth_()));
+    for (var sk in seeded) stamped[sk] = true;
+  }
+  targets.forEach(function (t) { stamped[t.pid] = true; });
+  writeState_(st.sheet, st.map, stamped, st.needsSeed);
+  Logger.log('Xoá tay qua menu: %s dòng ở %s (%s) — giữ id ở cột G, đã đóng dấu stamped.',
+             targets.length, month, rowList.join(', '));
+  alert_('Đã xoá ' + targets.length + ' task khỏi tháng ' + month + ' (dòng ' + rowList.join(', ') + ').\n\n' +
+         'Page id vẫn nằm ở cột G để task không bị kéo về lại; quét bù cũng sẽ bỏ qua chúng.' +
+         (skipped.length ? '\n\nBỏ qua dòng ' + skipped.join(', ') + ' (không có page id — dòng anh gõ tay).' : ''));
+  return { cleared: targets.length, skipped: skipped.length, month: month, rows: rowList };
+}
+
 // ---- month pin (menu) ----
 // KPI chốt sổ trễ vài ngày đầu tháng: bấm ghim để task MỚI tiếp tục vào tab tháng
 // trước; chốt sổ xong thì gỡ (mặc định = tháng lịch). Ghim chỉ đổi tab đích khi
@@ -1467,6 +1560,7 @@ function onOpen() {
     .createMenu('🔄 Point Sync — tháng ' + am + (closed ? ' (đã chốt ≤ ' + closed + ')' : ''))
     .addItem('Sync now', 'syncNow')
     .addItem('Kéo task counted còn thiếu (quét bù)', 'backfillCounted')
+    .addItem('🗑 Xoá task khỏi tháng này', 'deleteTasksFromMonth')
     .addSeparator()
     .addItem('⏪ Vẫn tính cho tháng trước (' + prevMonth_() + ')', 'pinPrevMonth')
     .addItem('✅ Chốt: sang tháng lịch (' + cur + ')', 'unpinMonth')
