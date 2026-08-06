@@ -1421,10 +1421,15 @@ function diagnoseStatusRules_(sh) {
   }
   return { ownRules: own, foreignRules: foreign, unreadableRules: unreadable };
 }
-function diagnoseTab_(sh, name, isMonth) {
+// stamped = null nghĩa là _STATE chưa có cột dấu: lượt sync tới dựng dấu từ chính sheet,
+// mà dòng hình bia mộ nào cũng mang pid ở G nên hình dạng lúc đó là đủ để kết luận.
+// Đóng băng CHỈ đếm ở tab tháng: scanMonthRows_ không index tab khác, nên dòng hình bia mộ
+// trong "Ghi chú" không bị script từ chối cập nhật — cả tab đó vô hình với sync, và dòng
+// riêng của tab đã nói đúng điều đó rồi. Đếm nó vào đây là bịa số trong công cụ dẹp hoang mang.
+function diagnoseTab_(sh, name, isMonth, stamped) {
   var v = footprintValues_(sh);
   var out = { name: name, isMonth: isMonth, dataRows: 0, gapRows: [], missingPid: [],
-              lastByA: 1, lastByAH: 1, lastRowAll: sh.getLastRow(), rows: [] };
+              tombRows: [], lastByA: 1, lastByAH: 1, lastRowAll: sh.getLastRow(), rows: [] };
   for (var i = 0; i < v.length; i++) {
     var row = v[i], r = i + 2;
     if (!rowHasContent_(row)) continue;
@@ -1433,6 +1438,7 @@ function diagnoseTab_(sh, name, isMonth) {
     if (row[0] !== '' && row[0] !== null) out.lastByA = r; else out.gapRows.push(r);
     var pid = row.length > 6 ? norm_(String(row[6])) : '';
     if (!pid) out.missingPid.push(r);
+    if (isMonth && isTombstoneRow_(row) && (stamped === null || stamped[pid])) out.tombRows.push(r);
     out.rows.push({ row: r, pid: pid, title: normTitle_(row[0]) });
   }
   var cf = diagnoseStatusRules_(sh);
@@ -1448,8 +1454,19 @@ function diagnoseSheet() {
          ' | ghim: ' + (props.getProperty(ACTIVE_MONTH_PROP) || '(không)') +
          ' | chốt sổ tới hết: ' + (closedThrough_() || '(chưa chốt tháng nào)'));
 
+  // Đọc _STATE TRƯỚC vòng quét tab, và đọc tay chứ không qua getState_ — hàm đó TẠO tab
+  // _STATE khi thiếu, mà chẩn đoán không được sửa một ô nào.
+  var stSh = ss.getSheetByName(STATE);
+  var legacySt = !stSh || String(stSh.getRange(1, 3).getValue() || '') !== 'stamped';
+  var stRows = (stSh && stSh.getLastRow() >= 2)
+             ? stSh.getRange(2, 1, stSh.getLastRow() - 1, 3).getValues() : [];
+  var stampedPids = legacySt ? null : {};
+  if (!legacySt)
+    for (var si = 0; si < stRows.length; si++)
+      if (stRows[si][0] && isStampMark_(stRows[si][2])) stampedPids[norm_(String(stRows[si][0]))] = true;
+
   var tabs = [], alienTabs = [], pidWhere = {}, titleWhere = {};
-  var monthTabs = 0, gapRows = 0, missingPid = 0, dataRows = 0, foreignRules = 0;
+  var monthTabs = 0, gapRows = 0, missingPid = 0, dataRows = 0, foreignRules = 0, tombstones = 0;
   ss.getSheets().forEach(function (sh) {
     var name = sh.getName();
     if (name === TEMPLATE || name === STATE || name === DASHBOARD) {
@@ -1459,7 +1476,7 @@ function diagnoseSheet() {
     // Tab lạ vẫn được QUÉT chứ không chỉ điểm mặt: task nằm trong đó là thứ giải thích
     // vì sao nó bị add lại ở tháng mới, nên page id / tên của nó phải vào bảng trùng.
     var isMonth = isMonthTab_(name);
-    var d = diagnoseTab_(sh, name, isMonth);
+    var d = diagnoseTab_(sh, name, isMonth, stampedPids);
     // Tab không phải tab tháng chỉ đáng báo động khi nó ĐANG giữ dòng task, hoặc khi cái
     // tên cho thấy nó vốn định là tab tháng mà gõ sai. Bắt một tab "Ghi chú" đi đổi tên
     // thành MM/YYYY là làm nhiễu đúng cái báo cáo sinh ra để đọc cho nhanh.
@@ -1470,7 +1487,7 @@ function diagnoseSheet() {
     tabs.push(d);
     if (isMonth) monthTabs++; else alienTabs.push(name);
     dataRows += d.dataRows; gapRows += d.gapRows.length; missingPid += d.missingPid.length;
-    foreignRules += d.foreignRules.length;
+    foreignRules += d.foreignRules.length; tombstones += d.tombRows.length;
     d.rows.forEach(function (x) {
       if (x.pid) (pidWhere[x.pid] = pidWhere[x.pid] || []).push(name + '!' + x.row);
       if (x.title) (titleWhere[x.title] = titleWhere[x.title] || []).push(name + '!' + x.row);
@@ -1488,6 +1505,10 @@ function diagnoseSheet() {
     if (d.missingPid.length)
       L.push('    ⚠ ' + d.missingPid.length + ' dòng TRỐNG page id cột G (dòng ' +
              d.missingPid.join(', ') + ') — không khớp được theo id, task dễ bị add lại.');
+    if (d.tombRows.length)
+      L.push('    ❄ ' + d.tombRows.length + ' dòng đang đóng băng (dòng ' + d.tombRows.join(', ') +
+             ') — A..D trống, id ở G còn giữ chỗ nên script không cập nhật nữa. ' +
+             'Gõ lại tên task vào cột A là dòng sống lại.');
     L.push('    rule màu cột Status: đúng bảng màu hiện tại ' + d.ownRules.length +
            ' [' + d.ownRules.join(', ') + '] | đời cũ/lệch màu ' + d.foreignRules.length +
            ' [' + d.foreignRules.join(', ') + '] | không đọc được ' + d.unreadableRules);
@@ -1503,20 +1524,22 @@ function diagnoseSheet() {
   // nên task counted trong đó mà không có dòng nào ở bất kỳ tab tháng nào chính là tập
   // quét bù sẽ thêm — và nó thêm tất cả vào THÁNG ĐANG TÍNH, kể cả task thật ra đã đạt
   // mốc từ tháng khác. Con số này nhỏ thì bấm yên tâm, lớn thì dừng lại xem đã.
-  var stSh = ss.getSheetByName(STATE), pendingBackfill = 0, deletedStamped = 0;
-  if (stSh && stSh.getLastRow() >= 2) {
-    // Đọc _STATE đúng luật của getState_ (kể cả migration format cũ 2 cột), để con số
-    // in ra khớp với việc quét bù SẼ làm: pid có stamp mà mất dòng = anh đã xoá,
-    // quét bù bỏ qua chứ không thêm — không được đếm nó vào bán kính nổ.
-    var legacySt = String(stSh.getRange(1, 3).getValue() || '') !== 'stamped';
-    var sv = stSh.getRange(2, 1, stSh.getLastRow() - 1, 3).getValues();
-    for (var m = 0; m < sv.length; m++) {
-      var sp = norm_(String(sv[m][0]));
-      if (!sp || !isCounted_(sv[m][1]) || pidWhere[sp]) continue;
-      if (legacySt || sv[m][2]) deletedStamped++;
-      else pendingBackfill++;
-    }
+  // Đọc _STATE đúng luật của getState_, để con số in ra khớp với việc quét bù SẼ làm:
+  // pid có stamp mà mất dòng = anh đã xoá, quét bù bỏ qua chứ không thêm — không được
+  // đếm nó vào bán kính nổ. _STATE format cũ KHÔNG còn cột stamp: dấu sẽ được dựng
+  // lại từ sheet, nên pid vắng dòng ở đó là ứng viên quét bù, không phải task đã xoá.
+  var pendingBackfill = 0, deletedStamped = 0;
+  for (var m = 0; m < stRows.length; m++) {
+    var sp = norm_(String(stRows[m][0]));
+    if (!sp || !isCounted_(stRows[m][1]) || pidWhere[sp]) continue;
+    if (!legacySt && isStampMark_(stRows[m][2])) deletedStamped++;
+    else pendingBackfill++;
   }
+  // Con số format cũ là CẬN TRÊN: lượt sync đầu tiên còn loại thêm những task đã có
+  // dòng tay mang đúng tên (không có id nên không đếm được từ đây).
+  if (legacySt && stRows.length)
+    L.push('⚠ _STATE đang ở format cũ (thiếu cột "stamped"). Lượt sync tới sẽ dựng lại ' +
+           'dấu đã-từng-add từ chính sheet; con số quét bù bên dưới là CẬN TRÊN.');
   L.push('Quét bù sẽ thêm khoảng ' + pendingBackfill + ' dòng vào tab ' + activeMonth_() +
          ' (task đã counted mà chưa có dòng nào trong sheet).' +
          (deletedStamped ? ' Bỏ qua ' + deletedStamped + ' task anh đã xoá tay — không hồi sinh.' : '') +
@@ -1532,6 +1555,7 @@ function diagnoseSheet() {
          'Dòng data:                  ' + dataRows + '\n' +
          'Dòng trống cột A:           ' + gapRows + '\n' +
          'Dòng thiếu page id (G):     ' + missingPid + '\n' +
+         'Dòng đang đóng băng:        ' + tombstones + '\n' +
          'Page id trùng:              ' + dupPid.length + '\n' +
          'Tên task trùng:             ' + dupTitle.length + '\n' +
          'Rule màu status đời cũ:     ' + foreignRules + '\n\n' +
@@ -1540,7 +1564,8 @@ function diagnoseSheet() {
          'Chi tiết từng tab / từng dòng nằm trong Execution log ' +
          '(Extensions → Apps Script → Executions).');
   return { tabs: tabs, alienTabs: alienTabs, monthTabs: monthTabs, dataRows: dataRows,
-           gapRows: gapRows, missingPid: missingPid, dupPid: dupPid, dupTitle: dupTitle,
+           gapRows: gapRows, missingPid: missingPid, tombstones: tombstones,
+           dupPid: dupPid, dupTitle: dupTitle,
            foreignRules: foreignRules, pendingBackfill: pendingBackfill,
            deletedStamped: deletedStamped, lines: L };
 }
