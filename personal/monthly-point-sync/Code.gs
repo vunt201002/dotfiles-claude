@@ -86,7 +86,7 @@ var NOTE_MIN_WIDTH = 200, NOTE_WIDTH = 280;
 // Tên task dài bị cắt cụt ở cột A. Wrap là format của Ô chứ không phải của dữ liệu, nên
 // đặt một lần cho cả cột là xong — dòng thêm về sau tự thừa hưởng. Số phiên bản để lượt
 // sync sau khỏi đặt lại y hệt mỗi 10 phút; đổi cột / đổi chiến lược thì bump nó lên.
-var ROW_FMT = 4;
+var ROW_FMT = 6;
 var ROW_FMT_PROP = 'ROW_FORMAT_VERSION';
 // Script Property ACTIVE_MONTH ("MM/YYYY"): ghim tháng đích cho dòng MỚI khi KPI
 // chốt sổ trễ (đầu tháng 7 vẫn tính cho tháng 6). Set/gỡ bằng menu, không sửa tay.
@@ -1275,7 +1275,12 @@ function formatTargets_(ss) {
 // - Checkbox cột Have phải phủ hết cột: dòng thêm về sau, hoặc dòng anh cắt-dán tay,
 //   mà không có checkbox thì nhìn lệch hẳn so với các dòng khác trong cùng tab (ca thật
 //   2026-08-05: dòng 10-12 tab 08/2026 trống trơn trong khi dòng 6-7 có ô tick).
+// - Cột page id (G) phải ẨN: nó là sổ sách của script, không phải chỗ anh đọc. Đời trước
+//   bỏ ẩn vì tín hiệu xoá khi đó đòi trống A..F nên G ẩn là bẫy im lặng; cùng vòng đó tín
+//   hiệu thu về A..D (xem isTombstoneRow_) nên dọn mấy cột nhìn thấy là đủ, lý do bỏ ẩn hết
+//   hiệu lực. Đặt một lần theo ROW_FMT như mọi format khác — anh hiện lại thì script không cãi.
 function applyRowFormat_(sh) {
+  sh.hideColumns(PID_COL);
   var rows = sh.getMaxRows() - 1;
   if (rows < 1) return;
   sh.getRange(2, TITLE_COL, rows, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
