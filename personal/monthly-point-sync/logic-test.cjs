@@ -20,6 +20,7 @@ const STATUS_FMT = Number(/var STATUS_FMT = (\d+)/.exec(SRC)[1]);
 
 // ---------------- mock Sheets ----------------
 const MAXR = 200, MAXC = 12;
+const PROP_VALUE_MAX = 9216;
 class MockRange {
   constructor(sheet, row, col, nr, nc) { this.s = sheet; this.r = row; this.c = col; this.nr = nr; this.nc = nc; }
   getValues() {
@@ -104,11 +105,26 @@ function mkRule(o) {
 }
 class MockSheet {
   constructor(name) {
-    this.name = name; this.hidden = false; this.cfRules = []; this.cfWrites = 0;
+    this.name = name; this.hidden = false; this.cfRules = []; this.cfWrites = 0; this.clearAllCalls = 0;
     this.wrapCalls = []; this.validations = []; this.aligns = []; this.fonts = []; this.widths = {};
+    this.hiddenCols = {}; this.showColCalls = []; this.hideColCalls = [];
     this.maxRows = MAXR;
     this.data = Array.from({ length: MAXR }, () => Array(MAXC).fill(''));
   }
+  hideColumns(c, n) {
+    for (let i = 0; i < (n || 1); i++) this.hiddenCols[c + i] = true;
+    this.hideColCalls.push({ col: c, n: n || 1 });
+    return this;
+  }
+  showColumns(c, n) {
+    for (let i = 0; i < (n || 1); i++) this.hiddenCols[c + i] = false;
+    this.showColCalls.push({ col: c, n: n || 1 });
+    return this;
+  }
+  // Khối KPI (cột I+) nằm TRÊN CÙNG những dòng task, nên xoá cả dòng là nuốt luôn công
+  // thức tháng đó. Mock ném thẳng để bất kỳ đường code nào lỡ gọi đều làm đỏ test.
+  deleteRow() { throw new Error('deleteRow bị cấm — KPI ở cột I+ nằm cùng dòng'); }
+  deleteRows() { throw new Error('deleteRows bị cấm — KPI ở cột I+ nằm cùng dòng'); }
   getConditionalFormatRules() { return this.cfRules.slice(); }
   setConditionalFormatRules(rules) { this.cfRules = rules.slice(); this.cfWrites++; }
   getMaxRows() { return this.maxRows; }
@@ -137,7 +153,10 @@ class MockSheet {
       if (this.data[i].some(v => v !== '' && v !== null)) return i + 1;
     return 0;
   }
-  clearContents() { this.data = Array.from({ length: this.maxRows }, () => Array(MAXC).fill('')); }
+  clearContents() {
+    this.clearAllCalls++;
+    this.data = Array.from({ length: this.maxRows }, () => Array(MAXC).fill(''));
+  }
   copyTo(ss) {
     const c = new MockSheet('Copy of ' + this.name);
     c.maxRows = this.maxRows;
@@ -147,6 +166,7 @@ class MockSheet {
     c.validations = this.validations.slice();
     c.aligns = this.aligns.slice();
     c.fonts = this.fonts.slice();
+    c.hiddenCols = Object.assign({}, this.hiddenCols); // cột ẩn cũng đi theo bản sao
     ss.sheets.push(c); return c;
   }
   dataRowCount() { // helper riêng cho test: số dòng data (từ row 2, cột A)
@@ -156,10 +176,18 @@ class MockSheet {
   }
 }
 class MockSS {
-  constructor() { this.sheets = []; this.toasts = []; this.active = null; }
+  constructor() { this.sheets = []; this.toasts = []; this.active = null; this.activeRange = null; }
   getSheetByName(n) { return this.sheets.find(s => s.name === n) || null; }
   getSheets() { return this.sheets.slice(); }
   insertSheet(n) { const s = new MockSheet(n); this.sheets.push(s); return s; }
+  getActiveSheet() { return this.active; }
+  getActiveRange() { return this.activeRange; }
+  // Vùng anh bôi đen trước khi bấm menu.
+  selectRange_(sh, row, col, nr, nc) {
+    this.active = sh;
+    this.activeRange = new MockRange(sh, row, col, nr, nc);
+    return this.activeRange;
+  }
   setActiveSheet(sh) { this.active = sh; }
   moveActiveSheet(pos) {
     if (!this.active) return;
@@ -209,11 +237,17 @@ function makeEnv(opts) {
   if (opts.uiAnswer) ui.answer = opts.uiAnswer;
   const logs = [];
   const fetches = [];
+  const queryFail = Object.assign({}, opts.queryFail || {});
   const clock = { ms: opts.now === undefined ? Date.now() : opts.now };
   const sandbox = {
     PropertiesService: { getScriptProperties: () => ({
       getProperty: k => (k in props ? props[k] : null),
-      setProperty: (k, v) => { props[k] = String(v); },
+      // Trần thật của Apps Script: 9KB mỗi property. Vượt là ném "Argument too large",
+      // và cú ném đó chạy giữa lượt sync chứ không phải lúc deploy.
+      setProperty: (k, v) => {
+        if (String(v).length > PROP_VALUE_MAX) throw new Error('Argument too large: value');
+        props[k] = String(v);
+      },
       deleteProperty: k => { delete props[k]; },
     }) },
     Session: { getScriptTimeZone: () => 'Asia/Ho_Chi_Minh' },
@@ -226,6 +260,10 @@ function makeEnv(opts) {
       fetches.push(url);
       const q = url.match(/data_sources\/([^/]+)\/query/);
       if (q) {
+        // queryFail[ds] = true → board đó trả HTTP lỗi cho lượt /query (502/429 thật sự
+        // hay gặp). Mutable sau khi tạo env để test bật/tắt giữa hai lượt sync.
+        if (queryFail[q[1]])
+          return { getResponseCode: () => 502, getContentText: () => '{"object":"error"}' };
         const pages = (opts.pages && opts.pages[q[1]]) || [];
         return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ results: pages, has_more: false }) };
       }
@@ -260,7 +298,7 @@ function makeEnv(opts) {
   // Seam đồng hồ: now_() là global trong sandbox nên ghi đè được sau khi nạp Code.gs.
   // Test chỉnh clock.ms để già hoá cache màu mà không phải đụng tới Date.
   sandbox.now_ = () => clock.ms;
-  return { sandbox, props, ss, ui, logs, fetches, clock };
+  return { sandbox, props, ss, ui, logs, fetches, clock, queryFail };
 }
 function schemaFetches(env) { return env.fetches.filter(u => !/\/query$/.test(u)); }
 
@@ -1531,15 +1569,19 @@ t('đo trước bán kính nổ của quét bù: tách task sẽ thêm vs task a
   ok(env.ui.alerts[0].indexOf('Quét bù sẽ thêm ~1') !== -1, 'alert nêu số: ' + env.ui.alerts[0]);
   ok(env.ui.alerts[0].indexOf('đã xoá tay') !== -1, 'alert nêu số bị bỏ qua: ' + env.ui.alerts[0]);
 });
-t('bán kính nổ với _STATE format cũ: counted vắng dòng coi là đã xoá (khớp luật quét bù)', () => {
+// F5 (2026-08-06, sửa lại quyết định cũ): _STATE format cũ KHÔNG còn suy "counted =
+// đã từng add". Dấu được dựng lại từ sheet ở lượt sync tới, nên pid counted vắng dòng
+// là ứng viên quét bù chứ không phải task đã xoá — và bán kính nổ phải nói đúng như vậy.
+t('bán kính nổ với _STATE format cũ: counted vắng dòng là ứng viên quét bù (cận trên)', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
   const st = ss.insertSheet('_STATE');
   st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
   st.getRange(2, 1, 1, 2).setValues([['pthiếu1', 'Waiting to test']]);
   const env = makeEnv({ nowMonth: '08/2026', ss });
   const d = env.sandbox.diagnoseSheet();
-  eq(d.pendingBackfill, 0, 'format cũ: counted vắng dòng không còn được quét bù thêm');
-  eq(d.deletedStamped, 1, 'nó rơi vào nhóm "anh đã xoá"');
+  eq(d.pendingBackfill, 1, 'format cũ: counted vắng dòng vẫn được quét bù cứu');
+  eq(d.deletedStamped, 0, 'không còn bị gán nhãn "anh đã xoá"');
+  ok(d.lines.some(l => l.indexOf('CẬN TRÊN') !== -1), 'báo rõ đây là cận trên: ' + d.lines.join('\n'));
 });
 t('chỉ ĐỌC: không sửa dòng nào, không đụng rule, không tạo tab', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
@@ -1982,6 +2024,13 @@ t('bia mộ (chỉ còn id ở G) → update KHÔNG hồi sinh, không heal link
   eq(r.updated, 1, 'chỉ p3 (dòng thật) được update');
   ok(env.logs.some(l => l.indexOf('Bia mộ') !== -1), 'log nêu đích danh: ' + env.logs.join('\n'));
 });
+function titleAnywhere_(ss, title) {
+  return ss.getSheets().some(sh => sh.data.some(r => r[0] === title));
+}
+// F5 sửa lại nửa sau của test này: p2 (xoá sạch cả G, KHÔNG có dòng tay nào mang tên nó)
+// từng bị stamp format cũ chặn vĩnh viễn. Giờ dấu dựng từ sheet nên quét bù cứu nó một
+// lần — thiệt hại nhỏ và TỰ SỬA (xoá lần nữa là dính stamp thật), đổi lấy việc không
+// khoá chết đường cứu của mọi task chưa từng có dòng. Nửa bia mộ (p1) giữ nguyên.
 t('bia mộ ghim pid: quét bù cũng không add lại task đó ở tab nào', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
   seedOldState(ss);
@@ -1991,10 +2040,15 @@ t('bia mộ ghim pid: quét bù cũng không add lại task đó ở tab nào', 
   const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
                         props: { CLOSED_THROUGH: '07/2026' } });
   const r = env.sandbox.backfillCounted();
-  eq(r.added, 0, 'không add');
   eq(r.tombstones, 1, 'p1 ghim bởi bia mộ');
-  eq(r.skippedDeleted, 1, 'p2 (xoá sạch cả G) bị chặn bởi stamp format cũ');
-  ok(!ss.getSheetByName('08/2026'), 'không tạo tab 08/2026 để re-add');
+  ok(!titleAnywhere_(ss, T1), 'p1 KHÔNG được add lại ở bất kỳ tab nào');
+  eq(r.added, 1, 'chỉ p2 (không dấu vết nào trong sheet) được quét bù cứu');
+  const aug = ss.getSheetByName('08/2026');
+  eq(aug.getRange(2, 1).getValue(), T2, 'p2 rơi vào tháng đang tính');
+  aug.getRange(2, 1, 1, 8).clearContent(); // anh xoá lần nữa
+  const r2 = env.sandbox.backfillCounted();
+  eq(r2.added, 0, 'lần này stamp là thật — không hồi sinh nữa');
+  eq(r2.skippedDeleted, 1, 'và được nêu đích danh');
 });
 t('bia mộ 07 + dòng tay 08 cùng task → cả hai đứng yên (giới hạn đã chấp nhận)', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
@@ -2042,22 +2096,29 @@ t('status lùi rồi vượt mốc lại sau khi anh đã xoá → nhịp thư�
   eq(r.added, 0, 'cross thật nhưng pid đã stamp + vắng dòng = anh đã xoá');
   eq(r.skippedDeleted, 1);
 });
-t('migration format cũ: counted vắng dòng = đã xoá; task CHƯA TỪNG add vẫn được cứu', () => {
+// F5: bản cũ suy "counted trong _STATE format cũ = đã từng add" nên khoá pdel vĩnh viễn.
+// Giờ dấu dựng lại từ SHEET: pid không còn dấu vết nào thì quét bù cứu MỘT lần, và chính
+// lượt đó đóng stamp thật — lần xoá sau là chết hẳn. Thiệt hại tự sửa, đổi lấy việc không
+// khoá chết đường cứu của mọi task chưa từng có dòng.
+t('migration format cũ: dấu dựng lại từ SHEET, quét bù cứu được, xoá lần sau mới dính', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
   const st = ss.insertSheet('_STATE');
   st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]); // format cũ 2 cột
   st.getRange(2, 1, 1, 2).setValues([['pdel', 'Done']]);
-  const pages = {}; pages[DS1] = [page('pdel', 'Task đã xoá', 'Done', 2, 'Dev'),
+  const pages = {}; pages[DS1] = [page('pdel', 'Task từng xoá', 'Done', 2, 'Dev'),
                                   page('pnew', 'Task sót', 'Done', 3, 'Dev')];
   const env = makeEnv({ nowMonth: '08/2026', pages, ss });
   const r = env.sandbox.backfillCounted();
-  eq(r.skippedDeleted, 1, 'pid counted format cũ + vắng dòng = anh đã xoá');
-  eq(r.added, 1, 'task chưa từng thấy vẫn được quét bù cứu');
-  eq(ss.getSheetByName('08/2026').getRange(2, 1).getValue(), 'Task sót');
+  eq(r.skippedDeleted, 0, 'không pid nào bị gán nhãn "đã xoá" chỉ vì status counted');
+  eq(r.added, 2, 'cả hai đều được cứu');
   eq(st.getRange(1, 3).getValue(), 'stamped', 'state được ghi lại theo format mới');
   const sv = st.getRange(2, 1, 2, 3).getValues();
-  ok(sv.some(x => x[0] === 'pnew' && x[2]), 'task vừa add mang stamp: ' + JSON.stringify(sv));
-  ok(sv.some(x => x[0] === 'pdel' && x[2]), 'task đã xoá giữ stamp — chết là chết hẳn');
+  ok(sv.every(x => x[2]), 'cả hai mang stamp THẬT sau lượt migration: ' + JSON.stringify(sv));
+  const aug = ss.getSheetByName('08/2026');
+  aug.getRange(2, 1, 2, 8).clearContent(); // anh xoá tay cả hai
+  const r2 = env.sandbox.backfillCounted();
+  eq(r2.added, 0, 'xoá tay sau migration là chết hẳn');
+  eq(r2.skippedDeleted, 2);
 });
 t('luật 8: bản sao TRỐNG G là dòng tay → KHÔNG dọn, chỉ note 🤖 + đếm dupHandKept', () => {
   const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
@@ -2164,6 +2225,1288 @@ function rowEmpty_(sh, r) {
   return sh.getRange(r, 1, 1, 8).getValues()[0]
     .every(v => v === '' || v === null || v === false);
 }
+
+console.log('— F5: migration _STATE format cũ dựng stamp từ SHEET, không từ status —');
+// Bản cũ suy ra stamp từ status counted, nên MỌI pid counted trong _STATE format cũ bị
+// đóng dấu "anh đã xoá" — kể cả task chưa từng có dòng ở đâu (bị CLOSED_THROUGH chặn,
+// bị nhịp 10 phút bắt hụt, hoặc nằm trong tab không khớp MM/YYYY). Ca thật: task Dev
+// pid 3b1b… status "Waiting to live" đang chờ được quét bù cứu.
+function legacyState(ss, rows) {
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 2).setValues([['pageId', 'status']]);
+  if (rows.length) st.getRange(2, 1, rows.length, 2).setValues(rows);
+  return st;
+}
+function newState(ss, rows) {
+  const st = ss.insertSheet('_STATE');
+  st.getRange(1, 1, 1, 3).setValues([['pageId', 'status', 'stamped']]);
+  if (rows.length) st.getRange(2, 1, rows.length, 3).setValues(rows);
+  return st;
+}
+t('F5: _STATE format cũ, task counted CHƯA TỪNG có dòng → quét bù vẫn cứu được', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Task khác', 'Done', 3, 'Dev', false, 'link', 'pkhac']]);
+  legacyState(ss, [['pkhac', 'Done'], ['3b1b', 'Waiting to live']]);
+  const pages = {}; pages[DS1] = [page('pkhac', 'Task khác', 'Done', 3, 'Dev'),
+                                  page('3b1b', 'Fix Write Review button greyed out', 'Waiting to live', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.backfillCounted();
+  eq(r.skippedDeleted, 0, 'pid chưa từng có dòng KHÔNG được gán nhãn "anh đã xoá"');
+  eq(r.added, 1, 'quét bù cứu được');
+  eq(ss.getSheetByName('08/2026').getRange(2, 1).getValue(), 'Fix Write Review button greyed out');
+});
+t('F5: _STATE format cũ, pid ĐANG có dòng → stamp dựng lại từ sheet, xoá tay vẫn dính', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', false, 'link', 'p1']]);
+  legacyState(ss, [['p1', 'Done']]);
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();                    // lượt migration: stamp dựng lại từ sheet
+  const st = ss.getSheetByName('_STATE');
+  eq(st.getRange(1, 3).getValue(), 'stamped', 'state ghi lại theo format mới');
+  ok(st.getRange(2, 1, 1, 3).getValues()[0][2], 'pid có dòng → có stamp');
+  aug.getRange(2, 1, 1, 8).clearContent();  // anh xoá tay sạch cả G
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không hồi sinh');
+  eq(r.skippedDeleted, 1, 'stamp dựng từ sheet vẫn chặn được quét bù');
+});
+
+console.log('— F1: bia mộ không được đóng băng dòng SỐNG mang cùng pid —');
+// ensureMonthSheet_ đưa tab tháng mới về index 0, nên tab thật xếp NGƯỢC thời gian và
+// tab CŨ được duyệt SAU CÙNG. byPid kiểu "ghi sau thắng" vì thế để bia mộ tháng cũ
+// chiếm chỗ dòng sống tháng mới — dòng sống đứng hình vĩnh viễn, không đếm vào đâu.
+function revChronSS(months) { // [mới nhất ... cũ nhất] đúng thứ tự tab thật
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const out = { ss };
+  months.forEach(m => { out[m] = ss.insertSheet(m); });
+  return out;
+}
+t('F1: bia mộ 07 + dòng sống 08 cùng pid → update dòng sống, không đóng băng', () => {
+  const s = revChronSS(['08/2026', '07/2026']);
+  s['08/2026'].getRange(2, 1, 1, 7).setValues([['Task X', 'Testing', 5, 'Dev', false, 'link', 'px']]);
+  s['07/2026'].getRange(2, 7).setValue('px'); // copy sang August rồi xoá ô hiện của July
+  newState(s.ss, [['px', 'Testing', 1]]);
+  const pages = {}; pages[DS1] = [page('px', 'Task X', 'Done', 9, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r = env.sandbox.syncNow();
+  eq(r.updated, 1, 'dòng sống phải được update');
+  eq(r.tombstones, 0, 'pid này có dòng sống — không phải ca bia mộ');
+  eq(s['08/2026'].getRange(2, 2).getValue(), 'Done', 'status theo Notion');
+  eq(s['08/2026'].getRange(2, 3).getValue(), 9, 'point theo Notion');
+  eq(s['07/2026'].getRange(2, 7).getValue(), 'px', 'bia mộ July vẫn nằm yên, không bị hồi sinh');
+  eq(s['07/2026'].getRange(2, 1).getValue(), '', 'và không mọc lại tên');
+});
+t('F1: chạy 3 lượt liên tiếp vẫn update, không bao giờ tự lành ngược', () => {
+  const s = revChronSS(['08/2026', '07/2026']);
+  s['08/2026'].getRange(2, 1, 1, 7).setValues([['Task X', 'Testing', 5, 'Dev', false, 'link', 'px']]);
+  s['07/2026'].getRange(2, 7).setValue('px');
+  newState(s.ss, [['px', 'Testing', 1]]);
+  const pages = {}; pages[DS1] = [page('px', 'Task X', 'Done', 9, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  for (let i = 1; i <= 3; i++) {
+    const r = env.sandbox.syncNow();
+    eq(r.updated, 1, 'lượt ' + i);
+    eq(r.tombstones, 0, 'lượt ' + i);
+  }
+  eq(s['08/2026'].getRange(2, 2).getValue(), 'Done');
+});
+
+console.log('— F2: cửa thoát trong tài liệu (dán page id vào ô G) phải chạy được —');
+// SETUP.md + PLAN.md bảo: dán page id vào cột G thì dòng tay sẽ theo Notion. Dựng đúng
+// hiện trạng sau ca 2026-08-06 (bia mộ July, dòng tay August, _STATE format cũ, đã chốt
+// tới hết 07/2026) rồi làm đúng thao tác đó.
+t('F2: dán page id vào dòng tay August (bia mộ July cùng pid) → dòng tay theo Notion', () => {
+  const s = revChronSS(['08/2026', '07/2026']);
+  const aug = s['08/2026'], jul = s['07/2026'];
+  jul.getRange(2, 7).setValue('p1'); // bia mộ: anh xoá dòng, cột G ẩn còn sót
+  jul.getRange(3, 7).setValue('p2');
+  aug.getRange(2, 1, 1, 7).setValues([[T1, WTL, 8, 'Reviewer', false, '', 'p1']]); // đã dán id
+  aug.getRange(3, 1, 1, 7).setValues([[T2, WTL, 8, 'Reviewer', false, '', 'p2']]);
+  seedOldState(s.ss);
+  const p = {};
+  p[DS1] = [page('p1', T1, 'Done', 13, 'Reviewer'), page('p2', T2, 'Done', 13, 'Reviewer'),
+            page('p3', 'Other July task', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages: p, ss: s.ss,
+                        props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 0, 'dòng tay đã mang id — không còn bia mộ nào chặn đường');
+  eq(r.updated, 2, 'cả hai dòng tay theo Notion');
+  eq(r.dupCleared, 0, 'và KHÔNG bị dọn mất');
+  eq(aug.getRange(2, 2).getValue(), 'Done', 'status'); eq(aug.getRange(2, 3).getValue(), 13, 'point');
+  eq(aug.getRange(3, 2).getValue(), 'Done'); eq(aug.getRange(3, 3).getValue(), 13);
+  eq(aug.getRange(2, 1).getValue(), T1, 'dòng vẫn nằm ở August');
+  ok(String(aug.getRange(2, 6).getValue()).indexOf('notion.so') !== -1,
+     'link Card được vá: ' + aug.getRange(2, 6).getValue());
+  eq(jul.getRange(2, 1).getValue(), '', 'bia mộ July vẫn không hồi sinh');
+});
+
+console.log('— F3: dán page id vào dòng TRỐNG là để BUỘC task, không phải bia mộ —');
+// Bia mộ = dấu "script từng đặt dòng ở đây rồi anh xoá đi". Dấu đó nằm sẵn trong
+// _STATE (cột stamped). Pid chưa từng stamp mà xuất hiện ở ô G một dòng trống thì
+// không thể là dấu xoá — chỉ có thể là anh vừa dán id vào để buộc task vào dòng đó.
+t('F3: pid CHƯA từng stamp + dòng trống chỉ có id → script điền dòng, không phải bia mộ', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Neo', 'Done', 1, 'Dev', false, 'link', 'pneo']]);
+  aug.getRange(3, 7).setValue('pnew'); // anh dán id vào dòng trống
+  newState(ss, [['pneo', 'Done', 1], ['pnew', 'Done', '']]);
+  const pages = {}; pages[DS1] = [page('pneo', 'Neo', 'Done', 1, 'Dev'),
+                                  page('pnew', 'Task mới', 'Done', 4, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 0, 'chưa từng stamp → không phải bia mộ');
+  eq(r.added, 0, 'và không add thêm bản sao ở đâu cả');
+  eq(aug.getRange(3, 1).getValue(), 'Task mới', 'dòng được điền tên');
+  eq(aug.getRange(3, 2).getValue(), 'Done', 'status');
+  eq(aug.getRange(3, 3).getValue(), 4, 'point');
+  eq(aug.getRange(3, 4).getValue(), 'Dev', 'role');
+  eq(aug.dataRowCount(), 2, 'vẫn đúng 2 dòng task');
+});
+t('F3: pid ĐÃ stamp + dòng trống chỉ có id → vẫn là bia mộ, không hồi sinh', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 7).setValue('pdel');
+  newState(ss, [['pdel', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('pdel', 'Task đã xoá', 'Done', 4, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1, 'có stamp → đúng là dòng anh đã xoá');
+  eq(aug.getRange(2, 1).getValue(), '', 'không hồi sinh');
+});
+
+console.log('— F4: note do CHÍNH script ghi không được cứu dòng khỏi là bia mộ —');
+// Đúng thao tác của ca 2026-08-06: anh quét A..F rồi Delete. Nếu dòng đó trước đó bị
+// script gắn cờ, cột H còn chữ của SCRIPT — bản cũ coi "H có chữ = dòng còn thông tin"
+// nên hồi sinh sạch sẽ cả tên/status/point/role và vá lại link. Bất biến (ii) thủng
+// đúng ngay thao tác đã gây ra sự cố.
+const SCRIPT_NOTES = [
+  '🤖 Nghi trùng "Task A" ở tab 06/2026 — check & xoá nếu trùng',
+  '🤖 Tự gán Notion id theo tên task — check, xoá dòng này nếu không phải task đó',
+  '🤖 Trùng với 06/2026 dòng 2 (cùng task Notion) — dòng tay nên script không tự xoá',
+  '⚠ Nghi trùng "Task A" ở tab 06/2026', // note đời cũ, vẫn là của script
+];
+SCRIPT_NOTES.forEach((note, i) => {
+  t('F4: H còn note script #' + (i + 1) + ' → vẫn là bia mộ, không hồi sinh', () => {
+    const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+    const jul = ss.insertSheet('07/2026');
+    jul.getRange(2, 7).setValue('p1');
+    jul.getRange(2, 8).setValue(note);
+    newState(ss, [['p1', 'Done', 1]]);
+    const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+    const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+    const r = env.sandbox.syncNow();
+    eq(r.tombstones, 1, 'note của script không làm dòng "còn thông tin"');
+    eq(r.updated, 0, 'không update');
+    eq(r.healedLink, 0, 'không vá link vào bia mộ');
+    eq(jul.getRange(2, 1).getValue(), '', 'tên KHÔNG được hồi sinh');
+    eq(jul.getRange(2, 8).getValue(), note, 'note vẫn nằm nguyên đó');
+  });
+});
+// ĐỔI Ý 2026-08-06 vòng 2 (bản trước test này đòi tombstones=0 + updated=1): note anh gõ
+// ở H KHÔNG còn cứu dòng khỏi là bia mộ. Ranh giới xoá bây giờ chỉ đọc A..D — bốn cột
+// script sở hữu. H là cột của ANH, nên "đã chuyển sang tháng 8" gõ vào đó là lời giải
+// thích việc xoá chứ không phải bằng chứng dòng còn dùng; giữ nó làm chốt chặn thì đúng
+// thao tác anh đang than phiền (quét A..D, ghi chú lại lý do) vẫn bị hồi sinh mỗi 10 phút.
+// Phần luật KHÔNG đổi và vẫn được test này khoá: chữ của anh ở H không bao giờ bị đè.
+t('F4: H là chữ của ANH cũng không cứu dòng — nhưng chữ đó không bao giờ bị đè', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1');
+  jul.getRange(2, 8).setValue('📝 chờ QA xác nhận rồi mới tính point');
+  newState(ss, [['p1', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1, 'A..D trống là đủ — H không được xét');
+  eq(r.updated, 0, 'không hồi sinh');
+  eq(jul.getRange(2, 1).getValue(), '', 'tên KHÔNG bị ghi lại');
+  eq(jul.getRange(2, 8).getValue(), '📝 chờ QA xác nhận rồi mới tính point',
+     'Note của anh không bị đè, kể cả bởi note bia mộ');
+});
+t('F4: dòng còn A..D thì note của anh ở H vẫn đi cùng đường update như cũ', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Task A', 'Testing', 1, 'Dev', true, 'link', 'p1']]);
+  jul.getRange(2, 8).setValue('📝 chờ QA xác nhận rồi mới tính point');
+  newState(ss, [['p1', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 0, 'dòng còn dữ liệu của script → còn sống');
+  eq(r.updated, 1);
+  eq(jul.getRange(2, 2).getValue(), 'Done', 'update chạy như thường');
+  eq(jul.getRange(2, 8).getValue(), '📝 chờ QA xác nhận rồi mới tính point', 'Note không bị đè');
+});
+
+console.log('— F6: ký ức xoá tay không được rơi vì một lượt hỏng vặt —');
+// newState/newStamped chỉ dựng từ page THẤY ĐƯỢC lượt này, rồi writeState_ ghi đè cả
+// sheet bằng đúng tập đó. Một lần Notion 502 (hoặc anh bỏ assign một lượt, hoặc page
+// rời board) là dấu đã-từng-add bay sạch — quét bù kế tiếp hồi sinh đúng cái anh vừa xoá.
+function addThenDelete(env, ss, pages) {
+  env.sandbox.syncNow();                                   // baseline
+  pages[DS1][0] = page('p1', 'Task A', 'Ready to Test', 3, 'Dev');
+  env.sandbox.syncNow();                                   // add
+  const aug = ss.getSheetByName('08/2026');
+  eq(aug.getRange(2, 1).getValue(), 'Task A', 'đã add');
+  aug.getRange(2, 1, 1, 8).clearContent();                 // anh xoá tay, sạch cả G
+  return aug;
+}
+t('F6: một lượt Notion 502 → stamp sống sót, quét bù sau đó KHÔNG hồi sinh', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  addThenDelete(env, ss, pages);
+  env.queryFail[DS1] = true;
+  const rf = env.sandbox.syncNow();                        // nhịp 10' gặp 502
+  ok(rf.fetchFailed, 'lượt fetch hỏng phải hiện ra, không im lặng');
+  env.queryFail[DS1] = false;
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không hồi sinh');
+  eq(r.skippedDeleted, 1, 'dấu vẫn còn nguyên');
+});
+t('F6: page rời query Notion một lượt (bỏ assign) → stamp vẫn sống', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'In progress', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  addThenDelete(env, ss, pages);
+  const keep = pages[DS1];
+  pages[DS1] = [];                                         // anh bỏ assign một lượt
+  env.sandbox.syncNow();
+  pages[DS1] = keep;                                       // assign lại
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'rule 7 không đỡ được ca này — chỉ có stamp bền mới đỡ');
+  eq(r.skippedDeleted, 1);
+});
+t('F6: fetch hỏng → status cũ được giữ, không bị hiểu nhầm là vừa vượt mốc', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();                                   // baseline: Done
+  env.queryFail[DS1] = true;
+  env.sandbox.syncNow();
+  const st = ss.getSheetByName('_STATE');
+  eq(st.getRange(2, 1, 1, 2).getValues()[0][1], 'Done', 'status cũ không bị xoá');
+});
+t('F6: writeState_ không dùng clearContents — không có cửa sổ _STATE trắng', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  env.sandbox.syncNow();
+  const st = ss.getSheetByName('_STATE');
+  eq(st.clearAllCalls, 0, '_STATE không bao giờ bị xoá trắng trước khi ghi lại');
+  eq(st.getRange(1, 1).getValue(), 'pageId', 'header luôn còn');
+  eq(st.getRange(1, 3).getValue(), 'stamped');
+});
+t('F6: state thu nhỏ thì đuôi thừa vẫn được dọn, không để lại pid ma', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  newState(ss, [['pa', 'In progress', ''], ['pb', 'In progress', ''], ['pc', 'In progress', '']]);
+  const pages = {}; pages[DS1] = [page('pa', 'Task A', 'In progress', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  const st = ss.getSheetByName('_STATE');
+  eq(st.getLastRow(), 2, 'chỉ còn header + pa');
+  eq(st.getRange(2, 1).getValue(), 'pa');
+});
+
+console.log('— F7: bia mộ chỉ được chặn HỒI SINH, không được tắt luôn luật 8 —');
+// `return` sớm ở nhánh bia mộ nằm TRƯỚC lời gọi luật 8. Bia mộ chỉ nói "dòng NÀY anh đã
+// xoá" — nó không nói gì về các BẢN SAO cùng task ở tab khác, nên luật 8 vẫn phải chạy.
+// Luật 7 thì ngược lại: vá id theo TÊN cho một pid đã là bia mộ chính là đường D1 dùng
+// để chiếm dòng tay ở tab cũ — xem khối D1 bên dưới.
+t('F7 (luật 7): bia mộ ở tháng đang tính + dòng tay ở tháng CŨ HƠN → KHÔNG vá id, dòng tay của anh', () => {
+  const s = revChronSS(['08/2026', '06/2026']);
+  s['08/2026'].getRange(2, 7).setValue('pfix');                      // bia mộ
+  s['06/2026'].getRange(2, 1, 1, 5).setValues([['Fix cart', 'Done', 2, 'Dev', true]]); // dòng tay
+  newState(s.ss, [['pfix', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1, 'bia mộ vẫn được đếm');
+  eq(r.added, 0, 'và vẫn không hồi sinh / không add');
+  eq(r.blockedOld, 0, 'không vá id theo tên cho pid đã là bia mộ');
+  eq(s['06/2026'].getRange(2, 7).getValue(), '', 'dòng tay tháng cũ không nhận id của task đã xoá');
+  eq(s['06/2026'].getRange(2, 8).getValue(), '', 'và không bị ghi note');
+  eq(s['08/2026'].getRange(2, 1).getValue(), '', 'bia mộ không hồi sinh');
+});
+t('F7 (luật 7): lượt sau vẫn là bia mộ — dòng tay tháng cũ không bị đường update kéo vào', () => {
+  const s = revChronSS(['08/2026', '06/2026']);
+  s['08/2026'].getRange(2, 7).setValue('pfix');
+  s['06/2026'].getRange(2, 1, 1, 5).setValues([['Fix cart', 'Testing', 2, 'Dev', true]]);
+  newState(s.ss, [['pfix', 'Testing', 1]]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 7, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  env.sandbox.syncNow();
+  const r2 = env.sandbox.syncNow();
+  eq(r2.updated, 0, 'không có dòng nào của task này được update — anh đã xoá nó');
+  eq(r2.tombstones, 1, 'vẫn là bia mộ, không "sống lại" nhờ id vừa được vá');
+  eq(s['06/2026'].getRange(2, 2).getValue(), 'Testing', 'status anh gõ tay giữ nguyên');
+  eq(s['06/2026'].getRange(2, 3).getValue(), 2, 'Point anh gõ tay giữ nguyên (Notion đang là 7)');
+  eq(s['06/2026'].getRange(2, 5).getValue(), true, 'Have vẫn nguyên');
+});
+t('F7 (luật 8): bia mộ 06 che cặp trùng 07+08 (trống G) → vẫn bị chỉ mặt, không double-count im lặng', () => {
+  const s = revChronSS(['08/2026', '07/2026', '06/2026']);
+  s['06/2026'].getRange(2, 7).setValue('pfix');                      // bia mộ
+  s['07/2026'].getRange(2, 1, 1, 5).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', true]]);
+  s['08/2026'].getRange(2, 1, 1, 5).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', false]]);
+  newState(s.ss, [['pfix', 'Waiting to test', 1]]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1);
+  eq(r.dupHandKept, 1, 'bản sao tháng 8 là dòng tay → phải được ghi note, không im lặng');
+  ok(String(s['08/2026'].getRange(2, 8).getValue()).indexOf('07/2026') !== -1,
+     'note chỉ đích danh tab giữ: ' + s['08/2026'].getRange(2, 8).getValue());
+  eq(s['08/2026'].getRange(2, 1).getValue(), 'Fix cart', 'dòng tay KHÔNG bị dọn');
+  eq(r.dupCleared, 0);
+});
+t('F7 (luật 8): bia mộ 06 che cặp trùng CÓ id ở 07+08 → bản sao tháng mới bị dọn', () => {
+  const s = revChronSS(['08/2026', '07/2026', '06/2026']);
+  s['06/2026'].getRange(2, 7).setValue('pfix');
+  s['07/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', true, 'link', 'pfix']]);
+  s['08/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', false, 'link', 'pfix']]);
+  newState(s.ss, [['pfix', 'Waiting to test', 1]]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 1, 'bản sao tháng 8 (do script sinh) bị dọn');
+  eq(s['08/2026'].getRange(2, 1).getValue(), '', 'dọn sạch');
+  eq(s['07/2026'].getRange(2, 2).getValue(), 'Done', 'dòng giữ được update');
+});
+
+console.log('— F8: note của script phải BỎ QUA ĐƯỢC, xoá tay là đã đọc —');
+// Note ghi lại mỗi khi H trống, không nhớ đã ghi bao giờ chưa → anh đọc, thấy ổn, xoá
+// đi thì 10 phút sau nó mọc lại. Vĩnh viễn. Và nó mọc trên đúng những dòng tay mà luật
+// này sinh ra để bảo vệ. Note đọc rồi mà cứ mọc lại thì anh sẽ ngừng đọc mọi note.
+function handTwinSS() {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Fix cart', WTL, 8, 'Reviewer', false, 'link', 'pfix']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 5).setValues([['Fix cart', WTL, 8, 'Reviewer', false]]);
+  return { ss, jul, aug };
+}
+t('F8: anh xoá note "🤖 Trùng với" → lượt sau KHÔNG ghi lại', () => {
+  const { ss, aug } = handTwinSS();
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  ok(String(aug.getRange(2, 8).getValue()).indexOf('🤖') === 0, 'lượt đầu vẫn phải cảnh báo');
+  aug.getRange(2, 8).clearContent(); // anh đọc, check, thấy ổn → xoá
+  const r = env.sandbox.syncNow();
+  eq(aug.getRange(2, 8).getValue(), '', 'đã đọc rồi thì đừng ghi lại nữa');
+  eq(r.dupHandKept, 1, 'nhưng vẫn đếm + log — bỏ qua note không phải bỏ qua sự kiện');
+  env.sandbox.syncNow();
+  eq(aug.getRange(2, 8).getValue(), '', 'và mãi mãi không mọc lại');
+});
+t('F8: note "🤖 Nghi trùng TÊN (page id khác)" cũng bỏ qua được', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, 'link', 'idkhac']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', WTL, 2, 'Dev', false, 'link', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  ok(String(aug.getRange(2, 8).getValue()).indexOf('Nghi trùng TÊN') !== -1, 'lượt đầu có cờ');
+  aug.getRange(2, 8).clearContent();
+  const r = env.sandbox.syncNow();
+  eq(aug.getRange(2, 8).getValue(), '', 'không mọc lại');
+  eq(r.dupFlagged, 1, 'vẫn đếm');
+});
+t('F8: chưa từng ghi note thì lần đầu vẫn phải ghi (không im lặng từ đầu)', () => {
+  const { ss, aug } = handTwinSS();
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupHandKept, 1);
+  ok(String(aug.getRange(2, 8).getValue()).indexOf('07/2026') !== -1,
+     'note nêu đích danh tab giữ: ' + aug.getRange(2, 8).getValue());
+});
+
+console.log('— F9: làm theo SETUP.md (dán page id) không được biến dòng tay thành mồi cho luật 8 —');
+// "Trống G = dòng tay" đứng vững chừng nào chỉ script mới đặt id vào G. Từ lúc tài liệu
+// bảo anh tự dán id vào, tiền đề đó sai: dán xong là dòng tay mất hết lớp bảo vệ và bị
+// luật 8 dọn. Dấu vân tay còn lại của dòng script sinh là ô Card (F) — nó được ghi ngay
+// lúc dòng chào đời, cùng một setValues với id.
+t('F9: dán id vào dòng tay August trùng dòng CÓ id ở July → KHÔNG bị dọn, chỉ ghi note', () => {
+  const s = revChronSS(['08/2026', '07/2026']);
+  s['07/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', true, 'link', 'pfix']]);
+  s['08/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', WTL, 8, 'Reviewer', false, '', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 0, 'dòng anh vừa gõ + dán id KHÔNG được xoá');
+  eq(r.dupHandKept, 1, 'chỉ ghi note để anh tự quyết');
+  eq(s['08/2026'].getRange(2, 1).getValue(), 'Fix cart', 'dòng tay còn nguyên');
+  eq(s['08/2026'].getRange(2, 7).getValue(), 'pfix', 'id anh dán còn nguyên');
+  ok(String(s['08/2026'].getRange(2, 8).getValue()).indexOf('07/2026') !== -1,
+     'note chỉ đích danh tab giữ: ' + s['08/2026'].getRange(2, 8).getValue());
+  eq(s['07/2026'].getRange(2, 2).getValue(), 'Done', 'dòng giữ vẫn được update');
+});
+t('F9: bản sao do SCRIPT sinh (có ô Card) vẫn bị dọn như cũ', () => {
+  const s = revChronSS(['08/2026', '07/2026']);
+  s['07/2026'].getRange(2, 1, 1, 5).setValues([['Fix cart', 'Waiting to test', 2, 'Reviewer', true]]);
+  s['08/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', WTL, 8, 'Reviewer', false,
+                                                '=HYPERLINK("https://notion.so/pfix","Notion ↗")', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r = env.sandbox.syncNow();
+  eq(r.dupCleared, 1, 'dòng script sinh vẫn dọn');
+  eq(s['08/2026'].getRange(2, 1).getValue(), '', 'dọn sạch');
+  eq(s['07/2026'].getRange(2, 7).getValue(), 'pfix', 'và vá id vào dòng giữ');
+});
+
+console.log('— D1: bia mộ không được chiếm dòng tay ở tab cũ hơn bằng phép vá id theo TÊN —');
+// Vá id theo TÊN là suy đoán, chính rule 7 tự cảnh báo tên chung ("Fix bug", "Review PR")
+// đụng nhau. Với pid ĐÃ LÀ BIA MỘ, vá xong dòng tay mang id của task anh vừa xoá: lượt
+// sau nó khớp bằng id, hết là bia mộ, rơi vào đường update và bị ghi đè Tên/Status/Point/
+// Role + vá link. Bia mộ + stamped đã chặn re-add rồi, nên đường vá này không mua thêm gì
+// mà lấy mất dòng anh gõ tay, ở một tab CLOSED_THROUGH không bảo vệ được (chốt sổ chỉ
+// chặn ADD).
+t('D1: bia mộ ở 07 + dòng tay cùng tên ở 06 → không vá id, không ghi note, dòng tay nguyên vẹn', () => {
+  const s = revChronSS(['08/2026', '07/2026', '06/2026']);
+  s['07/2026'].getRange(2, 7).setValue('pdel');                       // bia mộ: anh xoá, G sót
+  s['06/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, '', '']]);
+  newState(s.ss, [['pdel', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('pdel', 'Fix cart', 'Done', 9, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1, 'vẫn nhận ra bia mộ');
+  eq(r.added, 0, 'vẫn không add lại ở đâu');
+  eq(r.blockedOld, 0, 'nhánh bia mộ KHÔNG được vá id theo tên nữa');
+  eq(s['06/2026'].getRange(2, 7).getValue(), '', 'dòng tay không bị gán id của task đã xoá');
+  eq(s['06/2026'].getRange(2, 8).getValue(), '', 'và không bị ghi note');
+});
+t('D1: chạy tiếp lượt sau → dòng tay tháng cũ vẫn của anh, không bị đường update đè', () => {
+  const s = revChronSS(['08/2026', '07/2026', '06/2026']);
+  s['07/2026'].getRange(2, 7).setValue('pdel');
+  s['06/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, '', '']]);
+  newState(s.ss, [['pdel', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('pdel', 'Fix cart', 'Done', 9, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  env.sandbox.syncNow();
+  const r2 = env.sandbox.syncNow();
+  eq(r2.tombstones, 1, 'lượt sau vẫn là bia mộ, không "sống lại" nhờ id vừa được vá');
+  eq(r2.updated, 0, 'không có gì để update — task này anh đã xoá');
+  const row = s['06/2026'].getRange(2, 1, 1, 8).getValues()[0];
+  eq(row[2], 2, 'Point anh gõ tay giữ nguyên (Notion đang là 9)');
+  eq(row[3], 'Dev', 'Role anh gõ tay giữ nguyên (Notion đang là Reviewer)');
+  eq(row[5], '', 'không vá link Card vào dòng tay');
+  eq(row[6], '', 'không có id của task đã xoá');
+});
+
+// GIỚI HẠN ĐÃ CHẤP NHẬN (đi kèm D1, không phải bug bỏ sót). Dán id vào một dòng TRỐNG
+// TRƠN ở tháng đang tính trong khi task còn dòng tay ở tab CŨ HƠN: luật 8 không dọn gì
+// (dòng tay bất khả xâm phạm) nên keeper không được vá id, và từ lượt 2 dòng trống mang
+// id lẻ loi thành bia mộ → task đứng yên. Trước D1 nó tự gỡ nhờ phép vá id theo tên ở
+// nhánh bia mộ — chính phép vá đó là đường D1 dùng để ĐÈ MẤT dòng tay của một task đã
+// xoá. Không có tín hiệu nào phân biệt hai ca, nên đổi "ngừng cập nhật, không mất gì"
+// lấy "không bao giờ đè mất dòng tay". Cửa thoát: dán id vào chính dòng tab cũ.
+t('D1 (giới hạn đã chấp nhận): dán id vào dòng TRỐNG khi còn dòng tay tab cũ → đứng yên, không mất gì', () => {
+  const s = revChronSS(['08/2026', '07/2026']);
+  s['07/2026'].getRange(2, 1, 1, 5).setValues([['Fix cart', 'Testing', 2, 'Dev', true]]);
+  s['08/2026'].getRange(2, 7).setValue('pfix');       // anh dán id vào dòng trống trơn
+  newState(s.ss, [['pfix', 'Testing', '']]);          // chưa từng stamp
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 9, 'Reviewer')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  const r1 = env.sandbox.syncNow();
+  eq(r1.updated, 1, 'lượt đầu: dòng tab cũ vẫn được cập nhật một lần');
+  eq(s['07/2026'].getRange(2, 3).getValue(), 9, 'và nhận Point mới');
+  const r2 = env.sandbox.syncNow();
+  eq(r2.tombstones, 1, 'từ lượt 2: dòng trống mang id lẻ loi thành bia mộ');
+  eq(r2.updated, 0, 'task đứng yên — đây là giá đã chấp nhận của D1');
+  eq(s['07/2026'].getRange(2, 1).getValue(), 'Fix cart', 'nhưng KHÔNG mất dòng nào');
+  eq(s['07/2026'].getRange(2, 7).getValue(), '', 'và không bị gán id sau lưng');
+  s['07/2026'].getRange(2, 7).setValue('pfix');       // cửa thoát: dán id vào chính dòng đó
+  const r3 = env.sandbox.syncNow();
+  eq(r3.updated, 1, 'cửa thoát SETUP.md chạy thật');
+  eq(r3.tombstones, 0, 'dòng sống thắng bia mộ');
+});
+
+console.log('— D2: migration _STATE đời cũ không được đóng dấu "đã xoá" cho task chưa từng có dòng —');
+// Bản trước gom MỌI tên có dòng trống G ở BẤT KỲ tab tháng nào. Task Notion mới
+// toanh trùng tên một dòng tay ở tháng ĐANG TÍNH bị đóng dấu stamped vĩnh viễn ngay lượt
+// migration, rồi chết ở cổng add mãi mãi — và alert quét bù bảo anh đã xoá nó. Dòng tay
+// ở tab cũ hơn đã có rule 7 lo (vá id + blockedOld, chặn trước cổng add); dòng tay ở
+// đúng tab đang tính đã có cờ "Nghi trùng" của rule 5 lo. Chỗ duy nhất cần suy đoán là
+// dòng tay ở tab MỚI HƠN tháng đang tính — đúng hình ca 2026-08-06 (ghim về 07, gõ tay
+// lại vào 08).
+t('D2: dòng tay ở THÁNG ĐANG TÍNH → task mới trùng tên vẫn được add, không bị gán nhãn đã xoá', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Task cũ', 'Done', 3, 'Dev', false, 'link', 'pold']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 5).setValues([['Fix bug', 'Done', 3, 'Dev', false]]); // dòng tay, trống G
+  legacyState(ss, [['pold', 'Done']]);
+  const pages = {}; pages[DS1] = [page('pold', 'Task cũ', 'Done', 3, 'Dev'),
+                                  page('pnew', 'Fix bug', 'Done', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, props: { CLOSED_THROUGH: '07/2026' } });
+  const r = env.sandbox.syncNow();
+  eq(r.skippedDeleted, 0, 'task chưa từng có dòng không được gán nhãn "anh đã xoá"');
+  eq(r.added, 1, 'vẫn được add vào tháng đang tính');
+  eq(aug.getRange(3, 1).getValue(), 'Fix bug', 'dòng mới nằm cạnh dòng tay');
+  ok(String(aug.getRange(3, 8).getValue()).indexOf('Nghi trùng') !== -1,
+     'và mang cờ nghi trùng của rule 5: ' + aug.getRange(3, 8).getValue());
+  eq(aug.getRange(2, 1).getValue(), 'Fix bug', 'dòng tay không bị đụng');
+  eq(aug.getRange(2, 7).getValue(), '', 'dòng tay vẫn trống G');
+});
+t('D2: nhãn oan không được ghi vĩnh viễn vào _STATE — quét bù sau đó không tố oan anh', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Task cũ', 'Done', 3, 'Dev', false, 'link', 'pold']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 5).setValues([['Fix bug', 'Done', 3, 'Dev', false]]);
+  legacyState(ss, [['pold', 'Done']]);
+  const pages = {}; pages[DS1] = [page('pold', 'Task cũ', 'Done', 3, 'Dev'),
+                                  page('pnew', 'Fix bug', 'Done', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, props: { CLOSED_THROUGH: '07/2026' } });
+  env.sandbox.syncNow();
+  const r2 = env.sandbox.backfillCounted();
+  eq(r2.skippedDeleted, 0, 'quét bù không được báo "anh đã xoá" task chưa bao giờ bị xoá');
+  ok(env.ui.alerts[0].indexOf('Không hồi sinh') === -1,
+     'alert không có dòng tố oan: ' + env.ui.alerts[0]);
+});
+t('D2: dòng tay ở tab MỚI HƠN tháng đang tính vẫn chặn được, và log nêu đích danh', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(3, 1, 1, 7).setValues([scriptRow('Other July task', 'p3')]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([handRow(T1)]);
+  aug.getRange(3, 1, 1, 7).setValues([handRow(T2)]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { ACTIVE_MONTH: '07/2026' } });
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'ca 2026-08-06: không kéo về July');
+  eq(r.skippedDeleted, 2, 'cả hai vẫn bị chặn');
+  ok(env.logs.some(l => l.indexOf(T1) !== -1 && l.indexOf('08/2026') !== -1 && l.indexOf('trùng TÊN') !== -1),
+     'log phải nêu đích danh task + dòng tay khớp: ' + env.logs.join('\n'));
+  ok(env.ui.alerts[0].indexOf('không phải page id') !== -1,
+     'alert phải nói rõ đây là khớp theo TÊN, không phải bằng chứng anh đã xoá: ' + env.ui.alerts[0]);
+});
+
+console.log('— D3: SCRIPT_NOTE_ACK không được phình tới trần 9KB rồi kéo sập cả lượt sync —');
+// setProperty của Apps Script chặn ở 9216 byte. noteOnce_ chỉ thêm, không bao giờ dọn,
+// nên tới ngưỡng ~581 dòng đã ack là setProperty ném — và cú ném đó nằm TRƯỚC writeState_,
+// không có try/catch nào trên đường noteOnce_ → resolveCrossTabTwins_ → syncNow. Mọi nhịp
+// 10 phút chết vĩnh viễn vì store không bao giờ nhỏ lại.
+function fillRows_(sh, n) {
+  const v = []; for (let i = 0; i < n; i++) v.push(['x' + i, '', '', '', false, '', '', '']);
+  sh.getRange(2, 1, n, 8).setValues(v);
+}
+function twinNoteSS_() { // dòng script ở 05 + dòng tay cùng tên ở 08 → luật 8 phải ghi note
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const may = ss.insertSheet('05/2026');
+  may.getRange(2, 1, 1, 7).setValues([['Fix cart', WTL, 8, 'Reviewer', false, 'link', 'pfix']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 5).setValues([['Fix cart', WTL, 8, 'Reviewer', false]]);
+  return { ss, may, aug };
+}
+t('D3: ack đầy toàn dòng CÒN SỐNG (không dọn được) → ghi hỏng vẫn không kéo sập sync', () => {
+  const { ss, aug } = twinNoteSS_();
+  const ack = {};
+  ['01/2026', '02/2026', '03/2026', '04/2026'].forEach(m => {
+    fillRows_(ss.insertSheet(m), 180);
+    for (let r = 2; r <= 181; r++) ack[m + '!' + r] = 1;
+  });
+  ok(JSON.stringify(ack).length > 9216, 'seed phải thật sự vượt trần 9216 byte');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss,
+                        props: { SCRIPT_NOTE_ACK: JSON.stringify(ack) } });
+  const r = env.sandbox.syncNow();
+  eq(r.dupHandKept, 1, 'lượt sync vẫn chạy tới nơi');
+  eq(r.updated, 1, 'và vẫn cập nhật được dòng script');
+  ok(String(aug.getRange(2, 8).getValue()).indexOf('🤖') === 0, 'note vẫn được ghi');
+  const st = ss.getSheetByName('_STATE');
+  eq(st.getRange(2, 1).getValue(), 'pfix', '_STATE vẫn được ghi — cú ném không cắt ngang lượt');
+});
+t('D3: ack của dòng đã bị dọn / tab không còn được dọn theo, không dồn lên trần', () => {
+  const { ss, aug } = twinNoteSS_();
+  const ack = {};
+  for (let i = 0; i < 600; i++) ack['01/2020!' + i] = 1; // tab đó không còn tồn tại
+  ok(JSON.stringify(ack).length > 9216, 'seed phải thật sự vượt trần 9216 byte');
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss,
+                        props: { SCRIPT_NOTE_ACK: JSON.stringify(ack) } });
+  env.sandbox.syncNow();
+  const saved = JSON.parse(env.props.SCRIPT_NOTE_ACK);
+  eq(Object.keys(saved).filter(k => k.indexOf('01/2020!') === 0).length, 0, 'ack chết bị dọn sạch');
+  eq(saved['08/2026!2'], 1, 'ack của dòng vừa ghi note thì giữ');
+  ok(JSON.stringify(saved).length < 9216, 'store về lại dưới trần');
+  ok(String(aug.getRange(2, 8).getValue()).indexOf('🤖') === 0, 'note vẫn được ghi');
+});
+
+console.log('— P1: tín hiệu xoá rộng ra — A..D trống là đủ, E/F/H không cứu dòng nữa —');
+// Ca thật 2026-08-06 vòng 2: anh quét đúng mấy cột NHÌN THẤY (A..D) rồi bấm Delete. Cột G
+// ẩn giữ id, ô tick Have (E) và link Card (F) sống sót — phép thử cũ đòi trống hết A..F+H
+// nên dòng không bao giờ là bia mộ, và đường update ghi lại Tên/Status/Point/Role từ Notion.
+// Ranh giới đo được: chỉ cần MỘT ô trong E / F / H-anh-gõ sống sót là dòng bị hồi sinh.
+function tombSS_(cells, stamp) {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1');
+  (cells || []).forEach(c => jul.getRange(2, c[0]).setValue(c[1]));
+  newState(ss, [['p1', 'Done', stamp === undefined ? 1 : stamp]]);
+  return { ss, jul };
+}
+function tombEnv_(ss, pages) {
+  const p = pages || {};
+  if (!p[DS1]) p[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  return makeEnv({ nowMonth: '08/2026', pages: p, ss });
+}
+const HAND_NOTE = 'đã chuyển sang tháng 8';
+[
+  { name: 'không còn ô nào', cells: [] },
+  { name: 'E còn tick Have', cells: [[5, true]] },
+  { name: 'F còn link Card', cells: [[6, 'link']] },
+  { name: 'E tick + F link (đúng ca thật)', cells: [[5, true], [6, 'link']] },
+  { name: 'H là note anh gõ tay', cells: [[8, HAND_NOTE]] },
+  { name: 'E + F + H đủ bộ', cells: [[5, true], [6, 'link'], [8, HAND_NOTE]] },
+].forEach(c => {
+  t('P1: A..D trống, ' + c.name + ' → là bia mộ, không hồi sinh', () => {
+    const { ss, jul } = tombSS_(c.cells);
+    const env = tombEnv_(ss);
+    const r = env.sandbox.syncNow();
+    eq(r.tombstones, 1, 'phải nhận ra là bia mộ');
+    eq(r.updated, 0, 'không update');
+    eq(r.healedLink, 0, 'không vá link');
+    eq(jul.getRange(2, 1).getValue(), '', 'tên KHÔNG hồi sinh');
+    eq(jul.getRange(2, 2).getValue(), '', 'status trống');
+    eq(jul.getRange(2, 3).getValue(), '', 'point trống → KPI tháng đó không đếm');
+    eq(jul.getRange(2, 7).getValue(), 'p1', 'id vẫn nằm đó ghim pid');
+  });
+});
+t('P1: H là note anh gõ → note đó không bị đè, chỉ là nó không cứu dòng nữa', () => {
+  const { ss, jul } = tombSS_([[8, HAND_NOTE]]);
+  const env = tombEnv_(ss);
+  eq(env.sandbox.syncNow().tombstones, 1);
+  eq(jul.getRange(2, 8).getValue(), HAND_NOTE, 'chữ của anh nguyên vẹn');
+});
+// Tín hiệu là CẢ BỐN cột script sở hữu cùng trống. Còn một ô trong A..D nghĩa là dòng
+// vẫn đang mang dữ liệu của script — không phải thao tác xoá.
+[[1, 'Task A', 'A còn tên'], [2, 'Done', 'B còn status'],
+ [3, 5, 'C còn point'], [4, 'Dev', 'D còn role']].forEach(c => {
+  t('P1: ' + c[2] + ' → KHÔNG phải bia mộ, update chạy như thường', () => {
+    const { ss, jul } = tombSS_([[c[0], c[1]], [5, true], [6, 'link']]);
+    const env = tombEnv_(ss);
+    const r = env.sandbox.syncNow();
+    eq(r.tombstones, 0, 'còn ô của script → dòng còn sống');
+    eq(r.updated, 1, 'update chạy');
+    eq(jul.getRange(2, 1).getValue(), 'Task A', 'tên về từ Notion');
+    eq(jul.getRange(2, 5).getValue(), true, 'ô tick của anh không bị đụng');
+  });
+});
+t('P1: pid CHƯA stamp + A..D trống + E/F còn → không phải bia mộ, script điền cả dòng', () => {
+  const { ss, jul } = tombSS_([[5, true], [6, 'link']], '');
+  const env = tombEnv_(ss);
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 0, 'chưa từng stamp thì không thể là dấu xoá');
+  eq(r.added, 0, 'và không add bản sao ở đâu cả');
+  eq(jul.getRange(2, 1).getValue(), 'Task A', 'dòng được điền');
+  eq(jul.getRange(2, 3).getValue(), 3, 'point');
+});
+// Bỏ note bia mộ xong thì dòng đóng băng nhìn đúng như một dòng trống — chỉ còn mỗi ô G.
+// nextFreeRow_ đòi TRỐNG HẾT A..H nên nó không trống, và phải giữ nguyên như vậy: lấy dòng
+// đó làm chỗ ghi task mới là đè mất id giữ chỗ, và task anh đã xoá sống lại ở lượt sau.
+t('P1: bia mộ không bao giờ bị đường add lấy làm dòng trống — id ở G giữ chỗ', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 7).setValue('p1');   // bia mộ: A..F và H trống, chỉ còn id ở G
+  newState(ss, [['p1', 'Done', 1]]);
+  const pages = {};
+  pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev'), page('p3', 'Task C', 'In progress', 1, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  eq(env.sandbox.syncNow().tombstones, 1, 'lượt baseline: dòng 2 là bia mộ');
+  pages[DS1][1] = page('p3', 'Task C', 'Ready to Test', 1, 'Dev');
+  const r = env.sandbox.syncNow();
+  eq(r.added, 1, 'Task C vượt mốc nên phải được add');
+  eq(aug.getRange(2, 7).getValue(), 'p1', 'id bia mộ KHÔNG bị đè');
+  eq(aug.getRange(2, 1).getValue(), '', 'dòng bia mộ vẫn trống');
+  eq(aug.getRange(3, 1).getValue(), 'Task C', 'dòng mới rơi xuống dòng trống THẬT');
+});
+
+console.log('— P2: đóng băng phải NHÌN THẤY được và MỞ RA được —');
+// Note bia mộ đã bỏ (Garry chốt 2026-08-06, sau khi nhìn sheet thật): bia mộ là dòng TRỐNG,
+// một ghi chú nằm đó đọc ra thành "không có task mà vẫn có note". Việc nhìn thấy chuyển hẳn
+// sang alert quét bù + diagnoseSheet — hai hộp thoại đọc được bất cứ lúc nào, xem nhóm R2.
+t('P2: bia mộ → script KHÔNG ghi gì vào ô H, kể cả sau nhiều lượt', () => {
+  const { ss, jul } = tombSS_([[5, true], [6, 'link']]);
+  const env = tombEnv_(ss);
+  for (let i = 1; i <= 3; i++) {
+    eq(env.sandbox.syncNow().tombstones, 1, 'lượt ' + i + ': vẫn là bia mộ');
+    eq(jul.getRange(2, 8).getValue(), '', 'lượt ' + i + ': ô H phải trống trơn');
+  }
+});
+t('P2: bia mộ đứng yên qua nhiều lượt — không hồi sinh, không update', () => {
+  const { ss, jul } = tombSS_([[5, true], [6, 'link']]);
+  const env = tombEnv_(ss);
+  for (let i = 1; i <= 3; i++) {
+    const r = env.sandbox.syncNow();
+    eq(r.tombstones, 1, 'lượt ' + i + ': vẫn là bia mộ');
+    eq(r.updated, 0, 'lượt ' + i + ': vẫn không hồi sinh');
+  }
+  eq(jul.getRange(2, 1).getValue(), '', 'tên vẫn trống sau 3 lượt');
+});
+t('P2 (mở ra được): gõ lại tên vào cột A → dòng sống lại, sync tiếp như thường', () => {
+  const { ss, jul } = tombSS_([[5, true], [6, 'link']]);
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = tombEnv_(ss, pages);
+  eq(env.sandbox.syncNow().tombstones, 1, 'đang đóng băng');
+  jul.getRange(2, 1).setValue('Task A'); // anh gõ tên lại
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 0, 'hết đóng băng');
+  eq(r.updated, 1, 'update chạy lại');
+  eq(jul.getRange(2, 2).getValue(), 'Done', 'status về từ Notion');
+  eq(jul.getRange(2, 3).getValue(), 3, 'point về từ Notion');
+  eq(jul.getRange(2, 4).getValue(), 'Dev', 'role về từ Notion');
+  eq(jul.getRange(2, 5).getValue(), true, 'ô tick của anh không bị đụng');
+  pages[DS1] = [page('p1', 'Task A', 'Waiting to Launch', 4, 'Dev')];
+  env.sandbox.syncNow();
+  eq(jul.getRange(2, 2).getValue(), 'Waiting to Launch', 'và tiếp tục sống theo Notion');
+  eq(jul.getRange(2, 3).getValue(), 4);
+});
+
+console.log('— P3: menu "Xoá task khỏi tháng này" —');
+function delSS_() {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', true, 'link', 'p1']]);
+  aug.getRange(3, 1, 1, 7).setValues([['Task B', 'Done', 4, 'Dev', false, 'link', 'p2']]);
+  aug.getRange(2, 9).setValue('KPI tháng'); // khối KPI nằm CÙNG DÒNG với task
+  newState(ss, [['p1', 'Done', 1], ['p2', 'Done', 1]]);
+  return { ss, aug };
+}
+function delPages_() {
+  const p = {}; p[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev'),
+                          page('p2', 'Task B', 'Done', 4, 'Dev')];
+  return p;
+}
+t('P3: có trong menu, và tên hàm KHÔNG kết thúc bằng gạch dưới', () => {
+  const { sandbox, ui } = makeEnv({ nowMonth: '08/2026' });
+  sandbox.onOpen();
+  const item = ui.menus[0].items.filter(x => x.label && x.label.indexOf('Xoá task khỏi tháng này') !== -1)[0];
+  ok(item, 'menu thiếu mục xoá: ' + JSON.stringify(ui.menus[0].items));
+  ok(item.fn.slice(-1) !== '_', 'addItem không gọi được hàm private: ' + item.fn);
+  eq(typeof sandbox[item.fn], 'function', 'hàm ' + item.fn + ' phải tồn tại');
+});
+t('P3: Code.gs không bao giờ gọi deleteRow / deleteRows', () => {
+  ok(!/\.deleteRows?\s*\(/.test(SRC), 'deleteRow nuốt luôn công thức KPI ở cột I+');
+});
+t('P3: xoá vùng chọn → A..F và H trống, GIỮ id ở G, KPI cột I+ nguyên', () => {
+  const { ss, aug } = delSS_();
+  aug.getRange(2, 8).setValue('ghi chú cũ');
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 2, 8);
+  const r = env.sandbox.deleteTasksFromMonth();
+  eq(r.cleared, 2, 'báo đúng số dòng đã xoá');
+  [2, 3].forEach(row => {
+    for (let c = 1; c <= 6; c++) eq(aug.getRange(row, c).getValue(), '', 'dòng ' + row + ' cột ' + c);
+    eq(aug.getRange(row, 8).getValue(), '', 'dòng ' + row + ' cột H');
+  });
+  eq(aug.getRange(2, 7).getValue(), 'p1', 'id ở G được giữ');
+  eq(aug.getRange(3, 7).getValue(), 'p2');
+  eq(aug.getRange(2, 9).getValue(), 'KPI tháng', 'khối KPI cùng dòng không bị đụng');
+  ok(env.ui.alerts.join(' ').indexOf('2') !== -1, 'phải báo lại số dòng: ' + env.ui.alerts.join(' | '));
+});
+t('P3: xoá xong, dù id ở G bị dọn nốt thì quét bù vẫn KHÔNG hồi sinh', () => {
+  const { ss, aug } = delSS_();
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 2, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 2);
+  aug.getRange(2, 7).clearContent(); aug.getRange(3, 7).clearContent(); // anh dọn nốt cột G
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không task nào mọc lại');
+  eq(r.skippedDeleted, 2, 'dấu stamped do menu đóng đã chặn được');
+});
+t('P3: bấm Không → không xoá gì cả', () => {
+  const { ss, aug } = delSS_();
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'NO' });
+  ss.selectRange_(aug, 2, 1, 2, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 0);
+  eq(aug.getRange(2, 1).getValue(), 'Task A', 'dòng nguyên vẹn');
+});
+t('P3: không có UI (chạy từ editor / trigger) → không xoá gì cả', () => {
+  const { ss, aug } = delSS_();
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, noUi: true });
+  ss.selectRange_(aug, 2, 1, 2, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 0);
+  eq(aug.getRange(2, 1).getValue(), 'Task A');
+});
+t('P3: tab không phải MM/YYYY → từ chối', () => {
+  const { ss } = delSS_();
+  const other = ss.insertSheet('Ghi chú');
+  other.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', true, 'link', 'p1']]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(other, 2, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 0);
+  eq(other.getRange(2, 1).getValue(), 'Task A', 'không đụng tab lạ');
+});
+t('P3: vùng chọn tràn sang khối KPI (cột I+) → từ chối, không xoá', () => {
+  const { ss, aug } = delSS_();
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 2, 12); // đúng hình "bấm số dòng chọn cả dòng"
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 0);
+  eq(aug.getRange(2, 1).getValue(), 'Task A', 'không xoá gì');
+  eq(aug.getRange(2, 9).getValue(), 'KPI tháng', 'KPI nguyên');
+});
+t('P3: vùng chọn không có page id nào ở G → từ chối, dòng tay nguyên vẹn', () => {
+  const { ss, aug } = delSS_();
+  aug.getRange(5, 1, 1, 5).setValues([['Dòng tay', 'Done', 2, 'Dev', false]]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 5, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 0);
+  eq(aug.getRange(5, 1).getValue(), 'Dòng tay', 'dòng tay không bị script dọn');
+});
+t('P3: vùng chọn lẫn dòng tay → chỉ xoá dòng có id, dòng tay còn nguyên + được báo', () => {
+  const { ss, aug } = delSS_();
+  aug.getRange(4, 1, 1, 5).setValues([['Dòng tay', 'Done', 2, 'Dev', false]]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 3, 8);
+  const r = env.sandbox.deleteTasksFromMonth();
+  eq(r.cleared, 2, 'hai dòng có id');
+  eq(r.skipped, 1, 'dòng tay được đếm riêng');
+  eq(aug.getRange(4, 1).getValue(), 'Dòng tay', 'dòng tay nguyên vẹn');
+  ok(env.ui.alerts.join(' ').indexOf('4') !== -1, 'phải nêu dòng bị bỏ qua: ' + env.ui.alerts.join(' | '));
+});
+// Ghi state từ một đường phụ không bao giờ được làm HẸP ký ức xoá tay của pid khác —
+// cùng luật với writeState_. _STATE format cũ chưa có cột dấu, nên phải dựng lại từ sheet
+// trước khi ghi, y hệt syncNow, không thì mọi pid khác mất dấu ngay lượt bấm nút.
+t('P3: _STATE format cũ → menu xoá không làm rơi dấu đã-từng-add của pid khác', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', true, 'link', 'p1']]);
+  aug.getRange(3, 1, 1, 7).setValues([['Task B', 'Done', 4, 'Dev', false, 'link', 'p2']]);
+  legacyState(ss, [['p1', 'Done'], ['p2', 'Done']]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 1, 'xoá Task A qua menu');
+  aug.getRange(3, 1, 1, 8).clearContent(); // anh xoá tay Task B, sạch cả G
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'Task B cũng không được hồi sinh');
+  eq(r.skippedDeleted, 1, 'dấu của Task B sống sót qua lượt ghi state của menu');
+});
+t('P3: script chưa chạy lượt sync nào (_STATE trống) → từ chối, không xoá', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', true, 'link', 'p1']]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 0, 'chưa có dấu để đóng thì không xoá');
+  eq(aug.getRange(2, 1).getValue(), 'Task A');
+});
+t('P3: xoá xong, lượt sync kế tiếp coi dòng là bia mộ và để ô H yên', () => {
+  const { ss, aug } = delSS_();
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 1);
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1, 'hình dạng chuẩn của dòng đã xoá');
+  eq(aug.getRange(2, 1).getValue(), '', 'không hồi sinh');
+  eq(aug.getRange(2, 8).getValue(), '', 'nút xoá đã dọn H — script không ghi ngược lại note nào');
+});
+
+console.log('— P4: ẩn lại cột G — tín hiệu xoá chỉ đọc A..D nên id không cần nằm trong tầm mắt —');
+// Đời trước bỏ ẩn G vì tín hiệu xoá khi đó đòi trống A..F: G ẩn thì anh quét mấy cột nhìn
+// thấy rồi Delete mà dòng vẫn không thành bia mộ. Cùng vòng đó tín hiệu thu về A..D, nên lý
+// do bỏ ẩn hết hiệu lực — dọn sạch mấy cột nhìn thấy là đủ.
+t('P4: sheet ĐÃ bị bỏ ẩn đời trước → phải ẩn lại, không chỉ ngừng bỏ ẩn', () => {
+  const ss = new MockSS();
+  const tpl = ss.insertSheet('_TEMPLATE'); tpl.showColumns(7);
+  const jun = ss.insertSheet('06/2026'); jun.showColumns(7);
+  const jul = ss.insertSheet('07/2026'); jul.showColumns(7);
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  env.sandbox.syncNow();
+  [tpl, jun, jul].forEach(sh => eq(sh.hiddenCols[7], true, 'cột G còn hiện ở tab ' + sh.getName()));
+});
+// Sheet thật đã chạy qua đời format trước nên ROW_FORMAT_VERSION đã nằm sẵn trong Script
+// Property. Chỉ đổi showColumns → hideColumns mà quên nâng ROW_FMT thì cổng phiên bản chặn
+// cả pass, applyRowFormat_ không bao giờ chạy lại, và cột G hiện vĩnh viễn trên đúng cái
+// sheet cần sửa. Đây là nửa mang tải của Part B.
+t('P4: sheet đã có ROW_FORMAT_VERSION đời trước → vẫn phải chạy lại pass mà ẩn G', () => {
+  const ss = new MockSS();
+  const tpl = ss.insertSheet('_TEMPLATE'); tpl.showColumns(7);
+  const jul = ss.insertSheet('07/2026'); jul.showColumns(7);
+  const env = makeEnv({ nowMonth: '07/2026', ss, props: { ROW_FORMAT_VERSION: '5' } });
+  env.sandbox.syncNow();
+  [tpl, jul].forEach(sh => eq(sh.hiddenCols[7], true, 'cột G còn hiện ở tab ' + sh.getName()));
+});
+t('P4: một lần rồi thôi — anh hiện lại thì script không cãi mỗi 10 phút', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  const env = makeEnv({ nowMonth: '07/2026', ss });
+  env.sandbox.syncNow();
+  eq(jul.hiddenCols[7], true, 'lượt đầu ẩn');
+  jul.showColumns(7); // anh tự hiện lại
+  const before = jul.hideColCalls.length;
+  env.sandbox.syncNow();
+  eq(jul.hideColCalls.length, before, 'lượt sau không đụng lại');
+  eq(jul.hiddenCols[7], false, 'ý của anh được tôn trọng');
+});
+t('P4: tab tháng mới tạo cũng ẩn cột G', () => {
+  const ss = new MockSS(); const tpl = ss.insertSheet('_TEMPLATE'); tpl.showColumns(7);
+  const pages = {}; pages[DS1] = [page('pw', 'Task', 'Done', 1, 'Dev')];
+  const env = makeEnv({ nowMonth: '09/2026', pages, ss });
+  env.sandbox.syncNow({ backfill: true });
+  eq(ss.getSheetByName('09/2026').hiddenCols[7], true, 'tab mới clone ra vẫn hiện cột G');
+});
+
+console.log('— R1: đóng băng LẦN HAI vẫn phải tự báo —');
+// Đóng băng #1 → anh gõ lại tên vào A → xoá lần nữa: lần #2 không được im lặng. Bỏ note bia
+// mộ thì trên sheet không còn vết nào để kiểm, nên bằng chứng phải nằm trọn ở hai hộp thoại
+// đọc được bất cứ lúc nào — alert quét bù và diagnoseSheet. Vòng gọi-dòng-về ở giữa chính là
+// phép thử "mở ra được": gõ lại A..D là dòng sống lại và sync tiếp từ Notion.
+t('R1: đóng băng → gọi về → xoá lần nữa: lần đóng băng thứ hai vẫn báo', () => {
+  const { ss, jul } = tombSS_([[5, true], [6, 'link']]);
+  const env = tombEnv_(ss);
+  eq(env.sandbox.syncNow().tombstones, 1, 'đóng băng lần 1');
+  jul.getRange(2, 1).setValue('Task A');       // gọi dòng về đúng cách SETUP.md chỉ
+  const back = env.sandbox.syncNow();
+  eq(back.tombstones, 0, 'dòng sống lại');
+  eq(back.updated, 1, 'và sync tiếp từ Notion');
+  jul.getRange(2, 1, 1, 4).clearContent();     // xoá lần nữa
+  const before = env.ui.alerts.length;
+  eq(env.sandbox.backfillCounted().tombstones, 1, 'đóng băng lần 2');
+  const a = env.ui.alerts.slice(before).join(' | ');
+  ok(a.indexOf('07/2026 dòng 2') !== -1, 'lần đóng băng thứ hai vẫn phải nêu ra: ' + a);
+  eq(env.sandbox.diagnoseSheet().tombstones, 1, 'và chẩn đoán cũng thấy');
+});
+t('R1: dòng từng nhận note TRÙNG rồi bị xoá → việc đóng băng vẫn được nêu', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, 'link', 'idkhac']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Fix cart', WTL, 2, 'Dev', false, 'link', 'pfix']]);
+  const pages = {}; pages[DS1] = [page('pfix', 'Fix cart', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();
+  ok(String(aug.getRange(2, 8).getValue()).indexOf('Nghi trùng TÊN') !== -1, 'lượt 1: cờ nghi trùng');
+  aug.getRange(2, 8).clearContent();           // đọc rồi, xoá đi
+  aug.getRange(2, 1, 1, 4).clearContent();     // rồi xoá luôn dòng
+  const r = env.sandbox.syncNow();
+  eq(r.tombstones, 1, 'dòng thành bia mộ');
+  eq(aug.getRange(2, 8).getValue(), '', 'dấu ack của note TRÙNG vẫn giữ, H không mọc lại chữ nào');
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.tombstones, 1, 'chẩn đoán nêu được dòng đang đóng băng');
+  eq(d.tabs.find(x => x.name === '08/2026').tombRows.join(','), '2', 'và chỉ đúng dòng');
+  ok(d.lines.join('\n').indexOf('❄') !== -1, 'log chi tiết phải nêu: ' + d.lines.join('\n'));
+});
+
+console.log('— R2: dòng đang đóng băng phải nhìn thấy được ngoài Execution log —');
+// Đóng băng KHÔNG để lại vết nào trên sheet (note bia mộ đã bỏ — dòng trống thì không mang
+// note), mà Execution log chỉ giữ vài ngày. Hai hộp thoại đọc được bất cứ lúc nào — quét bù
+// và chẩn đoán — là toàn bộ đường nhìn thấy, nên phải nêu ra.
+t('R2: alert quét bù nêu đúng dòng đang đóng băng, chữ anh gõ ở H vẫn nguyên', () => {
+  const { ss, jul } = tombSS_([[8, HAND_NOTE]]);
+  const env = tombEnv_(ss);
+  const r = env.sandbox.backfillCounted();
+  eq(r.tombstones, 1, 'vẫn là bia mộ');
+  eq(jul.getRange(2, 8).getValue(), HAND_NOTE, 'chữ của anh không bao giờ bị đè');
+  const a = env.ui.alerts.join(' | ');
+  ok(a.indexOf('đóng băng') !== -1, 'alert phải nêu việc đóng băng: ' + a);
+  ok(a.indexOf('07/2026 dòng 2') !== -1, 'và chỉ đúng chỗ: ' + a);
+});
+t('R2: chẩn đoán sheet liệt kê dòng đang đóng băng', () => {
+  const { ss } = tombSS_([[8, HAND_NOTE]]);
+  const env = tombEnv_(ss);
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.tombstones, 1, 'chẩn đoán phải đếm được');
+  ok(d.lines.join('\n').indexOf('đóng băng') !== -1, 'log chi tiết phải nêu: ' + d.lines.join('\n'));
+  ok(env.ui.alerts.join(' | ').indexOf('đóng băng') !== -1, 'và cả trong hộp thoại tóm tắt');
+});
+t('R2: _STATE format cũ → dòng hình bia mộ vẫn được nêu (lượt sync tới sẽ đóng băng nó)', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1');
+  legacyState(ss, [['p1', 'Done']]);
+  const env = tombEnv_(ss);
+  eq(env.sandbox.diagnoseSheet().tombstones, 1, 'dấu dựng từ sheet nên hình dạng là đủ');
+});
+t('R2: dòng anh vừa DÁN id (pid chưa stamp) không bị chẩn đoán gọi là đóng băng', () => {
+  const { ss } = tombSS_([[5, true], [6, 'link']], '');   // pid chưa từng có dấu
+  const env = tombEnv_(ss);
+  eq(env.sandbox.diagnoseSheet().tombstones, 0,
+     'script sắp điền cả dòng cho anh — đó không phải đóng băng');
+});
+t('R2: không có bia mộ thì không bịa ra dòng nào', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', false, 'link', 'p1']]);
+  newState(ss, [['p1', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  eq(env.sandbox.backfillCounted().tombstones, 0);
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.tombstones, 0, 'chẩn đoán báo 0 chứ không bịa');
+  ok((env.ui.alerts.join(' | ') + d.lines.join('\n')).indexOf('❄') === -1,
+     'không có dòng nào đóng băng thì không liệt kê dòng nào: ' + env.ui.alerts.join(' | '));
+});
+
+console.log('— R3: nút xoá không được nuốt lượt migration của _STATE format cũ —');
+// _STATE thật đang ở format 2 cột. Nút xoá ghi state là header thành "stamped" NGAY, nên
+// lượt sync đầu tiên sau đó không còn biết mình đang migrate: suy-dấu-theo-tên (dòng tay ở
+// tab tháng mới hơn) không bao giờ nổ, và task anh đã gõ tay lại bị kéo về thành bản sao.
+t('R3: bấm nút xoá TRƯỚC lượt sync đầu → suy-dấu-theo-tên vẫn còn nguyên cho lượt sau', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(3, 1, 1, 7).setValues([scriptRow('Other July task', 'p3')]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([handRow(T1)]);
+  aug.getRange(3, 1, 1, 7).setValues([handRow(T2)]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { ACTIVE_MONTH: '07/2026' }, uiAnswer: 'YES' });
+  ss.selectRange_(jul, 3, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 1, 'nút xoá vẫn chạy được');
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không kéo bản sao nào về');
+  eq(r.skippedDeleted, 2, 'suy-dấu-theo-tên vẫn nhận ra hai dòng tay');
+  eq(aug.getRange(2, 1).getValue(), T1, 'dòng tay nguyên vẹn');
+  eq(aug.getRange(3, 1).getValue(), T2);
+});
+// Header còn cũ nghĩa là lượt ghi state nào của nút xoá cũng dựng lại dấu từ sheet, nên bấm
+// nút HAI lần trước lượt sync đầu là có thật. Dựng lại mà THAY chứ không GỘP thì lần bấm sau
+// xoá mất dấu của lần bấm trước — đúng thứ writeState_ sinh ra để chặn, ở một đường khác.
+t('R3: bấm nút xoá hai lần khi _STATE còn format cũ → dấu lần đầu không bị lần sau làm rơi', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', true, 'link', 'p1']]);
+  aug.getRange(3, 1, 1, 7).setValues([['Task B', 'Done', 4, 'Dev', false, 'link', 'p2']]);
+  legacyState(ss, [['p1', 'Done'], ['p2', 'Done']]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: delPages_(), ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 1, 'xoá Task A');
+  aug.getRange(2, 7).clearContent();           // anh dọn nốt ô G của Task A
+  ss.selectRange_(aug, 3, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 1, 'xoá tiếp Task B');
+  aug.getRange(3, 7).clearContent();
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không task nào mọc lại');
+  eq(r.skippedDeleted, 2, 'dấu của cả hai lần bấm đều còn nguyên');
+});
+t('R3: dấu do chính nút xoá đóng vẫn sống qua lượt migration, kể cả khi anh dọn nốt ô G', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([['Task A', 'Done', 3, 'Dev', true, 'link', 'p1']]);
+  legacyState(ss, [['p1', 'Done']]);
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, uiAnswer: 'YES' });
+  ss.selectRange_(aug, 2, 1, 1, 8);
+  eq(env.sandbox.deleteTasksFromMonth().cleared, 1);
+  aug.getRange(2, 7).clearContent();           // anh dọn nốt ô G
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không hồi sinh');
+  eq(r.skippedDeleted, 1, 'dấu của nút xoá sống qua lượt migration');
+});
+
+console.log('— N1: dấu stamped chỉ được đọc từ ĐÚNG sentinel writeState_ ghi ra —');
+// `_STATE` ẩn chứ không khoá — anh mở nó ra xem rồi gõ nhầm một chữ vào cột C là xong:
+// pid đó bị coi như "từng có dòng rồi bị xoá tay", cổng add chặn vĩnh viễn. Tự sửa cũng
+// không được: lượt ghi state kế tiếp đóng luôn số 1 vào ô đó (dấu KHÔNG BAO GIỜ được hẹp
+// lại — xem writeState_), nên chữ gõ nhầm hoá thành dấu thật. Trên nhịp 10 phút việc này
+// im lặng (task chưa vượt mốc thì chưa tới cổng add), tới lượt quét bù mới lòi ra dưới
+// dạng "anh đã xoá tay" — tố oan một task anh chưa từng đụng tới.
+// writeState_ ghi số 1 và chỉ số 1, nên đường đọc phải đòi đúng sentinel đó.
+function poisonedLegacyState_(ss, rows, badRow, badValue) {
+  const st = legacyState(ss, rows);
+  st.getRange(badRow, 3).setValue(badValue);
+  return st;
+}
+t('N1: chữ gõ nhầm ở cột C của _STATE không được thành dấu "anh đã xoá tay"', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
+  poisonedLegacyState_(ss, [['pcu', 'Done'], ['pnew', 'Done']], 3, 'x');
+  const pages = {}; pages[DS1] = [page('pcu', 'Task cũ', 'Done', 3, 'Dev'),
+                                  page('pnew', 'Task mới', 'Done', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.backfillCounted();
+  eq(r.skippedDeleted, 0, 'không pid nào bị gán nhãn xoá tay: ' + r.skippedDeletedNames.join(' | '));
+  eq(r.added, 2, 'cả hai task đều được quét bù cứu');
+  eq(countTitle_(ss, 'Task mới'), 1, 'task bị đầu độc vẫn có dòng');
+});
+t('N1: nhiễm im lặng trên nhịp 10 phút không được đóng dấu vĩnh viễn vào _STATE', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
+  poisonedLegacyState_(ss, [['pnew', 'In progress']], 2, 'x');
+  const pages = {}; pages[DS1] = [page('pnew', 'Task mới', 'In progress', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const trig = env.sandbox.syncNow();
+  eq(trig.skippedDeleted, 0, 'nhịp 10 phút không nói gì — nên nó càng không được ghi dấu');
+  const st = ss.getSheetByName('_STATE');
+  eq(st.getRange(2, 3).getValue(), '', 'cột C phải sạch, không hoá thành dấu số 1');
+  pages[DS1] = [page('pnew', 'Task mới', 'Done', 5, 'Dev')];
+  const r = env.sandbox.backfillCounted();
+  eq(r.skippedDeleted, 0, 'vài ngày sau quét bù không được tố oan: ' + r.skippedDeletedNames.join(' | '));
+  eq(r.added, 1, 'task vẫn về được');
+});
+t('N1: dấu THẬT (số 1 do writeState_ ghi) vẫn chặn quét bù như cũ', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
+  newState(ss, [['pxoa', 'Done', 1]]);
+  const pages = {}; pages[DS1] = [page('pxoa', 'Task đã xoá', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  const r = env.sandbox.backfillCounted();
+  eq(r.skippedDeleted, 1, 'siết sentinel không được làm rơi ký ức xoá tay');
+  eq(r.added, 0);
+});
+t('N1: ô C định dạng text nên đọc ra chuỗi "1" vẫn là dấu thật', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
+  newState(ss, [['pxoa', 'Done', '1']]);
+  const pages = {}; pages[DS1] = [page('pxoa', 'Task đã xoá', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  eq(env.sandbox.backfillCounted().skippedDeleted, 1, 'chuỗi "1" là cùng một dấu, chỉ khác định dạng ô');
+});
+
+// Chẩn đoán đọc _STATE bằng TAY (không qua getState_, vì hàm đó tạo tab khi thiếu) nên nó
+// có đường đọc cột C riêng — và đường đó phải theo ĐÚNG luật của getState_, nếu không con
+// số in ra mô tả một lượt quét bù khác với lượt sẽ chạy thật.
+t('N1: chữ gõ nhầm ở cột C không được làm chẩn đoán báo "đã xoá tay" sai lượt quét bù', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
+  const st = newState(ss, [['pnew', 'Done', '']]);
+  st.getRange(2, 3).setValue('x');
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.deletedStamped, 0, 'chữ gõ nhầm không phải dấu xoá tay');
+  eq(d.pendingBackfill, 1, 'và task đó vẫn nằm trong bán kính nổ của quét bù');
+  const pages = {}; pages[DS1] = [page('pnew', 'Task mới', 'Done', 5, 'Dev')];
+  const env2 = makeEnv({ nowMonth: '08/2026', pages, ss });
+  eq(env2.sandbox.backfillCounted().added, 1, 'số chẩn đoán in ra phải khớp việc quét bù làm thật');
+});
+t('N1: chữ gõ nhầm ở cột C không được làm chẩn đoán gọi dòng chưa stamp là đóng băng', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 7).setValue('p1');
+  const st = newState(ss, [['p1', 'Done', '']]);
+  st.getRange(2, 3).setValue('x');
+  const pages = {}; pages[DS1] = [page('p1', 'Task A', 'Done', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  eq(env.sandbox.diagnoseSheet().tombstones, 0, 'pid chưa từng stamp thật → không phải đóng băng');
+  eq(env.sandbox.syncNow().tombstones, 0, 'và sync đồng ý — nó điền cả dòng cho anh');
+  eq(aug.getRange(2, 1).getValue(), 'Task A', 'dòng được điền chứ không bị đóng băng');
+});
+
+console.log('— N2: chẩn đoán không được đếm đóng băng ở tab sync không nhìn thấy —');
+// scanMonthRows_ chỉ quét tab khớp MM/YYYY, nên dòng hình bia mộ nằm trong tab "Ghi chú"
+// KHÔNG bị đóng băng — cả tab đó vô hình với sync. Đếm nó vào "Dòng đang đóng băng" là
+// bịa ra một con số trong đúng cái công cụ sinh ra để dẹp hoang mang.
+t('N2: dòng hình bia mộ ở tab KHÔNG khớp MM/YYYY không được tính là đang đóng băng', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE'); ss.insertSheet('08/2026');
+  const stray = ss.insertSheet('Ghi chú');
+  stray.getRange(2, 7).setValue('plac');
+  newState(ss, [['plac', 'Done', 1]]);
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.tombstones, 0, 'sync không index tab đó nên ở đó không có gì bị đóng băng');
+  ok(d.alienTabs.indexOf('Ghi chú') !== -1, 'tab vẫn phải bị điểm mặt: ' + d.alienTabs.join(' | '));
+  ok(d.lines.join('\n').indexOf('❄') === -1, 'không được liệt kê dòng đóng băng nào');
+});
+t('N2: bia mộ THẬT ở tab tháng vẫn đếm đủ, chỉ dòng ở tab lạ bị bỏ ra', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 7).setValue('p1');
+  const stray = ss.insertSheet('Ghi chú');
+  stray.getRange(2, 7).setValue('plac');
+  newState(ss, [['p1', 'Done', 1], ['plac', 'Done', 1]]);
+  const env = makeEnv({ nowMonth: '08/2026', ss });
+  const d = env.sandbox.diagnoseSheet();
+  eq(d.tombstones, 1, 'chỉ dòng ở tab tháng mới là đóng băng thật');
+  const tomb = d.lines.filter(l => l.indexOf('❄') !== -1).join('\n');
+  ok(tomb.indexOf('dòng 2') !== -1, 'vẫn chỉ đúng chỗ: ' + tomb);
+  eq(d.tabs.find(x => x.name === 'Ghi chú').tombRows.length, 0, 'tab lạ không giữ dòng đóng băng nào');
+});
+
+console.log('— Ca thật 2026-08-06 vòng 2: quét A..D rồi Delete trên tab đã chốt —');
+// Đúng hình sự cố: 2 task Reviewer bị xoá khỏi 07/2026 (đã chốt) bằng cách quét A..D rồi
+// Delete — ô tick Have và link Card sống sót, cột G ẩn giữ id — trong khi 08/2026 có dòng
+// anh gõ tay cho cùng hai task đó (trống G). Bản trước: July bị ghi lại từ Notion, KPI
+// hai tháng cùng đếm.
+function countTitle_(ss, title) {
+  let n = 0;
+  ss.getSheets().forEach(sh => sh.data.forEach(r => { if (r[0] === title) n++; }));
+  return n;
+}
+t('vòng 2: July đứng yên, August tay nguyên vẹn, 3 lượt + quét bù không thêm gì', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  seedOldState(ss);
+  const jul = ss.insertSheet('07/2026');
+  jul.getRange(2, 1, 1, 7).setValues([['', '', '', '', true, 'link', 'p1']]);
+  jul.getRange(3, 1, 1, 7).setValues([scriptRow('Other July task', 'p3')]);
+  jul.getRange(4, 1, 1, 7).setValues([['', '', '', '', true, 'link', 'p2']]);
+  const aug = ss.insertSheet('08/2026');
+  aug.getRange(2, 1, 1, 7).setValues([handRow(T1)]);
+  aug.getRange(3, 1, 1, 7).setValues([handRow(T2)]);
+  const env = makeEnv({ nowMonth: '08/2026', pages: incidentPages(), ss,
+                        props: { CLOSED_THROUGH: '07/2026' } });
+  for (let i = 1; i <= 3; i++) {
+    const r = env.sandbox.syncNow();
+    eq(r.added, 0, 'lượt ' + i + ': không add');
+    eq(r.tombstones, 2, 'lượt ' + i + ': 2 bia mộ');
+    eq(r.dupCleared, 0, 'lượt ' + i + ': không dọn gì');
+  }
+  const rb = env.sandbox.backfillCounted();
+  eq(rb.added, 0, 'quét bù cũng không kéo về July');
+  eq(rb.tombstones, 2);
+  [2, 4].forEach(row => {
+    eq(jul.getRange(row, 1).getValue(), '', 'July dòng ' + row + ' không hồi sinh');
+    eq(jul.getRange(row, 2).getValue(), '', 'status trống');
+    eq(jul.getRange(row, 3).getValue(), '', 'point trống → KPI July không đếm');
+    ok(jul.getRange(row, 7).getValue(), 'id vẫn ghim chống add lại');
+  });
+  eq(jul.getRange(3, 1).getValue(), 'Other July task', 'dòng thật bên cạnh không vạ lây');
+  eq(aug.getRange(2, 1).getValue(), T1, 'dòng tay tháng 8 sống');
+  eq(aug.getRange(3, 1).getValue(), T2);
+  eq(aug.getRange(2, 8).getValue(), '', 'không note vô cớ lên dòng tay');
+  eq(countTitle_(ss, T1), 1, 'không đếm đôi');
+  eq(countTitle_(ss, T2), 1);
+});
+
+console.log('— BA BẤT BIẾN (theo thứ tự ưu tiên của rule 10) —');
+// Khoá lại bằng tên gọi thẳng, để ai gỡ một chốt chặn nào cũng làm đỏ đúng một test có
+// tên nói rõ mất cái gì.
+t('BẤT BIẾN (i): dòng tay không bao giờ bị script tự xoá — trống G lẫn đã dán id', () => {
+  const s = revChronSS(['08/2026', '07/2026']);
+  s['07/2026'].getRange(2, 1, 1, 7).setValues([['Fix cart', 'Done', 2, 'Dev', true, 'link', 'pa']]);
+  s['07/2026'].getRange(3, 1, 1, 7).setValues([['Fix login', 'Done', 2, 'Dev', true, 'link', 'pb']]);
+  s['08/2026'].getRange(2, 1, 1, 5).setValues([['Fix cart', WTL, 8, 'Dev', false]]);          // trống G
+  s['08/2026'].getRange(3, 1, 1, 7).setValues([['Fix login', WTL, 8, 'Dev', false, '', 'pb']]); // đã dán id
+  const pages = {}; pages[DS1] = [page('pa', 'Fix cart', 'Done', 2, 'Dev'),
+                                  page('pb', 'Fix login', 'Done', 2, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss: s.ss });
+  for (let i = 1; i <= 3; i++) env.sandbox.syncNow();
+  eq(s['08/2026'].getRange(2, 1).getValue(), 'Fix cart', 'dòng tay trống G sống');
+  eq(s['08/2026'].getRange(3, 1).getValue(), 'Fix login', 'dòng tay đã dán id cũng sống');
+  eq(s['08/2026'].getRange(3, 7).getValue(), 'pb', 'id anh dán không bị lấy đi');
+});
+t('BẤT BIẾN (ii): task anh đã xoá không bao giờ được hồi sinh — cả 3 kiểu xoá, qua cả 502', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {};
+  pages[DS1] = [page('p1', 'Task 1', 'In progress', 3, 'Dev'), page('p2', 'Task 2', 'In progress', 3, 'Dev'),
+                page('p3', 'Task 3', 'In progress', 3, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss });
+  env.sandbox.syncNow();                                        // baseline
+  pages[DS1] = pages[DS1].map(p => page(p.id, p.properties['Task name'].title[0].plain_text, 'Done', 3, 'Dev'));
+  env.sandbox.syncNow();                                        // add cả 3
+  const aug = ss.getSheetByName('08/2026');
+  eq(aug.dataRowCount(), 3, 'đã add đủ 3');
+  aug.getRange(2, 1, 1, 8).clearContent();                      // (a) xoá sạch cả G
+  aug.getRange(3, 1, 1, 6).clearContent();                      // (b) xoá A..F, G sót lại = bia mộ
+  aug.getRange(4, 1, 1, 6).clearContent();                      // (c) như (b) nhưng H còn note script
+  aug.getRange(4, 8).setValue('🤖 Nghi trùng "Task 3" ở tab 07/2026');
+  env.queryFail[DS1] = true; env.sandbox.syncNow(); env.queryFail[DS1] = false; // một nhịp 502
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0, 'không dòng nào mọc lại');
+  eq(r.skippedDeleted, 1, '(a) chặn ở cổng add');
+  eq(r.tombstones, 2, '(b) + (c) chặn ở bia mộ');
+  eq(aug.getRange(2, 1).getValue(), ''); eq(aug.getRange(3, 1).getValue(), '');
+  eq(aug.getRange(4, 1).getValue(), '');
+});
+t('BẤT BIẾN (iii): tháng đã chốt không nhận dòng mới, không tạo tab', () => {
+  const ss = new MockSS(); ss.insertSheet('_TEMPLATE');
+  const pages = {}; pages[DS1] = [page('pmoi', 'Task mới toanh', 'Done', 5, 'Dev')];
+  const env = makeEnv({ nowMonth: '08/2026', pages, ss, props: { CLOSED_THROUGH: '08/2026' } });
+  const r = env.sandbox.backfillCounted();
+  eq(r.added, 0); eq(r.blockedClosed, 1, 'bị chặn và được đếm');
+  ok(!ss.getSheetByName('08/2026'), 'không tạo tab tháng đã chốt');
+});
 
 // ---------------- kết quả ----------------
 console.log('');
