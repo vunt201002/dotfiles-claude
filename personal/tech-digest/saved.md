@@ -12,6 +12,24 @@
 > `      <url>`
 
 <!-- SAVED-LIST (skill đọc & ghi phần dưới dòng này; mục mới chèn ngay dưới marker) -->
+- [ ] Personalizing Airbnb search by learning from the guest journey — medium.com/airbnb-engineering · lưu 2026-08-06 (digest 2026-08-06)
+      → Transformer-based sequence model encode nhiều NĂM hành vi guest để chọn listing. Pattern personalization từ chuỗi hành vi dài — áp được cho segment/reward theo lịch sử khách.
+      https://medium.com/airbnb-engineering/personalizing-airbnb-search-by-learning-from-the-guest-journey-bcefd1915624
+- [ ] WebMCP support for Liquid and Hydrogen storefronts — shopify.dev · lưu 2026-08-06 (digest 2026-08-06)
+      → Storefront đăng ký 8 tool trực tiếp với browser cho AI agent (catalog, cart, checkout, order, policy/FAQ) — agent hết phải đọc DOM và giả lập click. Tự bật. Giới hạn: origin trial, chỉ Chromium.
+      https://shopify.dev/changelog/webmcp-liquid-hydrogen
+- [ ] Cloudflare OS: an open platform for agents, apps, and work — blog.cloudflare.com · lưu 2026-08-06 (digest 2026-08-06)
+      → Nền tảng open-source: workspace cho agent có context công ty, lớp "Gatekeepers" quản quyền truy cập hệ thống nội bộ, dựng full-stack app trong browser để agent tự chạy.
+      https://blog.cloudflare.com/cloudflare-os/
+- [ ] Inside the keyv npm Supply Chain Compromise — snyk.io · lưu 2026-08-06 (digest 2026-08-06)
+      → 11 release độc, preinstall hook chạy trước cả khi import lib, payload 727KB hút GitHub/npm token + cloud secret. Provenance attestation KÝ HỢP LỆ nên mọi crypto check đều pass. Kiểm tra lockfile.
+      https://snyk.io/blog/inside-keyv-npm-compromise-preinstall-malware-trusted-provenance-ide-hooks/
+- [ ] Discovery Loop — discoveryloop.com · lưu 2026-08-06 (digest 2026-08-06)
+      → Jeff Dean, Sanjay Ghemawat, Quoc Le, Oriol Vinyals lập startup tự động hoá toàn bộ vòng lặp thí nghiệm khoa học, bắt đầu từ ML research.
+      https://www.discoveryloop.com/
+- [ ] Software Factories, Light and Dark — addyosmani.com · lưu 2026-08-06 (digest 2026-08-06)
+      → Nút thắt agentic coding là VERIFY chứ không phải sinh code. Quy tắc "back pressure": chỉ giao autonomy đúng bằng mức verify được rẻ và đáng tin. Dark factory tích comprehension debt; light factory giữ người ở chỗ đắt tiền.
+      https://addyosmani.com/blog/software-factories/
 - [ ] The AI Aesthetic — blog.jim-nielsen.com · lưu 2026-08-02 (digest 2026-08-02)
       → Jim Nielsen về "mùi AI" trong design: sparkle ✨, streaming/shimmering text, tiny icons (Claude/Codex/Cursor), beige+cam+serif, UI non-deterministic. Lược dịch TV: translations/2026-08-02-the-ai-aesthetic-vi.md
       https://blog.jim-nielsen.com/2026/ai-aesthetic/
