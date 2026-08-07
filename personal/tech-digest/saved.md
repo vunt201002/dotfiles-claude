@@ -12,6 +12,21 @@
 > `      <url>`
 
 <!-- SAVED-LIST (skill đọc & ghi phần dưới dòng này; mục mới chèn ngay dưới marker) -->
+- [ ] Improving GPT-5.6 Sol in ChatGPT, expanding GPT-5.6 Luna access for free users — openai.com · lưu 2026-08-07 (digest 2026-08-07)
+      → Post chính chủ OpenAI: Sol được tune lại, Luna mở cho tài khoản free. Đọc để biết tier nào giờ dùng được model nào — ảnh hưởng trực tiếp nếu build feature AI cho user không trả tiền.
+      https://openai.com/index/improving-gpt-5-6-sol-in-chatgpt/
+- [ ] Eval-driven development: Lessons from evaluating GenAI at scale — medium.com/airbnb-engineering · lưu 2026-08-07 (digest 2026-08-07)
+      → Airbnb coi eval là hạng mục kỹ thuật hạng nhất chứ không phải việc làm cuối: eval nào chạy lúc nào, ai sở hữu, xử lý sao khi eval và cảm nhận người dùng mâu thuẫn. Đúng bài toán khi ship tính năng GenAI mà không biết đo gì.
+      https://medium.com/airbnb-engineering/eval-driven-development-lessons-from-evaluating-genai-at-scale-e817e5ae5788
+- [ ] Taste Is All That's Left — notashelf.dev · lưu 2026-08-07 (digest 2026-08-07)
+      → Friction khi code trước đây không chỉ là rào cản, nó là giáo trình dạy phán đoán. AI xoá friction thì người mới ship nhanh hơn nhưng bỏ qua đoạn học nghề đó. Câu hỏi chuyển từ "làm được không" sang "cái này có nên tồn tại không".
+      https://notashelf.dev/posts/taste-is-all-thats-left
+- [ ] Can you reverse engineer an ASIC? — blog.janestreet.com · lưu 2026-08-07 (digest 2026-08-07)
+      → Jane Street kể quá trình bóc ngược một con chip chuyên dụng. Đọc như một bài debugging ở tầng thấp nhất có thể — không có source, không có symbol, chỉ có hành vi.
+      https://blog.janestreet.com/can-you-reverse-engineer-an-asic/
+- [ ] GitHub Actions and Pages are experiencing degraded availability — githubstatus.com · lưu 2026-08-07 (digest 2026-08-07)
+      → Sự cố đang diễn ra hôm 07/08. Nếu CI fail thì kiểm tra trang này trước khi đi debug pipeline. (Trang incident — sẽ đóng khi GitHub khắc phục xong.)
+      https://www.githubstatus.com/incidents/qcvjkzcs7j74
 - [ ] Personalizing Airbnb search by learning from the guest journey — medium.com/airbnb-engineering · lưu 2026-08-06 (digest 2026-08-06)
       → Transformer-based sequence model encode nhiều NĂM hành vi guest để chọn listing. Pattern personalization từ chuỗi hành vi dài — áp được cho segment/reward theo lịch sử khách.
       https://medium.com/airbnb-engineering/personalizing-airbnb-search-by-learning-from-the-guest-journey-bcefd1915624
