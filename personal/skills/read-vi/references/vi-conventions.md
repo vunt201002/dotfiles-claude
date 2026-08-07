@@ -46,6 +46,13 @@ Ví dụ (danh sách minh hoạ, không phải danh sách đóng): `cache` · `d
 `cluster` · `retry` · `backoff` · `rate limit` · `webhook` · `payload` · `schema` ·
 `refactor` · `benchmark` · `profiling` · `garbage collection` · `thread` · `worker`.
 
+Bổ sung (chốt khi dịch bài release note của OpenAI): `slider` · `guardrails` · `system card` ·
+`reasoning` · `roleplay` · `fact` (trong "sai fact") — đều giữ tiếng Anh. Thuật ngữ chuyên
+ngành ngoài IT cũng vậy khi nó là tên gọi cố định: `marine layer` · `rip current`.
+
+**Tên một control trên UI:** danh từ chỉ loại viết tiếng Việt, tên riêng giữ tiếng Anh —
+`nút Think`, `slider`, `tab Settings`. Đừng dịch tên control (`nút Nghĩ` là sai).
+
 Code, tên định danh, tên lệnh, tên flag: **giữ nguyên byte**. Không dịch, không "dọn dẹp",
 không đổi quote, không sửa chính tả trong code.
 
@@ -109,7 +116,7 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 | 1 | Việc sử dụng cache giúp cải thiện hiệu năng | Cache giúp chạy nhanh hơn | gerund làm chủ ngữ: *Using cache improves performance* |
 | 2 | Điều này cho phép chúng ta có thể… | Nhờ vậy mình… | *This allows us to…* (+ `có thể` thừa, đã có `cho phép`) |
 | 3 | được thực hiện bởi hệ thống | hệ thống làm | bị động + *by*: *is performed by the system* |
-| 4 | Nó cung cấp cho bạn khả năng… | Bạn có thể… | *It provides you with the ability to…* |
+| 4 | Nó cung cấp cho bạn khả năng… · cho <ai> khả năng <làm gì> | Bạn có thể… · để <ai> <làm gì> được | *It provides you with the ability to…* · *gives X the ability to* |
 | 5 | có thể được sử dụng để | dùng để | *can be used to* |
 | 6 | một cách hiệu quả | hiệu quả | *-ly*: tiếng Việt tính từ đã làm được việc của trạng từ |
 | 7 | trong trường hợp mà | khi | *in the case that / in cases where* |
@@ -120,7 +127,7 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 | 12 | hiệu năng **của** việc render **của** component | component render nhanh chậm ra sao | chuỗi *of*: tối đa **một** `của` mỗi mệnh đề |
 | 13 | Cách này **sẽ** làm nó nhanh hơn | Cách này nhanh hơn | *will* dịch thành `sẽ` ở mọi câu; `sẽ` chỉ dành cho tương lai thật |
 | 14 | Request **đang được** xử lý bởi worker | Worker đang xử lý request | *is being + p.p.*: chồng cả tiến hành lẫn bị động |
-| 15 | **Tuy nhiên,** … **Do đó,** … **Bên cạnh đó,** … (mỗi câu một cái) | nhưng / nên / còn — nằm giữa câu | discourse marker dịch 1:1; tiếng Việt bỏ bớt phần lớn |
+| 15 | **Tuy nhiên,** … **Do đó,** … **Bên cạnh đó,** … (mỗi câu một cái) · **Vậy:** mở câu chốt | nhưng / nên / còn — nằm giữa câu · **Tóm lại:** | discourse marker dịch 1:1; tiếng Việt bỏ bớt phần lớn. *So: …* thành `Vậy:` cũng là dòng này |
 | 16 | Hãy cùng nhau xem xét ví dụ sau | Thử ví dụ này | *Let's take a look at…* |
 | 17 | Các bước thực hiện **như sau**: | Các bước: | *as follows:* — dấu hai chấm đã đủ |
 | 18 | một trong những kỹ thuật quan trọng nhất | kỹ thuật quan trọng nhất nhì (hoặc bỏ) | *one of the most…* |
@@ -144,6 +151,14 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 | 36 | **tính** khả dụng của hệ thống rất cao | hệ thống ít khi chết | `tính + adj` từ danh từ trừu tượng Anh; giữ khi nó **là** thuật ngữ (`tính nhất quán` = consistency) |
 | 37 | Ngày 3rd tháng July, 2026 | 3/7/2026 | format ngày giữ nguyên kiểu Anh |
 | 38 | Server gửi một Request tới Endpoint | server gửi request tới endpoint | viết hoa danh từ chung giữa câu, dính từ tiêu đề/nhấn mạnh tiếng Anh |
+| 39 | **Đây là những gì** cần chờ đợi: · **Đây là những thứ** nên tính trước: | Dự kiến thế này: · Mấy thứ nên tính trước: | *Here's what to expect / Here's what to plan for* — dummy `Đây là` + mệnh đề quan hệ `những gì`; tiếng Việt vào thẳng, hai chấm đã đủ |
+| 40 | Càng gần biển, gió càng rõ hơn **ở** Mission | … càng rõ hơn **so với** Mission | *more noticeable than at X* — bỏ mất `so với` làm câu vỡ nghĩa thành "rõ tại Mission" |
+| 41 | phục vụ hết **dải** đó · phủ hết **phổ** nhu cầu | lo được hết ngần ấy việc · đủ kiểu | *serve that whole range/spectrum* — `dải`/`phổ` cho phạm vi trừu tượng là dịch mặt chữ |
+| 42 | cảm giác phải **là** model đang nghĩ lâu hơn | cảm giác phải **giống như** model đang nghĩ lâu hơn | *it should feel like X* — tiếng Việt cần `giống như` / `như thể`, `là` nghe hụt |
+| 43 | **Chỉ có một thứ** đáng lưu ý là X | Thứ đáng lưu ý **duy nhất** là X | *The one thing to watch out for is X* |
+| 44 | … rối loạn ăn uống. **Thêm** hàng hoá giới hạn tuổi, hoạt động nguy hiểm. | gộp thẳng vào vế liệt kê của câu trước | *Plus X, Y, Z.* — tiếng Anh cho phép câu cụt kiểu này, tiếng Việt thì không |
+| 45 | Gió **thiên về** làm bạn chậm lại **hơn là** làm ướt | Gió làm bạn chậm lại **nhiều hơn là** làm ướt | *tends to X rather than Y* / *is more likely to X than Y* — `thiên về` là calque cứng |
+| 46 | **Một** đánh giá nội bộ chạy trên… | Đánh giá nội bộ chạy trên… | mạo từ *a/an* dịch thành `một` thừa (họ hàng #11, nhưng #11 là số nhiều `-s`) |
 
 ### §B2. Hai lỗi cấu trúc (không phải chuỗi ký tự — phải đọc mới thấy)
 
