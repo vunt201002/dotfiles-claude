@@ -8,7 +8,10 @@
 # Luật vàng: IM LẶNG khi mọi thứ ổn. Một cảnh báo in ra mọi session sẽ bị bỏ qua
 # trong 3 ngày, và lúc đó cảnh báo thật cũng chết theo. Chỉ in khi có việc phải làm.
 
-REPO="$HOME/Project/github/dotfiles-claude/personal"
+# Tự suy ra từ vị trí script (hooks/ nằm trong personal/) — hardcode "$HOME/Project/
+# github/dotfiles-claude" thì máy nào checkout chỗ khác là hook chết câm ngay dòng đầu,
+# đúng cái nó sinh ra để phát hiện.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -d "$REPO" ] || exit 0
 
 findings=""
