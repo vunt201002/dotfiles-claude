@@ -227,3 +227,17 @@ https://www.mayerowitz.io/blog/mario-meets-pareto
 https://blog.janestreet.com/can-you-reverse-engineer-an-asic/
 https://www.githubstatus.com/incidents/qcvjkzcs7j74
 https://laurentiugabriel.github.io/ChipTycoon/
+https://www.noemamag.com/why-is-everyone-in-tech-so-sad/
+https://arcprize.org/results/deepseek-v4-flash-0731
+https://app.dealroom.co/news/feed/oracle-bans-ai-generated-code-from-openjdk-despite-ellison-s-claim-oracle-isn-t-writing-its-own-code
+https://shopify.dev/changelog/webmcp-liquid-hydrogen
+https://shopify.dev/changelog/events-and-actions-cart-attributes-support
+https://www.databricks.com/blog/managing-ai-coding-costs-scale
+https://thenewstack.io/claude-code-auto-mode/
+https://blog.cloudflare.com/kitesurf/
+https://simonwillison.net/2026/Aug/7/openai-timeline/
+https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/
+https://patronview.com/news/99-percent-of-my-website-traffic-is-bots/
+https://discourse.nixos.org/t/the-nixpkgs-core-team-has-disbanded/79413
+https://www.theverge.com/tech/976880/microsoft-edge-extensions-ad-blockers-mv2-mv3
+https://www.ign.com/articles/ramageddon-continues-another-year-as-2027-memory-capacity-is-reportedly-sold-out
