@@ -30,6 +30,8 @@ extension/lib/xterm.js
 extension/lib/xterm.css
 extension/lib/xterm-addon-fit.js
 .gstack-worktrees/
+# Pane checks its worktrees out under here — checkouts, not source
+worktrees/
 /tmp/
 *.log
 *.bun-build
