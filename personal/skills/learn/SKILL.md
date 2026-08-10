@@ -1,6 +1,6 @@
 ---
 name: learn
-description: Daily learning companion for the 1-2 hours the user studies outside work. Suggests what to learn (grounded in their career direction, current work, and what's genuinely hot via web search — never invented), then either teaches a topic directly (for solid fundamentals) or builds a roadmap with real source links (for new/version-specific tech the model shouldn't lecture on from stale memory). Tracks progress per topic in an in-repo vault (personal/learn) so multi-session skills resume exactly where they left off and sync across machines. Teaches in Vietnamese, keeps technical terms in English. Use when asked to "learn X", "teach me X", "what should I learn", "study plan for X", "/learn", or to continue a topic from a previous session.
+description: Daily learning companion for the 1-2 hours the user studies outside work. Suggests what to learn (grounded in their career direction, current work, and what's genuinely hot via web search — never invented), then either teaches a topic directly (for solid fundamentals) or builds a roadmap with real source links (for new/version-specific tech the model shouldn't lecture on from stale memory). Tracks progress per topic in an in-repo vault (personal/learn) so multi-session skills resume exactly where they left off and sync across machines. Teaches in Vietnamese, keeps technical terms in English. Can also build an interactive simulation when the topic is a process worth animating. Use when asked to "learn X", "teach me X", "what should I learn", "study plan for X", "dựng simulation cho X", "mô phỏng X", "/learn", "/learn sim X", or to continue a topic from a previous session.
 ---
 
 # /learn — Daily learning companion
@@ -41,10 +41,16 @@ actually know is the one failure this skill must never commit.
   invent a URL or a "fact" about a recent version. Search and cite, or say you're unsure.
 - **Classify before TEACH.** Fundamentals → teach. New/version-specific → switch to PLAN
   (roadmap + real sources) with the staleness caveat.
+- **SIM never invents mechanism.** In `sim` mode: search real sources before building, and
+  never run the original method's "model checks its own knowledge base" step. A stage you
+  can't ground in a source goes into "Đang kẹt / chưa rõ", never into the animation.
 - **Read existing progress before starting a topic.** If `$LEARN_DIR/<topic>.md` exists,
   resume from `next_start` — don't re-teach what's already covered.
 - **Read-only web + save under the progress vault (`$LEARN_DIR`, = `personal/learn/`)
   only.** Never touch repo code outside that vault, never commit (the user commits it).
+  **One carve-out, SIM mode only:** the simulation's HTML goes in the session scratchpad
+  (never the repo) and is published via Artifact, which is private to the user until they
+  choose to share it. That is the only write outside the vault this skill may make.
 - **Save progress at the end of every session** with a `next_start` line good enough that
   next session picks up without the user re-explaining.
 
@@ -61,6 +67,7 @@ Parse input after `/learn`:
 | `<topic>` | **Start/continue** that topic — auto-propose teach vs plan (below), confirm |
 | `teach <topic>` | **Teach** — force tutor role |
 | `plan <topic>` | **Plan** — force roadmap+sources role |
+| `sim <topic>` | **Sim** — build an interactive simulation of a process (three gates; see SIM mode) |
 | `list` | **List** — show in-progress topics from `$LEARN_DIR` |
 
 **Auto-propose teach vs plan** (for `/learn <topic>` without teach/plan): classify the
@@ -68,6 +75,12 @@ topic. Durable fundamental → propose TEACH. New/version-specific → propose P
 user which and why ("‘React 19.2 Activity’ is recent + version-specific, so I'll find you
 the official docs rather than lecture from possibly-stale memory — or say `teach` to
 override"). Let them confirm or override.
+
+**Mention SIM when it fits, don't switch to it.** If the topic passes SIM Gate 1 (a real
+process with stages), add one line to the proposal: "this one is a pipeline, so `/learn
+sim <topic>` could animate it instead — costs most of a session, say the word." Then carry
+on with TEACH/PLAN unless they take it. Never start a simulation off an auto-proposal:
+Gate 3 exists because it spends the user's whole study hour.
 
 ---
 
@@ -141,6 +154,75 @@ Vietnamese. Let the user pick one to start (then flow into teach/plan).
 
 ---
 
+## SIM mode — build a simulation to learn a process
+
+Teach a process by animating it: follow one object through every stage and watch it change
+state. Adapted from [Laurentiu Raducu's method](https://laurentiugabriel.github.io/blog/articles/how-i-use-llms-to-learn/),
+with two deliberate departures (Gate 2 and the Artifact output).
+
+**The value is not the picture.** A bulleted list is allowed to stay vague — "the message
+is queued, then the consumer processes it" is not wrong and says nothing. An animation
+can't hide there. It has to commit: where does the message sit when the consumer dies
+mid-work, does ack happen before or after processing, what makes redelivery possible.
+**A stage you cannot animate is a stage you do not actually understand** — which makes
+this mode a detector for the exact fabrication this skill exists to prevent.
+
+### Gate 1 — is the topic even a process? (refuse if not)
+
+Only build when the topic is **something travelling through stages, visibly changing
+state**. Test: can you say "what goes in, what it becomes at each stage, what comes out"?
+
+| Fits | Doesn't fit |
+|---|---|
+| message through producer → queue → consumer (ack, retry, dead-letter) | design patterns |
+| request through LB → API → cache → DB | comparing libraries, picking a tool |
+| crawl → index → rank | content decisions (writing titles, choosing keywords) |
+| build pipeline, git merge, TCP handshake, event loop | a topic that is just a set of loose concepts |
+
+Doesn't fit → **say so plainly and why**, then offer TEACH or PLAN. Forcing a simulation
+onto a topic with no process produces decoration and costs the user a session.
+
+### Gate 2 — source BEFORE building (non-negotiable)
+
+The original method's step 2 is "ask the model to check the knowledge base it just wrote."
+**Do not do that step.** A builder grading its own work can't catch its own errors — the
+blind spot that produced the mistake reads straight past it.
+
+Instead: run a PLAN-mode search for **real sources** on the process mechanics before
+writing any code. The simulation re-presents those sources; it is **never the source**.
+Every stage must trace back to something searched this session.
+
+### Gate 3 — quote the time cost, then ask
+
+A decent simulation eats 60-90 minutes, most of a 1-2h daily budget. Say that number out
+loud and ask whether the user wants to trade today's session for it. If they say no, fall
+back to TEACH/PLAN — don't decide for them.
+
+### Build
+
+1. **Break the process into stages** — for each: what the object looks like going in, what
+   happens to it, what it looks like coming out.
+2. **Build a self-contained HTML page.** Low-poly or plain 2D both fine; clarity beats
+   beauty. Required: readable on a small screen, a pause/replay control, and step-by-step
+   advance — not only an autoplaying loop the user can't stop at the interesting part.
+3. **Publish with Artifact.** Write the HTML into the session scratchpad — **not** into
+   the repo and not into `$LEARN_DIR`, which holds progress notes only. Load the
+   `artifact-design` skill first and follow its rules. No repo, no GitHub Pages: the
+   original used those only because Artifact wasn't available to it. The page is private
+   until the user shares it.
+4. **Record every stage you could NOT build.** This is the most valuable output of the
+   mode and must never be skipped. A stage you couldn't animate because the real mechanism
+   stayed unclear is an evidenced knowledge gap — write it into `## Đang kẹt / chưa rõ`.
+   Never draw a plausible-looking stage just to fill the frame.
+
+### After building
+
+Walk the user through it stage by stage — the artifact is the teaching aid, not the lesson.
+Check understanding the way TEACH does: ask them to predict what happens at a stage before
+showing it.
+
+---
+
 ## TRACK — progress file (every session, both roles)
 
 At session end, write/update `$LEARN_DIR/<topic>.md`. The file must be good enough that
@@ -150,7 +232,7 @@ for-the-assistant-to-resume, not just for-the-user-to-read).
 ```markdown
 ---
 topic: <topic name>
-mode: teach | plan
+mode: teach | plan | sim
 status: in-progress | done
 started: <YYYY-MM-DD>
 last_session: <YYYY-MM-DD>
@@ -163,11 +245,17 @@ next_start: "<one line: where to pick up next session>"
 ## Lộ trình (PLAN) / Nguồn
 - [x] session 1: ... (done)
 - [ ] session 2: ... — <real source url>
+## Simulation (SIM)
+- <artifact url> — <date> · chặng dựng được: <list>
+- Chặng KHÔNG dựng được: <list> (cũng ghi vào "Đang kẹt / chưa rõ")
 ## Ghi chú buổi <date>
 - <what this session covered>
 ```
 
 - `next_start` is the single most important field — it's the "resume here" line.
+- The `## Simulation` block only appears for topics that went through SIM mode. The
+  "chặng KHÔNG dựng được" line is the point of it — an artifact link with no gap list
+  means the gaps went unrecorded, not that there were none.
 - Append a new `## Ghi chú buổi <date>` each session; don't overwrite old notes.
 - Set `status: done` when the topic is finished, so it drops out of "in progress".
 
@@ -180,6 +268,9 @@ After saving, confirm: what was covered today, and the one-line `next_start` for
 - **Teach what you know; source what you don't.** The classify gate is the heart of this
   skill — fundamentals get taught, recent/version-specific things get real docs + a
   staleness caveat. Never fake confidence.
+- **A stage you can't build is a finding, not a failure.** SIM mode earns its cost by
+  surfacing where understanding runs out. Reporting "I couldn't animate the ack path
+  because the sources disagree" is the mode working, not the mode breaking.
 - **Resume, don't restart.** Always read the topic's progress file first and continue from
   `next_start`.
 - **Vietnamese, English terms.** Explanations in Vietnamese; keep technical
@@ -187,7 +278,8 @@ After saving, confirm: what was covered today, and the one-line `next_start` for
 - **Real sources only** (SUGGEST + PLAN). Every link/"trending" claim comes from a search
   this session, never memory. Filter SEO junk.
 - **Read-only web + save to the progress vault (`$LEARN_DIR` = `personal/learn/`).**
-  No other repo edits, no commits.
+  No other repo edits, no commits. The single exception is SIM mode's Artifact publish —
+  see the carve-out in HARD GATES.
 - **Ground suggestions in the user's direction** (memory `user-learning-goals`); update
   that memory when he shares more about where he's headed, so suggestions sharpen over time.
 ```
