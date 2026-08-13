@@ -1,0 +1,537 @@
+#!/usr/bin/env bun
+/**
+ * gate-log — the gate result book (manager-layer plan §3.3) and the blind-sample lottery (§3.2).
+ *
+ * Usage:
+ *   gate-log append --project X --gate lint --family deterministic --verdict caught --caught "..."
+ *   gate-log append --json '{"project":"kivora","gate":"spec-check","gate_family":"llm","verdict":"caught"}'
+ *   gate-log read  [--project X] [--gate Y] [--since 7d] [--raw] [--json]
+ *   gate-log recent [--project X] [--gate Y] [--verdict caught] [--limit N] [--json]
+ *   gate-log fp <N> [--note "..."]
+ *   gate-log fp --all-matching <regex> --note "..." [--dry-run]
+ *   gate-log stats [--project X] [--json]
+ *   gate-log sample
+ *
+ * `fp` marks a line the gate got wrong. Only a human can hand out that verdict — a
+ * gate cannot know it fired on nothing — and without it precision is unmeasurable,
+ * which is the number the P8 unlock condition reads. Nothing is edited: the mark is
+ * an appended correction record pointing at the original line.
+ *
+ * NON-INTERACTIVE — never prompts. Any failure goes to stderr with a non-zero exit.
+ */
+
+import fs from 'fs';
+import path from 'path';
+import {
+  appendGateLog,
+  readGateLog,
+  readGateLogRaw,
+  readGateLogCorrections,
+  reclassify,
+  refOf,
+  precisionByGate,
+  gateLogDir,
+  gateLogPath,
+  shouldBlindSample,
+  isKnownGate,
+  VERDICTS,
+  type GateLogEntry,
+  type Verdict,
+} from '../personal/manager/lib/gate-log';
+
+const USAGE = `gate-log append --project X --gate Y --family deterministic|llm --verdict ${VERDICTS.join('|')}
+                 [--issue I] [--lane L] [--attempt N] [--cost-usd N] [--caught "..."]
+                 [--review-depth summary|full-diff] [--human-intervened [true|false]] [--ts ISO]
+gate-log append --json '{...}'
+gate-log read   [--project X] [--gate Y] [--since 7d] [--raw] [--json]
+gate-log recent [--project X] [--gate Y] [--verdict V] [--since 7d] [--limit N] [--json]
+gate-log fp <N> [--note "..."]                      mark line N of the last listing
+gate-log fp --all-matching <regex> --note "..." [--project X] [--gate Y] [--dry-run]
+gate-log reclassify <N> --verdict ${VERDICTS.join('|')} [--note "..."]
+gate-log stats  [--project X] [--gate Y] [--since 7d] [--json]
+gate-log sample`;
+
+function fail(message: string): never {
+  process.stderr.write(`gate-log: ${message}\n`);
+  process.exit(1);
+}
+
+type Flags = Record<string, string | boolean>;
+
+interface ParsedArgs {
+  flags: Flags;
+  positional: string[];
+}
+
+function parseArgs(args: string[]): ParsedArgs {
+  const flags: Flags = {};
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith('--')) {
+      positional.push(arg);
+      continue;
+    }
+    const eq = arg.indexOf('=');
+    if (eq !== -1) {
+      flags[arg.slice(2, eq)] = arg.slice(eq + 1);
+      continue;
+    }
+    const next = args[i + 1];
+    if (next === undefined || next.startsWith('--')) {
+      flags[arg.slice(2)] = true;
+    } else {
+      flags[arg.slice(2)] = next;
+      i++;
+    }
+  }
+  return { flags, positional };
+}
+
+function parseFlags(args: string[]): Flags {
+  const { flags, positional } = parseArgs(args);
+  if (positional.length > 0) fail(`unexpected argument: ${positional[0]}\n\n${USAGE}`);
+  return flags;
+}
+
+function str(flags: Flags, name: string): string | undefined {
+  const v = flags[name];
+  if (v === undefined) return undefined;
+  if (typeof v === 'boolean') fail(`--${name} needs a value`);
+  return v;
+}
+
+function parseSince(spec: string): number {
+  const relative = /^(\d+(?:\.\d+)?)([smhdw])$/.exec(spec.trim());
+  if (relative) {
+    const unitMs: Record<string, number> = { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3, w: 604800e3 };
+    return Date.now() - Number(relative[1]) * unitMs[relative[2]];
+  }
+  const parsed = Date.parse(spec);
+  if (Number.isNaN(parsed)) fail(`--since must be like 7d / 24h / 30m or an ISO date — got ${spec}`);
+  return parsed;
+}
+
+function cmdAppend(args: string[]): void {
+  const flags = parseFlags(args);
+  const json = str(flags, 'json');
+
+  let input: Record<string, unknown>;
+  if (json) {
+    try {
+      input = JSON.parse(json);
+    } catch {
+      fail('--json is not valid JSON');
+    }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('--json must be an object');
+  } else {
+    input = {
+      project: str(flags, 'project'),
+      issue: str(flags, 'issue'),
+      lane: str(flags, 'lane'),
+      gate: str(flags, 'gate'),
+      gate_family: str(flags, 'family') ?? str(flags, 'gate-family'),
+      verdict: str(flags, 'verdict'),
+      attempt: str(flags, 'attempt'),
+      cost_usd: str(flags, 'cost-usd'),
+      caught: str(flags, 'caught'),
+      review_depth: str(flags, 'review-depth'),
+      human_intervened: flags['human-intervened'] === true ? 'true' : str(flags, 'human-intervened'),
+      ts: str(flags, 'ts'),
+    };
+  }
+
+  if (!input.project) fail(`--project is required\n\n${USAGE}`);
+  if (typeof input.gate === 'string' && !isKnownGate(input.gate)) {
+    process.stderr.write(`gate-log: warning — "${input.gate}" is not in the §3.3 gate list; writing anyway\n`);
+  }
+
+  try {
+    appendGateLog(input as Parameters<typeof appendGateLog>[0]);
+  } catch (err) {
+    fail(err instanceof Error ? err.message.replace(/^gate-log: /, '') : String(err));
+  }
+  process.stdout.write(`${gateLogPath(String(input.project))}\n`);
+}
+
+function selectEntries(flags: Flags, read: (project?: string) => GateLogEntry[] = readGateLog): GateLogEntry[] {
+  const project = str(flags, 'project');
+  let entries = read(project);
+
+  const gate = str(flags, 'gate');
+  if (gate) entries = entries.filter((e) => e.gate === gate);
+
+  const verdict = str(flags, 'verdict');
+  if (verdict) entries = entries.filter((e) => e.verdict === verdict);
+
+  const since = str(flags, 'since');
+  if (since) {
+    const cutoff = parseSince(since);
+    entries = entries.filter((e) => {
+      const t = Date.parse(e.ts);
+      return Number.isNaN(t) ? false : t >= cutoff;
+    });
+  }
+  return entries;
+}
+
+function cmdRead(args: string[]): void {
+  const flags = parseFlags(args);
+  const entries = selectEntries(flags, flags.raw ? readGateLogRaw : readGateLog);
+
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`);
+    return;
+  }
+  if (entries.length === 0) {
+    process.stdout.write('(no entries)\n');
+    return;
+  }
+  for (const e of entries) {
+    const who = [e.project, e.issue].filter(Boolean).join('/');
+    const depth = e.review_depth ? ` {${e.review_depth}}` : '';
+    const human = e.human_intervened ? ' [human]' : '';
+    const fixed = e.reclassified ? ` (was ${e.reclassified.from})` : '';
+    const detail = e.caught ? `  ${e.caught}` : '';
+    process.stdout.write(
+      `${e.ts}  ${e.verdict.padEnd(14)} ${e.gate.padEnd(14)} ${`[${e.gate_family}]`.padEnd(16)} ${who}${depth}${human}${fixed}${detail}\n`,
+    );
+  }
+  process.stdout.write(`\n${entries.length} entries\n`);
+}
+
+interface ListedLine {
+  n: number;
+  project: string;
+  ref: string;
+  entry_ts: string;
+  gate: string;
+  verdict: Verdict;
+  caught?: string;
+}
+
+interface Listing {
+  ts: string;
+  scope: string;
+  lines: ListedLine[];
+}
+
+/** Lives beside the logs so `fp <N>` works in a later shell, and dies with a sandbox. */
+function listingPath(): string {
+  return path.join(gateLogDir(), '.last-listing.json');
+}
+
+function saveListing(listing: Listing): void {
+  try {
+    fs.mkdirSync(gateLogDir(), { recursive: true });
+    fs.writeFileSync(listingPath(), `${JSON.stringify(listing, null, 2)}\n`, 'utf8');
+  } catch (err) {
+    process.stderr.write(`gate-log: could not remember this listing (${(err as Error).message})\n`);
+  }
+}
+
+function loadListing(): Listing {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(listingPath(), 'utf8');
+  } catch {
+    fail('no listing to pick from — run `gate-log recent` first');
+  }
+  try {
+    const parsed = JSON.parse(raw) as Listing;
+    if (!parsed || !Array.isArray(parsed.lines) || parsed.lines.length === 0) {
+      fail('the last listing is empty — run `gate-log recent` again');
+    }
+    return parsed;
+  } catch {
+    fail('the last listing is unreadable — run `gate-log recent` again');
+  }
+}
+
+function shorten(text: string, width: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= width ? flat : `${flat.slice(0, width - 1)}…`;
+}
+
+function cmdRecent(args: string[]): void {
+  const flags = parseFlags(args);
+  const limitFlag = str(flags, 'limit');
+  const limit = limitFlag === undefined ? 20 : Number(limitFlag);
+  if (!Number.isFinite(limit) || limit < 1) fail('--limit must be a positive number');
+
+  const newestFirst = selectEntries(flags).slice().reverse().slice(0, limit);
+  const scope = [str(flags, 'project') ?? '(all projects)', str(flags, 'gate'), str(flags, 'verdict')]
+    .filter(Boolean)
+    .join(' · ');
+
+  const lines: ListedLine[] = newestFirst.map((e, i) => ({
+    n: i + 1,
+    project: e.project,
+    ref: refOf(e).ref,
+    entry_ts: e.ts,
+    gate: e.gate,
+    verdict: e.verdict,
+    caught: e.caught,
+  }));
+
+  saveListing({ ts: new Date().toISOString(), scope, lines });
+
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify(lines, null, 2)}\n`);
+    return;
+  }
+  if (lines.length === 0) {
+    process.stdout.write('(no entries)\n');
+    return;
+  }
+
+  process.stdout.write(`gate log — ${scope} — newest first\n\n`);
+  for (const line of lines) {
+    const entry = newestFirst[line.n - 1];
+    const when = line.entry_ts.replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+    const mark = entry.reclassified ? ` (was ${entry.reclassified.from})` : '';
+    process.stdout.write(
+      `${String(line.n).padStart(3)}. ${when}  ${line.gate.padEnd(12)} ${line.verdict.padEnd(15)}${shorten(line.caught ?? '', 70)}${mark}\n`,
+    );
+  }
+  process.stdout.write('\nmark one wrong: gate-log fp <N> --note "why it was wrong"\n');
+}
+
+function markOne(target: ReturnType<typeof refOf>, verdict: Verdict, note: string): void {
+  try {
+    reclassify(target, verdict, note);
+  } catch (err) {
+    fail(err instanceof Error ? err.message.replace(/^gate-log: /, '') : String(err));
+  }
+}
+
+function cmdMark(args: string[], fallbackVerdict: Verdict | null): void {
+  const { flags, positional } = parseArgs(args);
+  const verdictFlag = str(flags, 'verdict');
+  if (verdictFlag !== undefined && !VERDICTS.includes(verdictFlag as Verdict)) {
+    fail(`--verdict must be one of ${VERDICTS.join(' | ')} — got ${verdictFlag}`);
+  }
+  if (verdictFlag === undefined && fallbackVerdict === null) {
+    fail(`reclassify needs --verdict ${VERDICTS.join('|')} (use \`gate-log fp\` for the false-positive case)`);
+  }
+  const verdict = (verdictFlag as Verdict) ?? (fallbackVerdict as Verdict);
+  const note = str(flags, 'note') ?? '';
+  const pattern = str(flags, 'all-matching');
+
+  if (pattern !== undefined) {
+    cmdMarkMatching(flags, pattern, verdict, note);
+    return;
+  }
+
+  if (positional.length === 0) fail(`which line? \`gate-log recent\` then \`gate-log fp <N>\`\n\n${USAGE}`);
+  const listing = loadListing();
+  for (const raw of positional) {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) fail(`line numbers come from \`gate-log recent\` — got ${raw}`);
+    const line = listing.lines.find((l) => l.n === n);
+    if (!line) fail(`line ${n} is not in the last listing (it had ${listing.lines.length} lines)`);
+    markOne({ project: line.project, ref: line.ref, ts: line.entry_ts, gate: line.gate }, verdict, note);
+    process.stdout.write(`${verdict}  ${line.gate}  ${line.entry_ts}  ${shorten(line.caught ?? '', 70)}\n`);
+  }
+}
+
+/** Only scans lines whose current verdict is `caught`, so re-running skips what it already marked. */
+function cmdMarkMatching(flags: Flags, pattern: string, verdict: Verdict, note: string): void {
+  if (!note.trim()) fail('--all-matching needs --note: a batch mark with no reason is unreviewable later');
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, 'i');
+  } catch {
+    fail(`--all-matching is not a valid regex: ${pattern}`);
+  }
+
+  const candidates = selectEntries({ ...flags, verdict: 'caught' }).filter((e) => re.test(e.caught ?? ''));
+  if (candidates.length === 0) {
+    fail(`nothing matched /${pattern}/ among the caught entries in scope`);
+  }
+
+  for (const entry of candidates) {
+    const when = entry.ts.replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+    if (flags['dry-run']) {
+      process.stdout.write(`would mark  ${when}  ${entry.gate}  ${shorten(entry.caught ?? '', 70)}\n`);
+      continue;
+    }
+    markOne(refOf(entry), verdict, note);
+    process.stdout.write(`${verdict}  ${when}  ${entry.gate}  ${shorten(entry.caught ?? '', 70)}\n`);
+  }
+  process.stdout.write(`\n${candidates.length} ${flags['dry-run'] ? 'would be marked' : `marked ${verdict}`}\n`);
+}
+
+interface VerdictCounts {
+  pass: number;
+  caught: number;
+  'false-positive': number;
+  skipped: number;
+  error: number;
+  total: number;
+}
+
+function emptyCounts(): VerdictCounts {
+  return { pass: 0, caught: 0, 'false-positive': 0, skipped: 0, error: 0, total: 0 };
+}
+
+function tally(counts: VerdictCounts, verdict: Verdict): void {
+  if (verdict in counts) counts[verdict]++;
+  counts.total++;
+}
+
+function pct(n: number, d: number): string {
+  return d === 0 ? '   n/a' : `${((n / d) * 100).toFixed(1).padStart(5)}%`;
+}
+
+function cmdStats(args: string[]): void {
+  const flags = parseFlags(args);
+  const entries = selectEntries(flags);
+
+  const byGate = new Map<string, VerdictCounts>();
+  const byFamily = new Map<string, VerdictCounts>();
+  const byDepth = new Map<string, { entries: number; human: number }>();
+  const overall = emptyCounts();
+
+  for (const e of entries) {
+    if (!byGate.has(e.gate)) byGate.set(e.gate, emptyCounts());
+    tally(byGate.get(e.gate)!, e.verdict);
+
+    const family = e.gate_family ?? '(unset)';
+    if (!byFamily.has(family)) byFamily.set(family, emptyCounts());
+    tally(byFamily.get(family)!, e.verdict);
+
+    const depth = e.review_depth ?? '(unset)';
+    const bucket = byDepth.get(depth) ?? { entries: 0, human: 0 };
+    bucket.entries++;
+    if (e.human_intervened) bucket.human++;
+    byDepth.set(depth, bucket);
+
+    tally(overall, e.verdict);
+  }
+
+  const totalCaught = overall.caught;
+  const decisive = (c: VerdictCounts): number => c.pass + c.caught + c['false-positive'];
+
+  const precision = new Map(precisionByGate(entries).map((row) => [row.gate, row.precision]));
+  const gateFilter = str(flags, 'gate');
+  const sinceFilter = str(flags, 'since');
+  const corrections = readGateLogCorrections(str(flags, 'project')).filter((c) => {
+    if (gateFilter && c.gate !== gateFilter) return false;
+    if (!sinceFilter) return true;
+    const t = Date.parse(c.ts);
+    return Number.isNaN(t) ? false : t >= parseSince(sinceFilter);
+  });
+
+  if (flags.json) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          scope: str(flags, 'project') ?? '(all projects)',
+          entries: entries.length,
+          corrections: corrections.length,
+          overall,
+          by_gate: Object.fromEntries([...byGate].map(([g, c]) => [g, { ...c, precision: precision.get(g) ?? null }])),
+          by_gate_family: Object.fromEntries(
+            [...byFamily].map(([k, c]) => [
+              k,
+              {
+                ...c,
+                share_of_catches: totalCaught === 0 ? null : c.caught / totalCaught,
+                catch_rate: decisive(c) === 0 ? null : c.caught / decisive(c),
+              },
+            ]),
+          ),
+          by_review_depth: Object.fromEntries(
+            [...byDepth].map(([k, b]) => [
+              k,
+              { ...b, human_intervened_rate: b.entries === 0 ? null : b.human / b.entries },
+            ]),
+          ),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
+
+  const scope = str(flags, 'project') ?? '(all projects)';
+  const corrected = `${entries.length} entries · ${corrections.length} correction${corrections.length === 1 ? '' : 's'}`;
+  process.stdout.write(`gate log — ${scope} — ${corrected}\n\n`);
+  if (entries.length === 0) return;
+
+  const showPrecision = (gate: string): string => {
+    const p = precision.get(gate);
+    return p === null || p === undefined ? '    n/a' : `${(p * 100).toFixed(1).padStart(6)}%`;
+  };
+
+  const gateWidth = Math.max(14, ...[...byGate.keys()].map((g) => g.length));
+  const head = `${'gate'.padEnd(gateWidth)}  ${'pass'.padStart(6)}${'caught'.padStart(8)}${'false-pos'.padStart(11)}${'skipped'.padStart(9)}${'error'.padStart(7)}${'total'.padStart(7)}${'precision'.padStart(11)}`;
+  process.stdout.write(`${head}\n${'-'.repeat(head.length)}\n`);
+  for (const [gate, c] of [...byGate].sort((a, b) => b[1].total - a[1].total)) {
+    process.stdout.write(
+      `${gate.padEnd(gateWidth)}  ${String(c.pass).padStart(6)}${String(c.caught).padStart(8)}${String(c['false-positive']).padStart(11)}${String(c.skipped).padStart(9)}${String(c.error).padStart(7)}${String(c.total).padStart(7)}${showPrecision(gate).padStart(11)}\n`,
+    );
+  }
+  process.stdout.write(`${'-'.repeat(head.length)}\n`);
+  const overallPrecision =
+    overall.caught + overall['false-positive'] === 0
+      ? '    n/a'
+      : `${((overall.caught / (overall.caught + overall['false-positive'])) * 100).toFixed(1).padStart(6)}%`;
+  process.stdout.write(
+    `${'TOTAL'.padEnd(gateWidth)}  ${String(overall.pass).padStart(6)}${String(overall.caught).padStart(8)}${String(overall['false-positive']).padStart(11)}${String(overall.skipped).padStart(9)}${String(overall.error).padStart(7)}${String(overall.total).padStart(7)}${overallPrecision.padStart(11)}\n`,
+  );
+  process.stdout.write('\nprecision = caught / (caught + false-positive) — P8 needs false-positive < 10%\n');
+  process.stdout.write('a gate with low precision is a gate to tune; n/a means it never raised anything\n');
+
+  process.stdout.write('\nwho catches — by gate_family (§7.3 ensemble; P8 needs deterministic share >= 20%)\n');
+  process.stdout.write(`${'family'.padEnd(16)}${'caught'.padStart(8)}${'share'.padStart(9)}${'catch-rate'.padStart(12)}\n`);
+  for (const [family, c] of [...byFamily].sort((a, b) => b[1].caught - a[1].caught)) {
+    process.stdout.write(
+      `${family.padEnd(16)}${String(c.caught).padStart(8)}${pct(c.caught, totalCaught).padStart(9)}${pct(c.caught, decisive(c)).padStart(12)}\n`,
+    );
+  }
+
+  process.stdout.write('\nobservation conditions — by review_depth (§3.2; only full-diff counts for P8)\n');
+  process.stdout.write(`${'review_depth'.padEnd(16)}${'entries'.padStart(9)}${'human'.padStart(8)}${'rate'.padStart(9)}\n`);
+  for (const [depth, b] of [...byDepth].sort((a, b) => b[1].entries - a[1].entries)) {
+    process.stdout.write(
+      `${depth.padEnd(16)}${String(b.entries).padStart(9)}${String(b.human).padStart(8)}${pct(b.human, b.entries).padStart(9)}\n`,
+    );
+  }
+}
+
+const [command, ...rest] = process.argv.slice(2);
+
+switch (command) {
+  case 'append':
+    cmdAppend(rest);
+    break;
+  case 'read':
+    cmdRead(rest);
+    break;
+  case 'recent':
+    cmdRecent(rest);
+    break;
+  case 'fp':
+  case 'false-positive':
+    cmdMark(rest, 'false-positive');
+    break;
+  case 'reclassify':
+    cmdMark(rest, null);
+    break;
+  case 'stats':
+    cmdStats(rest);
+    break;
+  case 'sample':
+    process.stdout.write(`${shouldBlindSample()}\n`);
+    break;
+  case '--help':
+  case '-h':
+  case 'help':
+    process.stdout.write(`${USAGE}\n`);
+    break;
+  default:
+    fail(command ? `unknown command: ${command}\n\n${USAGE}` : `no command\n\n${USAGE}`);
+}
