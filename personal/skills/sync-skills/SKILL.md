@@ -26,13 +26,13 @@ fresh machine, run the bootstrap in a terminal first:
 ```bash
 # ONE-TIME BOOTSTRAP on a new machine (paste into a terminal). Idempotent.
 cd ~/Project/github/dotfiles-claude
-for s in personal/skills/*/; do n=$(basename "$s"); [ -e ~/.claude/skills/"$n" ] || ln -s "$PWD/$s" ~/.claude/skills/"$n"; done
+for s in personal/skills/*/; do n=$(basename "$s"); [ -e ~/.claude/skills/"$n" ] || MSYS=winsymlinks:nativestrict ln -s "$PWD/$s" ~/.claude/skills/"$n"; done
 mkdir -p ~/.claude/commands
-for c in personal/commands/*.md; do n=$(basename "$c"); [ -e ~/.claude/commands/"$n" ] || ln -s "$PWD/$c" ~/.claude/commands/"$n"; done
+for c in personal/commands/*.md; do n=$(basename "$c"); [ -e ~/.claude/commands/"$n" ] || MSYS=winsymlinks:nativestrict ln -s "$PWD/$c" ~/.claude/commands/"$n"; done
 # Machine-wide instructions. Refuses to clobber an existing real file — merge that by hand.
-[ -e ~/.claude/CLAUDE.md ] || ln -s "$PWD/personal/global-CLAUDE.md" ~/.claude/CLAUDE.md
+[ -e ~/.claude/CLAUDE.md ] || MSYS=winsymlinks:nativestrict ln -s "$PWD/personal/global-CLAUDE.md" ~/.claude/CLAUDE.md
 # Path-scoped rules, linked as ONE directory (Claude Code reads it recursively).
-[ -e ~/.claude/rules ] || ln -s "$PWD/personal/rules" ~/.claude/rules
+[ -e ~/.claude/rules ] || MSYS=winsymlinks:nativestrict ln -s "$PWD/personal/rules" ~/.claude/rules
 ```
 
 That bootstrap does exactly what this skill does — so on a fresh machine it also
@@ -49,6 +49,35 @@ additions.
 - **Broken/mis-pointed symlinks are reported, never auto-removed.** If a link is dead
   (target gone) or points somewhere unexpected, list it for the user — they decide.
 - **Never commit.** This skill changes local machine state only.
+- **A link that is not a symlink is a FAILURE, not a fallback.** Every link site uses
+  `MSYS=winsymlinks:nativestrict` and then verifies with `[ -L "$dest" ]`. Never
+  "fall back to copying" — see below for why that is the worst possible outcome.
+
+---
+
+## ⚠️ Windows: `ln -s` on its own makes a frozen copy, silently
+
+On Windows Git Bash without Developer Mode, a bare `ln -s` does not fail. It quietly
+creates a **copy** of the file or directory instead of a link, and the copy is frozen at
+the moment it was made.
+
+That is worse than any error, because it works right up until it doesn't:
+
+1. Add a skill, run `/sync-skills` → it reports success, and the skill really does run.
+2. Edit the skill → **nothing changes.** Claude keeps reading the copy taken at step 1.
+3. Nothing anywhere reports a problem. There is no broken link to find.
+
+This is the same failure class that left `fix-bug-loop` dead for two weeks: silent, and
+shaped exactly like success. So this skill forces the real thing and reports `FAILED`
+when it cannot get it, rather than accepting a copy.
+
+**Seeing `FAILED`?** Enable Windows Developer Mode (Settings → Privacy & security →
+For developers → Developer Mode), then run this skill again. Running the terminal as
+Administrator also works. Both let a normal user create real symlinks.
+
+**Already have frozen copies from an earlier run?** They look like real directories, so
+`/sync-skills` reports them as `REALDIR` and leaves them alone by design. Delete the ones
+under `~/.claude/skills/` that should be links, then run this skill again.
 
 ---
 
@@ -91,7 +120,9 @@ for d in "$REPO"/personal/skills/*/; do
   elif [ -e "$dest" ]; then
     echo "REALDIR skill   $name  (a real dir/file exists here, not a symlink — left alone)"
   else
-    ln -s "${d%/}" "$dest" && echo "LINKED  skill   $name"
+    MSYS=winsymlinks:nativestrict ln -s "${d%/}" "$dest" 2>/dev/null && [ -L "$dest" ] \
+      && echo "LINKED  skill   $name" \
+      || echo "FAILED  skill   $name  (không tạo được symlink THẬT — xem mục Windows bên dưới)"
   fi
 done
 ```
@@ -124,7 +155,9 @@ for f in "$REPO"/personal/commands/*.md; do
   elif [ -e "$dest" ]; then
     echo "REALFILE command $name  (a real file exists here, not a symlink — left alone)"
   else
-    ln -s "$f" "$dest" && echo "LINKED  command $name"
+    MSYS=winsymlinks:nativestrict ln -s "$f" "$dest" 2>/dev/null && [ -L "$dest" ] \
+      && echo "LINKED  command $name" \
+      || echo "FAILED  command $name  (không tạo được symlink THẬT — xem mục Windows bên dưới)"
   fi
 done
 ```
@@ -154,7 +187,9 @@ elif [ -L "$dest" ]; then
 elif [ -e "$dest" ]; then
   echo "REALFILE global CLAUDE.md  (this machine has its own real ~/.claude/CLAUDE.md — left alone)"
 else
-  ln -s "$src" "$dest" && echo "LINKED  global  CLAUDE.md"
+  MSYS=winsymlinks:nativestrict ln -s "$src" "$dest" 2>/dev/null && [ -L "$dest" ] \
+    && echo "LINKED  global  CLAUDE.md" \
+    || echo "FAILED  global  CLAUDE.md  (không tạo được symlink THẬT — xem mục Windows bên dưới)"
 fi
 ```
 
@@ -193,7 +228,9 @@ elif [ -L "$dest" ]; then
 elif [ -e "$dest" ]; then
   echo "REALDIR rules   (this machine has its own real ~/.claude/rules — left alone)"
 else
-  ln -s "$src" "$dest" && echo "LINKED  rules   ($(ls -1 "$src"/*.md 2>/dev/null | wc -l | tr -d ' ') rule files)"
+  MSYS=winsymlinks:nativestrict ln -s "$src" "$dest" 2>/dev/null && [ -L "$dest" ] \
+    && echo "LINKED  rules   ($(ls -1 "$src"/*.md 2>/dev/null | wc -l | tr -d ' ') rule files)" \
+    || echo "FAILED  rules   (không tạo được symlink THẬT — xem mục Windows bên dưới)"
 fi
 ```
 
