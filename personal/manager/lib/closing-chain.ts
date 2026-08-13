@@ -137,6 +137,12 @@ export interface ChainRun {
    * evidence to offer, so the caller must block instead of looping.
    */
   oracleFault: boolean;
+  /**
+   * VERIFYING only. Commands the plan resolved but no human has approved. A
+   * different kind of oracle fault from the rest: nothing is broken, the
+   * manager is waiting to be told it may run this.
+   */
+  assertPending: string[];
 }
 
 export interface ChainContext {
@@ -327,6 +333,7 @@ function assemble(runs: ChainGateRun[], lines: string[]): ChainRun {
     lines,
     proven: assertRun ? assertRun.summary.proven : true,
     oracleFault: assertRun ? assertRun.summary.oracle_fault : false,
+    assertPending: assertRun ? assertRun.plan.pending.map((c) => c.cmd) : [],
   };
 }
 

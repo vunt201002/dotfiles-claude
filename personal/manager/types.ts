@@ -172,6 +172,12 @@ export interface TaskRecord {
   resume_state: TaskState | '';
   /** What the human is being asked to allow, when parked at APPROVAL. */
   pending_action: string;
+  /**
+   * Assert commands this task is parked on, waiting to be allowed to run.
+   * Recorded so approving records exactly the commands the human was shown,
+   * not whatever the registry file happens to say by the time he answers.
+   */
+  pending_assert_cmds: string[];
   /** Pending question text when the task is parked waiting on a human. */
   pending_question: string;
   /** Answers a human fed back in, newest last. */

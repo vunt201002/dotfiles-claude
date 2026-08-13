@@ -32,6 +32,7 @@ import {
   type ChainContext,
   type ChainRun,
 } from './closing-chain';
+import { approveCommands } from './assert-approvals';
 import { checkDayCeiling, collectLaneSamples, laneCeiling } from './cost';
 import { buildApprovalEvent, buildReportEvent, emit } from './events';
 import type { AssertRun } from './assert-runner';
@@ -88,6 +89,7 @@ export interface SubmitResult {
 const APPROVAL_BUDGET = 'raise the budget';
 const APPROVAL_START = 'start this task';
 const APPROVAL_ORACLE = 'fix the oracle, then re-verify';
+const APPROVAL_ASSERT_CMD = 'run this test command';
 
 export class Orchestrator {
   private readonly spawnPort: SpawnPort;
@@ -350,6 +352,15 @@ export class Orchestrator {
 
     if (!assertRun.proven) {
       const why = assertRun.reports.find((r) => r.verdict !== 'pass')?.caught || 'B8-assert did not pass';
+      if (assertRun.assertPending.length > 0) {
+        current.pending_assert_cmds = [...assertRun.assertPending];
+        await this.parkForApproval(
+          current,
+          APPROVAL_ASSERT_CMD,
+          `the manager runs no command a human has not approved: ${assertRun.assertPending.join(' | ')}`,
+        );
+        return false;
+      }
       if (assertRun.oracleFault) {
         await this.parkForApproval(current, APPROVAL_ORACLE, `the oracle did not run: ${why}`);
         return false;
@@ -451,6 +462,11 @@ export class Orchestrator {
   // Human-facing operations
   // -------------------------------------------------------------------------
 
+  /**
+   * The one place a human's yes turns into state. A yes to a parked test
+   * command is also written into the approval book, so the same command never
+   * asks twice — see lib/assert-approvals.ts for what that book is and is not.
+   */
   async approve(id: string, approved: boolean, source: TaskSource = 'cli'): Promise<{ ok: boolean; error: string }> {
     const task = loadTask(id);
     if (!task) return { ok: false, error: `no such task ${id}` };
@@ -461,7 +477,13 @@ export class Orchestrator {
     }
     task.pending_question = '';
     const wasBudget = task.pending_action === APPROVAL_BUDGET;
+    const approvedCommands = task.pending_action === APPROVAL_ASSERT_CMD ? task.pending_assert_cmds ?? [] : [];
     task.pending_action = '';
+    task.pending_assert_cmds = [];
+    if (approvedCommands.length > 0) {
+      approveCommands(task.project, approvedCommands);
+      task.report_lines.push(`test command approved by a human: ${approvedCommands.join(' | ')}`);
+    }
     if (wasBudget) {
       // Resuming without more headroom would trip the same ceiling on the very
       // next preflight and ask again, forever.

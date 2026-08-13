@@ -9,6 +9,7 @@ process.env.GSTACK_GATE_LOG_DIR = path.join(HOME, 'gate-log');
 
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { resetConfigCache } from '../config';
+import { approveCommands } from '../lib/assert-approvals';
 import { __resetEvents, approvalId, emit, subscribe, subscriberCount } from '../lib/events';
 import { __clearWaiters } from '../lib/locks';
 import { Orchestrator } from '../lib/orchestrator';
@@ -102,6 +103,7 @@ beforeEach(() => {
   writeState(emptyState());
   ensureManagerDirs();
   fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: { path: REPO, assert: ['bun run test'] } }));
+  approveCommands(PROJECT, ['bun run test']);
   resetConfigCache();
   __clearWaiters();
   __resetEvents();

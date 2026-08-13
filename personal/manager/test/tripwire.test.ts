@@ -156,6 +156,61 @@ describe('every agent spawn goes through the shared semaphore', () => {
     }
   });
 
+  // The command assert-runner.ts executes comes out of projects.json, which
+  // sits outside every task's write scope and is reachable through the Bash
+  // slot the write guard does not analyse (§7.3b lesson 1). Two structural
+  // rules make a planted line harmless, and both are cheap to delete by
+  // accident while "just making npm work again":
+  //
+  //   1. It never reaches a shell. Parsed into argv here, spawned directly.
+  //   2. Its first word is on a short allowlist of real test runners.
+  //
+  // Rule 1 without rule 2 lets `curl` run; rule 2 without rule 1 lets
+  // `npm test | curl … | sh` run. Neither is optional, so both are pinned.
+
+  test('4d. the assert runner never spawns through a shell', () => {
+    const src = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'assert-runner.ts'), 'utf-8'));
+    const banned: Array<[RegExp, string]> = [
+      [/cmd\.exe/i, 'cmd.exe is back as an interpreter'],
+      [/\/bin\/(sh|bash)/, 'a POSIX shell is back as an interpreter'],
+      [/\bshell\s*:\s*true/, 'Bun.spawn was given shell: true'],
+      [/\bshellArgv\b/, 'the shell argv builder is back'],
+      [/\bBun\.\$/, "Bun's own shell is back"],
+      [/import\s*\{[^}]*\$[^}]*\}\s*from\s*'bun'/, "Bun's shell tag was imported"],
+    ];
+    for (const [pattern, why] of banned) {
+      expect(pattern.test(src), `${why}: ${pattern}`).toBe(false);
+    }
+
+    const spawnArgs = [...src.matchAll(/Bun\.spawn\(([^)]*)/g)].map((m) => m[1]);
+    expect(spawnArgs.length, 'the assert runner must still spawn something').toBeGreaterThan(0);
+    for (const args of spawnArgs) {
+      expect(args.trimStart().startsWith('['), `Bun.spawn must take a parsed argv array, got: ${args}`).toBe(true);
+    }
+  });
+
+  test('4e. the assert runner allowlists the first word and refuses shell metacharacters', () => {
+    const src = fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'assert-runner.ts'), 'utf-8');
+    expect(src, 'the runner allowlist is gone').toContain('RUNNER_ALLOWLIST');
+    expect(src, 'the metacharacter refusal is gone').toContain('SHELL_METACHARS');
+    for (const runner of ['bun', 'npm', 'npx', 'node', 'pytest']) {
+      expect(src, `"${runner}" dropped out of the runner allowlist`).toContain(`'${runner}'`);
+    }
+
+    const gate = codeOnly(src.slice(src.indexOf('export function commandRejection')));
+    const body = gate.slice(0, gate.indexOf('\n}\n'));
+    expect(body, 'commandRejection stopped consulting the runner allowlist').toContain('RUNNER_ALLOWLIST');
+    expect(body, 'commandRejection stopped refusing shell metacharacters').toContain('SHELL_METACHARS');
+
+    // The exported spawn screens too. Everything reaching it in production was
+    // screened by resolveAssertPlan already; without this the export is a way
+    // around that one.
+    const exec = codeOnly(src.slice(src.indexOf('export const directExec')));
+    expect(exec.slice(0, exec.indexOf('\n};\n')), 'the spawn path no longer screens the command itself').toContain(
+      'commandRejection(',
+    );
+  });
+
   test('4c. the assert runner never reaches the SDK spawn path', () => {
     const src = fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'assert-runner.ts'), 'utf-8');
     expect(src, 'the assert runner must not import the agent spawn layer').not.toMatch(

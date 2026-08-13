@@ -25,6 +25,7 @@ import {
   type GateSpawnRequest,
 } from '../lib/closing-chain';
 import type { ExecFn } from '../lib/assert-runner';
+import { approveCommands } from '../lib/assert-approvals';
 import type { DiffResult } from '../lib/git';
 import { ensureManagerDirs, projectsFile } from '../lib/paths';
 import { parseVerdict } from '../lib/verdict';
@@ -96,6 +97,7 @@ beforeEach(() => {
   ensureManagerDirs();
   fs.rmSync(path.join(HOME, 'gate-log'), { recursive: true, force: true });
   fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: { path: REPO, assert: ['bun run test'] } }));
+  approveCommands(PROJECT, ['bun run test']);
 });
 
 afterAll(() => {

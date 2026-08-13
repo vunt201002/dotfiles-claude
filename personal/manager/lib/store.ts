@@ -148,6 +148,7 @@ export function newTaskRecord(input: CreateTaskInput): TaskRecord {
     root_cause: '',
     resume_state: '',
     pending_action: '',
+    pending_assert_cmds: [],
     pending_question: '',
     answers: [],
     run_started_at: '',

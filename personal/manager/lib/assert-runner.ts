@@ -22,11 +22,44 @@
  * TEST_DATABASE_URL — same repo, same commit, green on a machine that ran
  * none of them. So every run records how many tests actually executed, and a
  * zero-count suite is reported as `skipped`, never `pass`.
+ *
+ * The third: the command this file runs comes out of a FILE, and that file is
+ * `~/.gstack/manager/projects.json` — outside every task's write scope, and
+ * reachable through the Bash slot the write guard does not analyse (§7.3b
+ * lesson 1). So a line appended there by a lost or injected agent would be run
+ * by the manager, with the manager's privileges, on the next task. Three
+ * structural rules cut that, in this order:
+ *
+ *   No shell. The command is parsed into argv here and spawned directly, so
+ *   `|`, `$(...)`, backticks, `;`, `&&` and `>` have no interpreter to mean
+ *   anything to.
+ *
+ *   No shell metacharacters at all, refused before anything runs. Not
+ *   redundant with the above: on Windows the real runners (`npm`, `npx`,
+ *   `yarn`) are `.cmd` files, so the OS hands their argv to a command
+ *   interpreter no matter how they were spawned — an argument carrying `&`
+ *   really does still split there. Measured on this machine, not assumed.
+ *
+ *   An allowlist of runner names for the first word, never a denylist. The
+ *   guard's own numbers are the argument: its command denylist caught 0 of 2
+ *   genuinely destructive commands, because they were not on it.
+ *
+ * The approval book (assert-approvals.ts) sits on top of these for visibility.
+ * It is not what makes this safe, and its own docblock says why.
+ *
+ * What none of it stops, stated rather than left for someone to discover: the
+ * gate's whole job is to run the project's own test suite, and that suite is
+ * repository code the task is allowed to edit. `npm run test` executes whatever
+ * package.json says today, and a test file executes itself. Code inside the
+ * write scope running with the manager's privileges is inherent to B8-assert
+ * existing at all. What is cut here is the escalation OUT of that scope — a
+ * command chosen by editing a file no scope covers.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadConfig } from '../config';
+import { isCommandApproved } from './assert-approvals';
 import { projectEntry, projectsFile, rememberAssertCommands, type AssertCommandSpec } from './paths';
 import type { GateReport } from './verdict';
 
@@ -41,6 +74,11 @@ export type AssertSource = 'registry' | 'claude-md' | 'package-json' | 'none';
 
 export interface AssertPlan {
   commands: AssertCommand[];
+  /**
+   * Resolved and structurally allowed, but no human has said yes to it yet.
+   * Non-empty means `commands` is empty: the gate asks before it runs.
+   */
+  pending: AssertCommand[];
   source: AssertSource;
   /** Why the plan is empty. Empty string when commands were found. */
   reason: string;
@@ -115,10 +153,13 @@ export interface AssertGateResult {
 /**
  * A "test command" that launches an agent would spend money outside the
  * semaphore and outside the cost ledger, which is the exact thing the spawn
- * tripwire exists to prevent. The scan is a guardrail over operator-owned
- * config, not airtight enforcement: shell text cannot be analysed reliably,
- * and a determined `sh -c "$(printf ...)"` gets through. It catches the
- * accident, which is the case that happens.
+ * tripwire exists to prevent.
+ *
+ * Kept even though RUNNER_ALLOWLIST already excludes every name on it, because
+ * it catches a different shape: `npx claude -p …` has an allowed first word.
+ * The scan is name-matching over the whole command and can be evaded by
+ * anything that does not spell the name out; what stops the general case is
+ * the allowlist, not this.
  */
 export const AGENT_BINARY_DENYLIST: readonly string[] = [
   'claude',
@@ -130,6 +171,50 @@ export const AGENT_BINARY_DENYLIST: readonly string[] = [
   'copilot',
   'gstack-detach',
 ];
+
+/**
+ * The only names allowed as the first word of an assert command.
+ *
+ * An allowlist rather than a denylist, and the reason is measured rather than
+ * argued: the write guard's command denylist has a 28.6% false-positive rate
+ * on real work and still caught 0 of the 2 genuinely destructive commands that
+ * were tried against it, because neither was on the list. A denylist can only
+ * refuse what someone thought of. `curl … | sh` was the case that motivated
+ * this one, and it is refused here for the structural reason that `curl` is
+ * not a test runner — not because a pattern happened to match it.
+ */
+export const RUNNER_ALLOWLIST: readonly string[] = [
+  'bun',
+  'npm',
+  'npx',
+  'yarn',
+  'pnpm',
+  'node',
+  'python',
+  'python3',
+  'pytest',
+  'go',
+  'cargo',
+  'dotnet',
+  'mvn',
+  'gradle',
+  'jest',
+  'vitest',
+  'tsc',
+  'eslint',
+];
+
+/**
+ * Characters a real test command never needs, refused before anything runs.
+ *
+ * Each one is an instruction to a command interpreter, and there are two of
+ * those in reach even with no shell in the spawn: a POSIX shell if one were
+ * ever reintroduced, and — on Windows, unavoidably — `.cmd` runners, whose
+ * argv the OS hands to a command interpreter. An argument of `c&d` passed to
+ * `npm` on this machine really does execute `d`. So this list is enforced on
+ * the raw command text, before quoting is resolved, and again at the spawn.
+ */
+export const SHELL_METACHARS = '|&;$`()<>\n\r';
 
 const TAIL_CHARS = 2000;
 const MAX_DISCOVERED = 4;
@@ -152,14 +237,92 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI_ESCAPE, '');
 }
 
-/** Empty string when the command is allowed to run. */
+export interface Tokenized {
+  argv: string[];
+  /** Empty when the command split cleanly. */
+  error: string;
+}
+
+/**
+ * Splits a command into argv the way a shell would, minus everything a shell
+ * would do beyond splitting. Quotes group words; nothing expands, nothing
+ * substitutes, nothing redirects — the metacharacters that would ask for any
+ * of that are refused before this runs.
+ */
+export function tokenizeCommand(cmd: string): Tokenized {
+  const argv: string[] = [];
+  let current = '';
+  let quote = '';
+  let started = false;
+  for (const ch of cmd) {
+    if (quote) {
+      if (ch === quote) quote = '';
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) argv.push(current);
+      current = '';
+      started = false;
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (quote) return { argv: [], error: `unbalanced ${quote === '"' ? 'double' : 'single'} quote` };
+  if (started) argv.push(current);
+  return { argv, error: '' };
+}
+
+/** The runner name a command asks for, lowercased and stripped of a Windows extension. */
+export function headBinary(argv: readonly string[]): string {
+  return (argv[0] ?? '').toLowerCase().replace(/\.(exe|cmd|bat|com|ps1|sh)$/, '');
+}
+
+function describeMetachar(ch: string): string {
+  if (ch === '\n') return '\\n';
+  if (ch === '\r') return '\\r';
+  return ch;
+}
+
+/**
+ * Empty string when the command is allowed to run.
+ *
+ * Order matters only for which sentence a human reads: every layer below
+ * refuses, and the most specific one gets to say why.
+ */
 export function commandRejection(cmd: string): string {
-  const tokens = stripAnsi(cmd)
+  const clean = stripAnsi(cmd);
+  const tokens = clean
     .toLowerCase()
     .split(/[^a-z0-9_.:-]+/)
     .map((t) => t.replace(/\.(exe|cmd|bat|ps1|sh)$/, ''));
   const hit = AGENT_BINARY_DENYLIST.find((binary) => tokens.includes(binary));
   if (hit) return `command names the agent binary "${hit}"; agent spawns go through lib/spawn.ts, never a test command`;
+
+  const found = [...new Set([...clean])].filter((ch) => SHELL_METACHARS.includes(ch));
+  if (found.length > 0) {
+    return `command contains shell metacharacter(s) ${found
+      .map((ch) => `"${describeMetachar(ch)}"`)
+      .join(' ')}; a test command needs none of them, and on Windows a .cmd runner re-interprets them even with no shell in the spawn. Register each command as its own entry instead of chaining them`;
+  }
+
+  const { argv, error } = tokenizeCommand(clean);
+  if (error) return `command has an ${error}`;
+  if (argv.length === 0) return 'command is empty';
+  if (/[\\/:]/.test(argv[0])) {
+    return `command starts with a path ("${argv[0]}"); the first word must be a bare runner name so the manager resolves it, not the caller`;
+  }
+  const head = headBinary(argv);
+  if (!RUNNER_ALLOWLIST.includes(head)) {
+    return `"${argv[0]}" is not a test runner the manager may start. Allowed: ${RUNNER_ALLOWLIST.join(', ')}`;
+  }
+
   if (UNSAFE_COMMAND.test(cmd)) return 'command looks like a watch, dev, install, deploy, or paid-eval command';
   return '';
 }
@@ -266,7 +429,7 @@ export function discoverFromPackageJson(scope: string): AssertCommand[] {
 export function resolveAssertPlan(project: string, scope: string, persist = true): AssertPlan {
   const entry = projectEntry(project);
   if (!entry) {
-    return { commands: [], source: 'none', reason: `project "${project}" is not registered` };
+    return { commands: [], pending: [], source: 'none', reason: `project "${project}" is not registered` };
   }
   const registered = normalizeAssertCommands(entry.assert);
   if (registered.length > 0) {
@@ -274,27 +437,49 @@ export function resolveAssertPlan(project: string, scope: string, persist = true
     if (rejected.length > 0) {
       return {
         commands: [],
+        pending: [],
         source: 'registry',
         reason: rejected.map((r) => `refused "${r.c.cmd}": ${r.why}`).join('; '),
       };
     }
-    return { commands: registered, source: 'registry', reason: '' };
+    return gateOnApproval(project, registered, 'registry');
   }
 
   const fromDoc = discoverFromClaudeMd(scope);
   if (fromDoc.length > 0) {
     if (persist) rememberAssertCommands(project, fromDoc);
-    return { commands: fromDoc, source: 'claude-md', reason: '' };
+    return gateOnApproval(project, fromDoc, 'claude-md');
   }
   const fromPkg = discoverFromPackageJson(scope);
   if (fromPkg.length > 0) {
     if (persist) rememberAssertCommands(project, fromPkg);
-    return { commands: fromPkg, source: 'package-json', reason: '' };
+    return gateOnApproval(project, fromPkg, 'package-json');
   }
   return {
     commands: [],
+    pending: [],
     source: 'none',
     reason: `no assert command found for "${project}": CLAUDE.md names none and package.json declares none. Add "assert" to its entry in ${projectsFile()} — guessing one would be an oracle nobody approved`,
+  };
+}
+
+/**
+ * A command nobody has approved is not run and not refused — it is asked
+ * about, once, and remembered (§10.1: the human gets the yes/no, the manager
+ * does not decide on its own). All-or-nothing per plan: running the approved
+ * half and asking about the rest would report a partial oracle as if it were
+ * the whole one.
+ */
+function gateOnApproval(project: string, commands: AssertCommand[], source: AssertSource): AssertPlan {
+  const pending = commands.filter((c) => !isCommandApproved(project, c.cmd));
+  if (pending.length === 0) return { commands, pending: [], source, reason: '' };
+  return {
+    commands: [],
+    pending,
+    source,
+    reason: `no human has approved this command for "${project}": ${pending
+      .map((c) => `"${c.cmd}"`)
+      .join(', ')}. It came from ${source}; approve the task to run it and to stop being asked`,
   };
 }
 
@@ -355,8 +540,21 @@ export function parseTestCounts(raw: string): TestCounts {
   return { ran: null, skipped: null, total: null };
 }
 
-function shellArgv(cmd: string): string[] {
-  return process.platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', cmd] : ['/bin/sh', '-c', cmd];
+/**
+ * Where a runner name is looked up: the machine's PATH first, then the
+ * project's own `node_modules/.bin`.
+ *
+ * That order and not the other one. A repo can write its own
+ * `node_modules/.bin/npm.cmd`, and searching there first would let it decide
+ * what the word `npm` means to the manager. Last means a repo-local `vitest`
+ * still resolves when nothing global provides it, and never shadows a real
+ * runner.
+ */
+export function resolveRunner(binary: string, cwd: string): string | null {
+  const search = [process.env.PATH ?? '', path.join(path.resolve(cwd), 'node_modules', '.bin')]
+    .filter((part) => part !== '')
+    .join(path.delimiter);
+  return Bun.which(binary, { PATH: search });
 }
 
 /** A process that already exited throws on kill; that is the expected case. */
@@ -375,7 +573,7 @@ function tailOf(text: string): string {
 
 export interface RunOptions {
   timeoutMs?: number;
-  /** Swapped in tests so the suite never shells out. */
+  /** Swapped in tests so the suite never starts a real process. */
   exec?: ExecFn;
 }
 
@@ -389,23 +587,52 @@ export interface ExecResult {
 export type ExecFn = (cmd: string, cwd: string, timeoutMs: number) => Promise<ExecResult>;
 
 /**
- * Runs through the platform shell because the command is operator-written
- * config that legitimately uses `&&` and env prefixes. Async on purpose: a
- * synchronous spawn would block the daemon's event loop for the length of a
- * test suite, which would serialise every other project's assert run and
- * destroy the one property this gate was split out to get.
+ * Runs the command with NO shell: it is parsed into argv here and the runner
+ * is spawned directly. The cost is real and worth naming — `&&` chains and
+ * `VAR=1 cmd` prefixes no longer work, and a project that wants two commands
+ * registers two entries, which produces two gate rows instead of one anyway.
+ * What it buys is that a command arriving from a file nobody guards cannot
+ * reach an interpreter.
  *
- * The timeout stops WAITING; it does not always stop the process. On Windows
- * the command runs under `cmd.exe`, and killing that does not kill what it
- * launched, so a runaway `bun test` keeps going and keeps its pipes open.
- * Waiting for those pipes would mean the timeout never fires in the one case
- * it exists for, so the race resolves on its own after a short grace period
- * and the run is reported as timed out with whatever it had. The orphan is a
- * real cost, stated rather than hidden: it costs CPU until it exits, but it
- * cannot report a result and it cannot hold the project lock.
+ * Screened again here rather than trusting the caller. Everything that reaches
+ * this in production came through resolveAssertPlan and was screened once
+ * already; a second check costs nothing and means the exported spawn is not a
+ * way around the first one.
+ *
+ * Async on purpose: a synchronous spawn would block the daemon's event loop
+ * for the length of a test suite, which would serialise every other project's
+ * assert run and destroy the one property this gate was split out to get.
+ *
+ * The timeout stops WAITING; it does not always stop the process. Killing a
+ * runner does not kill what the runner launched — and on Windows the real
+ * runners are `.cmd` files, so the child is a command interpreter and its own
+ * children outlive it. Waiting for their pipes would mean the timeout never
+ * fires in the one case it exists for, so the race resolves on its own after a
+ * short grace period and the run is reported as timed out with whatever it
+ * had. The orphan is a real cost, stated rather than hidden: it costs CPU
+ * until it exits, but it cannot report a result and it cannot hold the
+ * project lock.
  */
-export const shellExec: ExecFn = async (cmd, cwd, timeoutMs) => {
-  const proc = Bun.spawn(shellArgv(cmd), {
+export const directExec: ExecFn = async (cmd, cwd, timeoutMs) => {
+  const refusal = commandRejection(cmd);
+  if (refusal) {
+    return { exitCode: -1, stdout: '', stderr: `refused to run "${cmd}": ${refusal}`, timedOut: false };
+  }
+  const { argv, error } = tokenizeCommand(stripAnsi(cmd));
+  if (error || argv.length === 0) {
+    return { exitCode: -1, stdout: '', stderr: `refused to run "${cmd}": ${error || 'command is empty'}`, timedOut: false };
+  }
+  const binary = resolveRunner(argv[0], cwd);
+  if (!binary) {
+    return {
+      exitCode: -1,
+      stdout: '',
+      stderr: `"${argv[0]}" is not installed here: not on PATH, and not in node_modules/.bin under ${cwd}`,
+      timedOut: false,
+    };
+  }
+
+  const proc = Bun.spawn([binary, ...argv.slice(1)], {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -451,7 +678,7 @@ export async function runAssertCommands(
   scope: string,
   opts: RunOptions = {},
 ): Promise<AssertRun[]> {
-  const exec = opts.exec ?? shellExec;
+  const exec = opts.exec ?? directExec;
   const timeoutMs = opts.timeoutMs ?? loadConfig().assertTimeoutMs;
   const runs: AssertRun[] = [];
   for (const command of commands) {

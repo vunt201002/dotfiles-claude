@@ -71,6 +71,15 @@ export function projectsFile(): string {
 }
 
 /**
+ * Assert commands a human has said yes to. Sits beside projects.json on
+ * purpose — it is the same trust level, not a stronger one. Read
+ * lib/assert-approvals.ts before treating it as a boundary.
+ */
+export function assertApprovalsFile(): string {
+  return path.join(managerDir(), 'assert-approvals.json');
+}
+
+/**
  * Re-exported from gate-log.ts rather than recomputed. The gate log's location
  * has exactly one definition; a second one here would drift the day someone
  * changes an env var name and split a project's history across two files.
