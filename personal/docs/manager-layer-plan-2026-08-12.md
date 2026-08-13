@@ -752,27 +752,45 @@ CHƯA COMMIT GÌ, CHƯA PUSH GÌ.** 18 file dirty trong `git status`.
 | Đo oracle | `personal/oracle/` | ✅ 19 fixture, có canary |
 | Chuỗi đóng + tách làn verify | `lib/closing-chain.ts`, `lib/assert-runner.ts` | ✅ `B8-assert` là chứng từ thật |
 
-### Bốn việc CHỜ QUYẾT ĐỊNH của vunt
+### Bốn việc chờ quyết định — cập nhật 13/08
 
-1. **Danh sách lệnh cấm của guard (`DENY_CMD`).** Sai cả hai chiều: FP **28,6%** trên việc
-   thật / **50%** trên probe set, và bắt **0/2** lệnh phá hoại thật (`git clean -fdx`,
-   `git add -A`). Đề nghị chia hai bậc — chặn cứng thứ không bao giờ chính đáng, **hỏi rồi
-   mới chạy** thứ tuỳ ngữ cảnh. **Thứ tự bắt buộc: giảm ồn TRƯỚC, thêm bảo vệ SAU** — thêm
-   pattern vào một cổng đang ồn thì cổng bị bỏ qua và bảo vệ mới chết theo.
-2. **Khe Bash + chuỗi leo thang.** Guard chỉ chặn theo `file_path`; ghi file qua lệnh shell
-   không bị phân tích. Nối với việc manager tự đọc lệnh test từ `~/.gstack/manager/projects.json`
-   (nằm ngoài mọi scope) thành chuỗi: agent ghi qua Bash → manager chạy lệnh được cắm vào, với
-   quyền manager. Lọc hiện có chỉ chặn binary agent + dev/watch/deploy; `curl … | sh` đi qua.
-   **Đề nghị (rẻ, cắt đúng chuỗi): manager không chạy lệnh nào từ file đó khi vunt chưa duyệt.**
-3. **Token Telegram** (chỉ vunt làm được: `@BotFather` → `/newbot`, xem
-   `personal/manager/telegram/README.md`) **+ một vòng chạy thật** để chốt tên tool MCP cho
-   làn judge.
-4. **`/sync-skills` dùng `ln -s` trần** — trên Windows tạo bản sao đông cứng thay vì liên kết.
-   Skill mới sync bằng code hiện tại sẽ **im lặng không cập nhật khi sửa**. Đúng lớp lỗi giết
-   `fix-bug-loop` 2 tuần. Sửa: dùng `MSYS=winsymlinks:nativestrict` + verify sau khi tạo.
+**1. ✅ XONG — guard chia hai bậc.** Vunt chốt phương án hai bậc 13/08.
 
-**Thứ tự đề nghị:** 4 (15 phút, không rủi ro, đang âm thầm phá mọi skill thêm mới) → 2 (cắt
-chuỗi, không đụng chỗ rủi ro) → 1 (cần vunt chốt hai bậc) → 3 (cần thao tác tay + tốn tiền model).
+| Bậc | Xử | Gồm |
+|---|---|---|
+| **Chặn cứng** (`exit 2`) | không có đường vòng | `rm -rf /` · `rm -rf ~` · `rm -rf .` trần · `mkfs` · `dd of=/dev/` · SQL huỷ diệt **khi có client DB thật chạy nó** |
+| **Hỏi rồi chạy** (`permissionDecision: "ask"`) | vunt quyết từng lần | `git push --force` · `git reset --hard` · `git clean -*f` · `git add -A` · `git add .` · `--no-verify` · `firebase deploy` · `npm publish` · `DELETE FROM`/`UPDATE … SET` qua client DB |
+
+**Giảm ồn bằng cách bóc chuỗi trích dẫn, không phải neo vị trí.** Cả 5 lần bắt oan quan sát
+được đều là chuỗi nguy hiểm nằm **trong dấu nháy hoặc thân heredoc** — lệnh đang NHẮC TỚI thứ
+nguy hiểm chứ không LÀM nó. Nên guard bóc nháy/heredoc trước khi khớp. Ngoại lệ: lệnh tự nó là
+vỏ shell (`bash -c`, `eval`, `| sh`) thì **không bóc**, vì lúc đó thứ trong nháy mới là lệnh
+thật — nhờ vậy `bash -c "rm -rf /"` vẫn bị bắt.
+
+*Neo vị trí khớp đã bị loại*: nó để lọt đúng ca `bash -c` đó.
+
+**SQL không bóc nháy được** — nó LUÔN là tham số trong nháy. Phân biệt bằng thứ khác: có client
+DB thật chạy nó hay không. `grep "DROP TABLE" migrations/` là văn bản; `psql -c "DROP TABLE x"`
+là lệnh. Cùng một chuỗi, hai bản chất.
+
+Test: **37/37 pass** cả ba kết cục, gồm 5 FP quan sát được (nay đều qua) và recall mới bắt được
+(`bash -c`/`eval`/`| sh` bọc lệnh, `git clean -fdx`, `git add -A`).
+
+**2. Khe Bash + chuỗi leo thang** — đang vá, hướng đã chốt. Ghi lại một điều **quan trọng hơn
+phương án**: chỉ làm phần "duyệt" thì KHÔNG cắt được chuỗi, vì kho trạng thái duyệt cũng ghi
+được qua đúng khe Bash đó — ai ghi được lệnh thì ghi được cả dấu duyệt cho nó. **Duyệt cho khả
+năng nhìn thấy, không cho tính toàn vẹn.** Phần cắt thật là cấu trúc: chạy lệnh **không qua
+shell**, từ chối metachar, và **allowlist** binary đầu lệnh thay vì denylist — vì denylist luôn
+thua, đúng như guard đã chứng minh bằng số (bắt 0/2 lệnh phá hoại thật).
+
+**3. Token Telegram + một vòng chạy thật** — vẫn chờ vunt (`@BotFather` → `/newbot`, xem
+`personal/manager/telegram/README.md`), và một lần chạy thật để chốt tên tool MCP cho làn judge.
+
+**4. ✅ XONG — `/sync-skills`.** Cả 8 chỗ link chuyển sang `MSYS=winsymlinks:nativestrict` +
+verify `[ -L ]`, thất bại thì in `FAILED` kèm cách xử lý. Thêm mục Windows giải thích cái bẫy.
+**Luật mới trong HARD GATES: một liên kết không phải symlink là THẤT BẠI, không phải phương án
+dự phòng** — bản sao đông cứng tệ hơn mọi lỗi, vì nó chạy đúng cho tới lúc anh sửa file rồi
+không có gì thay đổi và không có gì báo. Verify bằng cách ghi qua nguồn, đọc qua liên kết.
 
 ### Ba giới hạn đã biết, ghi rõ chứ không giấu
 
