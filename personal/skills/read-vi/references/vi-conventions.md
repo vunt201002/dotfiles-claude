@@ -50,6 +50,10 @@ Bổ sung (chốt khi dịch bài release note của OpenAI): `slider` · `guard
 `reasoning` · `roleplay` · `fact` (trong "sai fact") — đều giữ tiếng Anh. Thuật ngữ chuyên
 ngành ngoài IT cũng vậy khi nó là tên gọi cố định: `marine layer` · `rip current`.
 
+Bổ sung (chốt khi dịch bài về cách học bằng LLM): `hallucination` · `low-poly` ·
+`simulation` · `animation` · `knowledge base` · `plan mode` · `PoC` · `dashboard` ·
+`challenge` · `puzzle` · `fab` · `quartz` — đều giữ tiếng Anh.
+
 **Tên một control trên UI:** danh từ chỉ loại viết tiếng Việt, tên riêng giữ tiếng Anh —
 `nút Think`, `slider`, `tab Settings`. Đừng dịch tên control (`nút Nghĩ` là sai).
 
@@ -74,6 +78,7 @@ Dùng bản tiếng Việt khi dev Việt thật sự nói như vậy, không ph
 | bottleneck | nút thắt | |
 | overhead | chi phí thêm | tuỳ ngữ cảnh; `overhead` giữ nguyên cũng ổn |
 | deprecated | đã bỏ / sắp bỏ | đừng dịch thành "không dùng nữa" nếu vẫn chạy được |
+| flow (mạch chạy của một simulation/animation) | luồng chạy | `luồng` trần thì đụng nghĩa `thread` — thêm `chạy` là hết mơ hồ. `flow` của data/stream vẫn giữ tiếng Anh |
 
 ### §A3. CẤM dịch kiểu này
 
@@ -130,7 +135,7 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 | 15 | **Tuy nhiên,** … **Do đó,** … **Bên cạnh đó,** … (mỗi câu một cái) · **Vậy:** mở câu chốt | nhưng / nên / còn — nằm giữa câu · **Tóm lại:** | discourse marker dịch 1:1; tiếng Việt bỏ bớt phần lớn. *So: …* thành `Vậy:` cũng là dòng này |
 | 16 | Hãy cùng nhau xem xét ví dụ sau | Thử ví dụ này | *Let's take a look at…* |
 | 17 | Các bước thực hiện **như sau**: | Các bước: | *as follows:* — dấu hai chấm đã đủ |
-| 18 | một trong những kỹ thuật quan trọng nhất | kỹ thuật quan trọng nhất nhì (hoặc bỏ) | *one of the most…* |
+| 18 | một trong những kỹ thuật quan trọng nhất · nằm trong nhóm … nhất | kỹ thuật quan trọng nhất nhì (hoặc bỏ) | *one of the most…* · *is one of the top…* |
 | 19 | **Nếu** cache miss **thì** hệ thống **sẽ** phải query lại DB | Cache miss thì phải query lại DB | *If X, then Y will Z* dịch đủ ba mảnh |
 | 20 | tại thời điểm này | lúc này (hoặc bỏ) | *at this point in time* |
 | 21 | **về mặt** hiệu năng | về hiệu năng | *in terms of* |
@@ -159,6 +164,12 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 | 44 | … rối loạn ăn uống. **Thêm** hàng hoá giới hạn tuổi, hoạt động nguy hiểm. | gộp thẳng vào vế liệt kê của câu trước | *Plus X, Y, Z.* — tiếng Anh cho phép câu cụt kiểu này, tiếng Việt thì không |
 | 45 | Gió **thiên về** làm bạn chậm lại **hơn là** làm ướt | Gió làm bạn chậm lại **nhiều hơn là** làm ướt | *tends to X rather than Y* / *is more likely to X than Y* — `thiên về` là calque cứng |
 | 46 | **Một** đánh giá nội bộ chạy trên… | Đánh giá nội bộ chạy trên… | mạo từ *a/an* dịch thành `một` thừa (họ hàng #11, nhưng #11 là số nhiều `-s`) |
+| 47 | Mình **đã** làm hẳn một cái · Bài **đã** nói ở trên | Mình làm hẳn một cái · Bài nói ở trên | thì quá khứ tiếng Anh dịch thành `đã` ở mọi động từ; tiếng Việt chỉ cần `đã` khi có mốc thời gian thật sự tương phản. Chiều quá khứ của #13 (*will* → `sẽ`) |
+| 48 | **Thứ nhận về là** một animation đẹp · **Cái bạn có được là**… | Làm xong là có animation đẹp | *What you get is X* / *The result was X* — chủ ngữ danh từ rỗng `Thứ/Cái + V + là` đẩy lên đầu; tiếng Việt trả chủ ngữ về người/vật thật, hoặc bỏ hẳn chủ ngữ. Họ hàng #39 |
+| 49 | *(bài đã chốt xưng hô `mình`)* **Mình** nhận về animation chính xác 100% · **Mình** nhìn theo xe goòng và thấy nó đổi dạng | Làm xong là có animation… · Nhìn theo xe goòng **là thấy được** nó đổi dạng | *you get X* / *you can watch X and see it change* — `you` phiếm chỉ bị hút vào xưng hô đã chốt, biến lời hứa chung thành **báo cáo cá nhân của tác giả** và nuốt luôn sắc thái *can*. Chữa bằng câu không chủ ngữ + gắn khả năng vào động từ (`thấy được`, `là thấy`), tuyệt đối không lôi `bạn` vào. Mặt trái của §B2(b): xưng hô **đúng** nhưng dùng **sai vai** |
+| 50 | phân tích mấy bottleneck mới của AI, mấy thứ có thể làm chậm việc dựng data center, mình nhận ra… | …mấy bottleneck mới của AI, **tức** mấy thứ có thể làm chậm việc dựng data center. Rồi mình nhận ra… | appositive kẹp giữa chủ ngữ và vị ngữ; tiếng Việt không đọc trôi qua hai dấu phẩy rồi mới tới động từ. Tách câu, hoặc chèn `tức` |
+| 51 | Design sát hơn. · Kết quả tốt hơn. *(đứng một mình)* | **Nhìn** sát thực tế hơn. · **Chạy ra** kết quả tốt hơn. | *The design is much closer.* — câu danh từ + tính từ; tiếng Anh có `is` đỡ, tiếng Việt cần một động từ thật (`nhìn`, `trông`, `chạy`, `đọc`) mới thành câu |
+| 52 | **Bắt trả lời** câu hỏi về bước trước thì kiến thức bám lâu hơn | **Tự trả lời** câu hỏi về bước trước thì kiến thức bám lâu hơn | *Trying to answer questions about a previous step helps you retain it* — gerund tiếng Anh cho phép trống chủ thể; tiếng Việt phải gọi tên ai làm. **Bẫy:** gọi tên SAI người còn tệ hơn để trống — điền `người chơi` vào chỗ gốc nói chính người đọc là sai attribution, không phải sửa văn phong |
 
 ### §B2. Hai lỗi cấu trúc (không phải chuỗi ký tự — phải đọc mới thấy)
 
@@ -182,6 +193,23 @@ kia. Đây là lỗi dễ bắt nhất và cũng dễ sót nhất, vì mỗi đo
 - KHÔNG đổi số, tên riêng, tên hàm, version khi đang sửa văn phong — đó là việc của pass 3
   bắt lỗi, không phải việc của editor thêm lỗi.
 - KHÔNG rút gọn bài ở chế độ `DỊCH SÁT`. Rút gọn chỉ hợp lệ ở `VIẾT LẠI`.
+- **KHÔNG đổi MỨC ĐỘ của một claim khi đang sửa văn phong.** Viết lại cho thuận tay rất dễ
+  kéo `nhiều mảng chưa biết` → `gần như mù tịt`, `hơi khó chịu` → `khó đọc`, `chi tiết có
+  thể thiếu` → `chi tiết có thiếu`, `chính xác hơn` → `sát hơn hẳn`. Bốn cái đó đến từ
+  **đúng một vòng editor**, và cả bốn đều lọt qua vì nghe hay hơn. Bạn mù nguồn nên không
+  có cách nào kiểm được độ mạnh của câu gốc — vậy thì giữ nguyên độ mạnh của câu bạn nhận
+  được. Đổi nhịp, đổi trật tự, đổi từ: được. Đổi liều: không.
+- **KHÔNG bỏ khung giả định (`Giả sử…`, `Nếu…`) như thể nó là hedge nhập khẩu.** `Có thể
+  nói rằng` (#29) là hedge rỗng, bỏ được. `Giả sử X` là **nội dung**: bỏ đi thì "nếu anh
+  thấy X" biến thành khẳng định "X". Phân biệt: hedge rỗng nói về thái độ người viết, khung
+  giả định nói về điều kiện của sự việc.
+- **KHÔNG thu hẹp (hay nới rộng) PHẠM VI của một claim khi đang sửa văn phong.** Đây là
+  trục thứ hai, song song với trục liều ở trên. Sửa cho gọn tay rất dễ kéo `một bước đã đi
+  qua` → `bước vừa đi qua`, `mấy thứ` → `thứ`, `một trong các X` → `X`: câu ngắn hơn, đọc
+  mượt hơn, và **hẹp hơn bản gốc**. Dấu hiệu grep được: `vừa` · `ngay` · `chính` chèn vào
+  trước một danh từ vốn phiếm chỉ. Cùng họ với việc chèn `chắc` / `có lẽ` vào một câu
+  khẳng định — đều là editor mù nguồn tự chỉnh cho êm tai một thứ nó không có cách nào
+  kiểm được.
 
 *(append tại đây khi có điều cấm mới)*
 

@@ -12,6 +12,9 @@
 > `      <url>`
 
 <!-- SAVED-LIST (skill đọc & ghi phần dưới dòng này; mục mới chèn ngay dưới marker) -->
+- [ ] How I use LLMs to learn complex topics — laurentiugabriel.github.io · lưu 2026-08-10 (digest 2026-08-10)
+      → Quy trình 4 bước: dựng nền kiến thức → bắt model tự review độ chính xác → render thành simulation tương tác kiểu low-poly Rollercoaster Tycoon → deploy GitHub Pages. Khác "hỏi ChatGPT" ở bước verify + ép ra artifact trực quan thay vì đọc text. Hợp cách chạy /learn.
+      https://laurentiugabriel.github.io/blog/articles/how-i-use-llms-to-learn/
 - [ ] Improving GPT-5.6 Sol in ChatGPT, expanding GPT-5.6 Luna access for free users — openai.com · lưu 2026-08-07 (digest 2026-08-07)
       → Post chính chủ OpenAI: Sol được tune lại, Luna mở cho tài khoản free. Đọc để biết tier nào giờ dùng được model nào — ảnh hưởng trực tiếp nếu build feature AI cho user không trả tiền.
       https://openai.com/index/improving-gpt-5-6-sol-in-chatgpt/
