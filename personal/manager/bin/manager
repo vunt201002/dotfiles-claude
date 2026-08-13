@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# manager CLI entrypoint. Resolves the repo from this script's own location so
+# it works from any cwd, through a symlink, and on Windows under Git Bash.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+bin_dir="$(cd -P "$(dirname "$src")" && pwd)"
+
+exec bun run "$bin_dir/../cli.ts" "$@"

@@ -1,0 +1,1204 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-int-'));
+const REPO = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-fixture-repo-'));
+process.env.MANAGER_HOME = HOME;
+process.env.GSTACK_GATE_LOG_DIR = path.join(HOME, 'gate-log');
+
+import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { resetConfigCache } from '../config';
+import { appendGateLog } from '../lib/gate-log';
+import { readEntries } from '../lib/gate-log-port';
+import { __clearWaiters, BROWSER_TOKEN, holderOf, projectLock } from '../lib/locks';
+import { Orchestrator } from '../lib/orchestrator';
+import type { ExecFn, ExecResult } from '../lib/assert-runner';
+import type { DiffResult } from '../lib/git';
+import { ensureManagerDirs, projectsFile } from '../lib/paths';
+import { reconcile } from '../lib/reconcile';
+import type { SpawnPort, SpawnRequest } from '../lib/spawn';
+import { listTasks, loadTask, saveTaskAndIndex, writeState } from '../lib/store';
+import { __resetEvents, subscribe } from '../lib/events';
+import { emptyState, type TaskEnvelope } from '../types';
+
+const PROJECT = 'fixture';
+const ASSERT_CMD = 'bun run test';
+
+function writeRegistry(extra: Record<string, unknown> = {}): void {
+  ensureManagerDirs();
+  fs.writeFileSync(
+    projectsFile(),
+    JSON.stringify({ [PROJECT]: { path: REPO, assert: [ASSERT_CMD] }, ...extra }, null, 2),
+  );
+}
+
+/**
+ * Stands in for the project's own test runner. B8-assert is the one gate the
+ * manager executes itself, so the suite has to hand it a command result rather
+ * than an agent's account of one — that is the whole distinction being tested.
+ */
+function execStub(
+  reply: (cmd: string, callIndex: number) => Partial<ExecResult> & { stdout?: string },
+  ): { exec: ExecFn; calls: string[] } {
+  const calls: string[] = [];
+  const exec: ExecFn = async (cmd) => {
+    const out = reply(cmd, calls.length);
+    calls.push(cmd);
+    return {
+      exitCode: out.exitCode ?? 0,
+      stdout: out.stdout ?? GREEN_SUITE,
+      stderr: out.stderr ?? '',
+      timedOut: out.timedOut ?? false,
+    };
+  };
+  return { exec, calls };
+}
+
+const GREEN_SUITE = ' 12 pass\n 0 fail\nRan 12 tests across 3 files.';
+const SILENT_SKIP_SUITE = ' 0 pass\n 0 fail\n 7 skip\nRan 0 tests across 3 files.';
+
+const stubDiff = (): DiffResult => ({
+  ok: true,
+  text: '--- a/pricing.ts\n+++ b/pricing.ts\n+  return discounted;\n',
+  truncated: false,
+  error: '',
+});
+
+function envelopeJson(overrides: Partial<TaskEnvelope> = {}): string {
+  const envelope: TaskEnvelope = {
+    project: PROJECT,
+    issue: 't1',
+    title: 'Discount code ignored on mixed carts',
+    size: 'M',
+    uncertainty: 'med',
+    lane: 'bug-lon',
+    why: 'shared pricing path',
+    oracle_available: true,
+    oracle_kind: ['playwright', 'tsc'],
+    needs_human: false,
+    blocking_questions: [],
+    assumptions: [],
+    assumption_count: 0,
+    est_cost_usd: 1.2,
+    est_turns: 40,
+    ...overrides,
+  };
+  return `Sized it.\n\`\`\`json\n${JSON.stringify(envelope)}\n\`\`\``;
+}
+
+function verdictJson(body: Record<string, unknown>): string {
+  return `Done.\n\`\`\`json\n${JSON.stringify(body)}\n\`\`\``;
+}
+
+type Phase = 'size' | 'execute' | 'B8-judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
+
+function phaseOf(req: SpawnRequest): Phase {
+  if (req.prompt.startsWith('Size issue')) return 'size';
+  if (req.prompt.startsWith('Execute issue')) return 'execute';
+  const gate = req.prompt.match(/Report this as gate "([^"]+)"/);
+  if (!gate) throw new Error(`prompt names no gate:\n${req.prompt.slice(0, 200)}`);
+  return gate[1] as Phase;
+}
+
+interface MockCall {
+  phase: Phase;
+  role: string;
+  modelAlias: string;
+  scope: string;
+  taskId: string;
+  browserTokenHolder: string | null;
+  projectLockHolder: string | null;
+}
+
+/**
+ * Stands in for the harness hooks. They write `tsc` / `lint` / `guard` rows
+ * into the gate log while the agent is running, on a path the agent cannot
+ * reach — which is the only thing that lets a self-reported `deterministic`
+ * gate keep its family. A port that writes nothing models an agent whose
+ * claim has no independent witness.
+ */
+function makePort(
+  reply: (phase: Phase, call: MockCall, callIndex: number) => string,
+  costUsd = 0.1,
+  hookGates: string[] = ['tsc'],
+): { port: SpawnPort; calls: MockCall[] } {
+  const calls: MockCall[] = [];
+  const port: SpawnPort = {
+    async run(req) {
+      for (const gate of hookGates) {
+        appendGateLog({ project: req.project, gate, gate_family: 'deterministic', verdict: 'pass' });
+      }
+      const call: MockCall = {
+        phase: phaseOf(req),
+        role: req.role,
+        modelAlias: req.modelAlias,
+        scope: req.scope,
+        taskId: req.taskId,
+        browserTokenHolder: holderOf(BROWSER_TOKEN),
+        projectLockHolder: holderOf(projectLock(req.project)),
+      };
+      calls.push(call);
+      return {
+        output: reply(call.phase, call, calls.length - 1),
+        exitReason: 'success',
+        turnsUsed: 3,
+        costUsd,
+        model: req.modelAlias,
+        sessionId: `sess-${calls.length}`,
+        durationMs: 5,
+      };
+    },
+  };
+  return { port, calls };
+}
+
+const PASS_VERDICT = verdictJson({
+  verdict: 'pass',
+  reason: 'ok',
+  gates: [{ gate: 'tsc', gate_family: 'deterministic', verdict: 'pass', caught: '' }],
+  findings: [],
+  assumptions: [],
+  questions: [],
+});
+
+function happyReply(phase: Phase): string {
+  return phase === 'size' ? envelopeJson() : PASS_VERDICT;
+}
+
+function newOrchestrator(
+  port: SpawnPort,
+  blindSample = () => false,
+  opts: { exec?: ExecFn; diff?: () => DiffResult } = {},
+): Orchestrator {
+  return new Orchestrator({
+    spawnPort: port,
+    reviewPort: port,
+    blindSample,
+    exec: opts.exec ?? execStub(() => ({})).exec,
+    diff: opts.diff ?? stubDiff,
+  });
+}
+
+beforeEach(() => {
+  fs.rmSync(path.join(HOME, 'manager', 'tasks'), { recursive: true, force: true });
+  fs.rmSync(path.join(HOME, 'gate-log'), { recursive: true, force: true });
+  writeState(emptyState());
+  writeRegistry();
+  resetConfigCache();
+  __clearWaiters();
+  __resetEvents();
+});
+
+afterAll(() => {
+  for (const dir of [HOME, REPO]) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
+});
+
+describe('full lifecycle on a fixture repo with a mocked runner', () => {
+  test('a clean task walks INTAKE -> REPORTED and records every transition', async () => {
+    const { port, calls } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const submitted = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    expect(submitted.accepted).toBe(true);
+    await manager.settle(submitted.taskId);
+
+    const task = loadTask(submitted.taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(task?.attempt).toBe(1);
+    expect(task?.envelope?.lane).toBe('bug-lon');
+    expect(task?.cost_usd_actual).toBeCloseTo(0.4, 5);
+    expect(task?.failure_reason).toBe('');
+
+    expect(calls.map((c) => c.phase)).toEqual(['size', 'execute', 'spec-check', 'tech-review']);
+
+    const lifecycle = readEntries()
+      .filter((e) => e.gate.startsWith('lifecycle:'))
+      .map((e) => e.gate);
+    expect(lifecycle).toEqual([
+      'lifecycle:INTAKE->INTAKE',
+      'lifecycle:INTAKE->SIZED',
+      'lifecycle:SIZED->RUNNING',
+      'lifecycle:RUNNING->VERIFYING',
+      'lifecycle:VERIFYING->REVIEW',
+      'lifecycle:REVIEW->REPORTED',
+    ]);
+  });
+
+  test('gate rows carry gate_family and review_depth so they can be read back', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const tscRows = readEntries().filter((e) => e.gate === 'tsc' && e.issue === 't1');
+    expect(tscRows.length).toBeGreaterThan(0);
+    for (const row of tscRows) {
+      expect(row.gate_family).toBe('deterministic');
+      expect(row.review_depth).toBe('summary');
+      expect(row.human_intervened).toBe(false);
+      expect(row.lane).toBe('bug-lon');
+      expect(row.project).toBe(PROJECT);
+    }
+  });
+
+  test('roles route to the models the config says they should', async () => {
+    const { port, calls } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(calls.map((c) => `${c.phase}:${c.modelAlias}`)).toEqual([
+      'size:opus',
+      'execute:sonnet',
+      'spec-check:opus',
+      'tech-review:opus',
+    ]);
+  });
+
+  test('every spawn is scoped to the fixture repo, never anywhere else', async () => {
+    const { port, calls } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    for (const call of calls) expect(path.resolve(call.scope)).toBe(path.resolve(REPO));
+  });
+
+  test('the project lock is held for the whole run and released at the end', async () => {
+    const { port, calls } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    for (const call of calls) expect(call.projectLockHolder).toBe(taskId);
+    expect(holderOf(projectLock(PROJECT))).toBeNull();
+  });
+
+  test('an unknown project is refused instead of guessed at', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const result = await manager.submit({ project: 'not-registered', issue: 't1', source: 'cli' });
+    expect(result.accepted).toBe(false);
+    expect(result.error).toContain('unknown project');
+    expect(listTasks()).toHaveLength(0);
+  });
+});
+
+describe('retry is B8-only and capped', () => {
+  test('a red assert retries and the second attempt succeeds', async () => {
+    const { port, calls } = makePort(happyReply);
+    const { exec, calls: ran } = execStub((_cmd, i) =>
+      i === 0 ? { exitCode: 1, stdout: ' 11 pass\n 1 fail\nRan 12 tests across 3 files.' } : {},
+    );
+    const manager = newOrchestrator(port, () => false, { exec });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(task?.attempt).toBe(2);
+    expect(ran).toHaveLength(2);
+    expect(calls.map((c) => c.phase)).toEqual(['size', 'execute', 'execute', 'spec-check', 'tech-review']);
+  });
+
+  test('three red asserts stop at BLOCKED, they do not try a fourth time', async () => {
+    const { port } = makePort(happyReply);
+    const { exec, calls: ran } = execStub(() => ({
+      exitCode: 1,
+      stdout: ' 11 pass\n 1 fail\nRan 12 tests across 3 files.',
+    }));
+    const manager = newOrchestrator(port, () => false, { exec });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.attempt).toBe(3);
+    expect(task?.failure_reason).toContain('retry cap 3 reached');
+    expect(ran).toHaveLength(3);
+  });
+
+  test('a B2 block stops immediately with no retry', async () => {
+    const { port, calls } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute')
+        return verdictJson({ verdict: 'blocked', reason: 'b2-root-cause-unproven', gates: [] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.attempt).toBe(1);
+    expect(task?.failure_reason).toContain('b2-root-cause-unproven');
+    expect(calls.filter((c) => c.phase === 'execute')).toHaveLength(1);
+  });
+
+  test('a B4 block also stops immediately', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute') return verdictJson({ verdict: 'blocked', reason: 'b4-red-team-hole', gates: [] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('BLOCKED');
+    expect(loadTask(taskId)?.attempt).toBe(1);
+  });
+
+  // A suite that ran nothing is not a failing suite — it is a broken oracle,
+  // and a second attempt has exactly the same nothing to learn from. So it
+  // asks a human instead of looping, and resumes verification once the oracle
+  // is fixed rather than throwing away work that is probably fine.
+  test('a silently skipped suite asks a human instead of retrying', async () => {
+    const { port } = makePort(happyReply);
+    const { exec, calls: ran } = execStub(() => ({ stdout: SILENT_SKIP_SUITE }));
+    const manager = newOrchestrator(port, () => false, { exec });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const parked = loadTask(taskId);
+    expect(parked?.state).toBe('APPROVAL');
+    expect(parked?.attempt).toBe(1);
+    expect(parked?.resume_state).toBe('VERIFYING');
+    expect(ran).toHaveLength(1);
+    expect(parked?.pending_action).toContain('oracle');
+    expect(parked?.report_lines.join(' ')).toContain('ran 0 tests');
+  });
+
+  test('a project with no registered assert command is asked about, never guessed', async () => {
+    fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: REPO }, null, 2));
+    const { port } = makePort(happyReply);
+    const { exec, calls: ran } = execStub(() => ({}));
+    const manager = newOrchestrator(port, () => false, { exec });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const parked = loadTask(taskId);
+    expect(parked?.state).toBe('APPROVAL');
+    expect(ran, 'nothing may be run when nothing is registered').toHaveLength(0);
+    expect(parked?.report_lines.join(' ')).toContain('no assert command found');
+    expect(parked?.report_lines.join(' ')).toContain('projects.json');
+  });
+
+  test('registering the command and approving re-verifies without rebuilding', async () => {
+    fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: REPO }, null, 2));
+    const { port, calls } = makePort(happyReply);
+    const { exec, calls: ran } = execStub(() => ({}));
+    const manager = newOrchestrator(port, () => false, { exec });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('APPROVAL');
+    const spawnsBefore = calls.length;
+
+    writeRegistry();
+    await manager.approve(taskId, true);
+    await manager.settle(taskId);
+
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+    expect(loadTask(taskId)?.attempt).toBe(1);
+    expect(ran).toHaveLength(1);
+    expect(calls.slice(spawnsBefore).map((c) => c.phase)).toEqual(['spec-check', 'tech-review']);
+  });
+});
+
+describe('approval gate', () => {
+  test('needs_human parks at APPROVAL and releases the repo while it waits', async () => {
+    const { port, calls } = makePort((phase) =>
+      phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT,
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(loadTask(taskId)?.state).toBe('APPROVAL');
+    expect(calls.map((c) => c.phase)).toEqual(['size']);
+    expect(holderOf(projectLock(PROJECT))).toBeNull();
+
+    await manager.approve(taskId, true);
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+  });
+
+  test('a rejection is terminal', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    await manager.approve(taskId, false);
+    expect(loadTask(taskId)?.state).toBe('REJECTED');
+    const again = await manager.approve(taskId, true);
+    expect(again.ok).toBe(false);
+  });
+
+  test('a telegram task always asks first even when the envelope is clean', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'telegram' });
+    await manager.settle(taskId);
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('APPROVAL');
+    expect(task?.report_lines.join(' ')).toContain('telegram');
+  });
+
+  test('an answer counts as a human touch and lands in the gate log', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    await manager.answer(taskId, 'apply the code to the regular portion only');
+
+    expect(loadTask(taskId)?.human_touches).toBe(1);
+    const row = readEntries().find((e) => e.gate === 'human-answer');
+    expect(row?.human_intervened).toBe(true);
+    expect(row?.caught).toContain('regular portion');
+  });
+});
+
+describe('scarce resources', () => {
+  test('B8-judge holds the single browser token and gives it back', async () => {
+    const { port, calls } = makePort((phase) =>
+      phase === 'size' ? envelopeJson({ oracle_kind: ['my-chrome'] }) : PASS_VERDICT,
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const judge = calls.find((c) => c.phase === 'B8-judge');
+    expect(judge?.browserTokenHolder).toBe(taskId);
+    expect(calls.find((c) => c.phase === 'execute')?.browserTokenHolder).toBeNull();
+    expect(holderOf(BROWSER_TOKEN)).toBeNull();
+    expect(loadTask(taskId)?.holds).toEqual([]);
+  });
+
+  // The split in §7.4 only buys anything if the repeatable half really does
+  // stay off the token. B8-assert runs as a manager subprocess, so the token
+  // must be unheld while the command runs and while every non-browser gate
+  // runs, even on a task whose lane does reach for Chrome later.
+  test('B8-assert runs while the browser token is free', async () => {
+    const holders: Array<string | null> = [];
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ oracle_kind: ['my-chrome'] }) : PASS_VERDICT));
+    const exec: ExecFn = async () => {
+      holders.push(holderOf(BROWSER_TOKEN));
+      return { exitCode: 0, stdout: GREEN_SUITE, stderr: '', timedOut: false };
+    };
+    const manager = newOrchestrator(port, () => false, { exec });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(holders).toEqual([null]);
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+  });
+
+  test('three projects assert at the same time without contending', async () => {
+    writeRegistry({ other: { path: REPO, assert: [ASSERT_CMD] }, third: { path: REPO, assert: [ASSERT_CMD] } });
+    let inFlight = 0;
+    let peak = 0;
+    const { port } = makePort(happyReply);
+    const exec: ExecFn = async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      inFlight--;
+      return { exitCode: 0, stdout: GREEN_SUITE, stderr: '', timedOut: false };
+    };
+    const manager = newOrchestrator(port, () => false, { exec });
+    const ids = await Promise.all(
+      ['fixture', 'other', 'third'].map((project) => manager.submit({ project, issue: 'p1', source: 'cli' })),
+    );
+    await Promise.all(ids.map((r) => manager.settle(r.taskId)));
+
+    for (const r of ids) expect(loadTask(r.taskId)?.state).toBe('REPORTED');
+    expect(peak, 'B8-assert must not serialize across projects').toBeGreaterThan(1);
+    expect(holderOf(BROWSER_TOKEN)).toBeNull();
+  }, 20_000);
+
+  test('a headless verify never touches the token', async () => {
+    const { port, calls } = makePort((phase) =>
+      phase === 'size' ? envelopeJson({ oracle_kind: ['playwright'] }) : PASS_VERDICT,
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    for (const call of calls) expect(call.browserTokenHolder).toBeNull();
+    expect(calls.map((c) => c.phase)).not.toContain('B8-judge');
+  });
+
+  test('two projects run at once; two tasks on one project serialize', async () => {
+    writeRegistry({ other: { path: REPO, assert: [ASSERT_CMD] } });
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const a = await manager.submit({ project: PROJECT, issue: 'a', source: 'cli' });
+    const b = await manager.submit({ project: PROJECT, issue: 'b', source: 'cli' });
+    const c = await manager.submit({ project: 'other', issue: 'c', source: 'cli' });
+    await Promise.all([manager.settle(a.taskId), manager.settle(b.taskId), manager.settle(c.taskId)]);
+
+    for (const id of [a.taskId, b.taskId, c.taskId]) expect(loadTask(id)?.state).toBe('REPORTED');
+    expect(holderOf(projectLock(PROJECT))).toBeNull();
+    expect(holderOf(projectLock('other'))).toBeNull();
+  }, 20_000);
+});
+
+describe('cost ceilings', () => {
+  test('a task that blows its ceiling stops and asks before the next spawn', async () => {
+    const { port, calls } = makePort(happyReply, 4);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('APPROVAL');
+    expect(task?.pending_action).toBe('raise the budget');
+    expect(task?.report_lines.join(' ')).toContain('reached ceiling');
+    expect(calls.length).toBeLessThan(4);
+  });
+
+  test('approving a budget park raises the ceiling and resumes where it stopped', async () => {
+    const { port, calls } = makePort(happyReply, 4);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    const parked = loadTask(taskId);
+    expect(parked?.state).toBe('APPROVAL');
+    const resumeState = parked?.resume_state;
+    const ceilingBefore = parked?.cost_ceiling_usd ?? 0;
+    const callsBefore = calls.length;
+
+    await manager.approve(taskId, true);
+    await manager.settle(taskId);
+    const after = loadTask(taskId);
+    expect(after?.cost_ceiling_usd).toBeGreaterThan(ceilingBefore);
+    expect(calls.length).toBeGreaterThan(callsBefore);
+    expect(['VERIFYING', 'REVIEW', 'RUNNING']).toContain(resumeState as string);
+  });
+
+  test('the ceiling written onto the task comes from the bootstrap flat rate, not the estimate', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ est_cost_usd: 0.01 }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    const task = loadTask(taskId);
+    expect(task?.cost_ceiling_usd).toBe(5);
+    expect(task?.report_lines.join(' ')).toContain('bootstrap');
+  });
+});
+
+describe('blind sampling', () => {
+  test('a drawn task is marked full-diff', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port, () => true);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    const task = loadTask(taskId);
+    expect(task?.blind_sample).toBe(true);
+    expect(task?.review_depth).toBe('full-diff');
+  });
+
+  test('an undrawn task stays on summary depth', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port, () => false);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.blind_sample).toBe(false);
+    expect(loadTask(taskId)?.review_depth).toBe('summary');
+  });
+});
+
+describe('stop and stopall', () => {
+  test('stop terminates a parked task and frees its locks', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    await manager.stop(taskId);
+    expect(loadTask(taskId)?.state).toBe('FAILED');
+    expect(loadTask(taskId)?.failure_reason).toContain('stopped by user');
+    expect(holderOf(projectLock(PROJECT))).toBeNull();
+  });
+
+  test('stopall reports how many it stopped and leaves nothing live', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const a = await manager.submit({ project: PROJECT, issue: 'a', source: 'cli' });
+    const b = await manager.submit({ project: PROJECT, issue: 'b', source: 'cli' });
+    await Promise.all([manager.settle(a.taskId), manager.settle(b.taskId)]);
+    expect(await manager.stopAll()).toBe(2);
+    expect(listTasks().every((t) => t.state === 'FAILED')).toBe(true);
+  });
+});
+
+describe('crash recovery', () => {
+  test('a task caught mid-run is failed on boot, never silently restarted', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const crashed = loadTask(taskId);
+    if (!crashed) throw new Error('task vanished');
+    crashed.state = 'RUNNING';
+    await saveTaskAndIndex(crashed);
+    await import('../lib/locks').then((m) => m.tryAcquire(BROWSER_TOKEN, taskId));
+    expect(holderOf(BROWSER_TOKEN)).toBe(taskId);
+
+    const report = await reconcile();
+    expect(report.failed.map((f) => f.id)).toContain(taskId);
+    expect(loadTask(taskId)?.state).toBe('FAILED');
+    expect(loadTask(taskId)?.failure_reason).toContain('not restarted automatically');
+    expect(holderOf(BROWSER_TOKEN)).toBeNull();
+    expect(report.revokedLocks.map((r) => r.lock)).toContain(BROWSER_TOKEN);
+  });
+
+  test('a failed task stops claiming holds it no longer has', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const crashed = loadTask(taskId);
+    if (!crashed) throw new Error('task vanished');
+    crashed.state = 'VERIFYING';
+    crashed.holds = [BROWSER_TOKEN];
+    await saveTaskAndIndex(crashed);
+    await import('../lib/locks').then((m) => m.tryAcquire(BROWSER_TOKEN, taskId));
+
+    await reconcile();
+    expect(loadTask(taskId)?.holds).toEqual([]);
+    expect(holderOf(BROWSER_TOKEN)).toBeNull();
+  });
+
+  test('crash-recovery events use the same wire shape as the driver', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    const crashed = loadTask(taskId);
+    if (!crashed) throw new Error('task vanished');
+    crashed.state = 'RUNNING';
+    await saveTaskAndIndex(crashed);
+
+    const seen: Array<Record<string, unknown>> = [];
+    const stop = subscribe((e) => seen.push(e as unknown as Record<string, unknown>));
+    await reconcile();
+    stop();
+
+    const report = seen.find((e) => e.type === 'report');
+    expect(report).toBeDefined();
+    for (const field of ['taskId', 'project', 'issue', 'lane', 'attempt', 'cost_usd', 'ok', 'cause', 'gates', 'verify', 'assumptions', 'status']) {
+      expect(report, `report event is missing ${field}`).toHaveProperty(field);
+    }
+    expect(report?.ok).toBe(false);
+    expect(report).not.toHaveProperty('summary');
+    expect(report).not.toHaveProperty('text');
+  });
+
+  test('a re-asked approval carries an approvalId so the phone can dedupe it', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const first: Array<Record<string, unknown>> = [];
+    let stop = subscribe((e) => first.push(e as unknown as Record<string, unknown>));
+    await reconcile();
+    stop();
+    const second: Array<Record<string, unknown>> = [];
+    stop = subscribe((e) => second.push(e as unknown as Record<string, unknown>));
+    await reconcile();
+    stop();
+
+    const a = first.find((e) => e.type === 'approval');
+    const b = second.find((e) => e.type === 'approval');
+    expect(a?.approvalId).toBeDefined();
+    expect(a?.approvalId).toBe(b?.approvalId as string);
+    expect(a?.taskId).toBe(taskId);
+  });
+
+  test('a task parked at APPROVAL is re-asked, not failed', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const report = await reconcile();
+    expect(report.reAsked).toContain(taskId);
+    expect(loadTask(taskId)?.state).toBe('APPROVAL');
+  });
+
+  test('a finished task is untouched by reconcile', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    const before = loadTask(taskId);
+    await reconcile();
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+    expect(loadTask(taskId)?.updated_at).toBe(before?.updated_at ?? '');
+  });
+});
+
+describe('findings and the ensemble rule', () => {
+  test('one llm gate warns; it does not block the task', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'spec-check')
+        return verdictJson({ verdict: 'pass', reason: 'ok', findings: ['extra endpoint added'] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(task?.report_lines.join(' ')).toContain('WARN');
+    expect(task?.findings.map((f) => f.gate)).toContain('spec-check');
+    const row = readEntries().find((e) => e.gate === 'spec-check');
+    expect(row?.gate_family, 'spec-check is an llm gate and must be logged as one').toBe('llm');
+    expect(row?.verdict).toBe('caught');
+  });
+
+  test('two DIFFERENT llm gates naming the same finding do block', async () => {
+    const finding = 'extra endpoint added';
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'spec-check' || phase === 'tech-review')
+        return verdictJson({ verdict: 'pass', reason: 'ok', findings: [finding] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('BLOCKED');
+    expect(loadTask(taskId)?.failure_reason).toContain('two llm gates agree');
+  });
+
+  // A reviewer asked to find gaps always finds gaps (workflow.md B4). Only a
+  // finding that touches correctness earns a round trip; the rest are reported
+  // and forgotten. Two gates agreeing on an ADVISORY must not block, or the
+  // triage rule buys nothing.
+  test('advisories reach the report and never block, even when two gates agree', async () => {
+    const advisory = 'the helper could be named better';
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'spec-check' || phase === 'tech-review')
+        return verdictJson({ verdict: 'pass', reason: 'ok', findings: [], advisories: [advisory] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(task?.findings).toHaveLength(0);
+    expect(task?.advisories.join(' ')).toContain(advisory);
+    expect(task?.report_lines.join(' ')).not.toContain('WARN');
+  });
+
+  test('a deterministic hook failure blocks on its own', async () => {
+    const { port } = makePort((phase, call) => {
+      if (call.phase === 'execute') {
+        appendGateLog({
+          project: PROJECT,
+          gate: 'tsc',
+          gate_family: 'deterministic',
+          verdict: 'caught',
+          caught: 'TS2345 in pricing.ts',
+        });
+      }
+      return happyReply(phase);
+    }, 0.1, []);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('BLOCKED');
+    expect(loadTask(taskId)?.failure_reason).toContain('deterministic gate failed');
+  });
+
+  // "Nothing was caught" and "nothing was checked" produce the same empty
+  // finding list. A bug-nho task runs no review gate at all, so its only
+  // evidence is the assert the manager ran — and if passes were not carried,
+  // every one of them would close reporting UNMEASURED.
+  test('a lane with no review gate still counts as measured by its assert', async () => {
+    const { port, calls } = makePort((phase) => (phase === 'size' ? envelopeJson({ lane: 'bug-nho' }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(calls.map((c) => c.phase)).toEqual(['size', 'execute']);
+    expect(task?.report_lines.join(' ')).not.toContain('UNMEASURED');
+    expect(task?.gate_reports.some((r) => r.gate === 'B8-assert' && r.verdict === 'pass')).toBe(true);
+  });
+
+  test('a re-run gate supersedes what it said before, within the same attempt', async () => {
+    fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: REPO }, null, 2));
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.findings.some((f) => f.gate === 'B8-assert')).toBe(true);
+
+    writeRegistry();
+    await manager.approve(taskId, true);
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(task?.findings.some((f) => f.gate === 'B8-assert')).toBe(false);
+    expect(task?.gate_reports.filter((r) => r.gate === 'B8-assert').every((r) => r.verdict === 'pass')).toBe(true);
+  });
+
+  test('a red assert lands in the gate log as a real deterministic row', async () => {
+    const { port } = makePort(happyReply);
+    const { exec } = execStub(() => ({ exitCode: 1, stdout: ' 11 pass\n 1 fail\nRan 12 tests across 3 files.' }));
+    const manager = newOrchestrator(port, () => false, { exec });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const rows = readEntries().filter((e) => e.gate === 'B8-assert');
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.gate_family, 'the manager ran the command itself; this is evidence, not a claim').toBe(
+        'deterministic',
+      );
+      expect(row.verdict).toBe('caught');
+      expect(row.caught).toContain(ASSERT_CMD);
+    }
+  });
+
+  test('the closing chain writes both families, so the log has a real denominator', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson({ oracle_kind: ['my-chrome', 'tsc'] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const chain = readEntries().filter((e) => !e.gate.startsWith('lifecycle:'));
+    const families = new Set(chain.map((e) => e.gate_family));
+    expect(families.has('deterministic'), 'no deterministic row').toBe(true);
+    expect(families.has('llm'), 'no llm row — gate-log stats would read 100% deterministic').toBe(true);
+
+    const llmGates = chain.filter((e) => e.gate_family === 'llm').map((e) => e.gate);
+    expect(llmGates).toContain('spec-check');
+    expect(llmGates).toContain('tech-review');
+    expect(llmGates).toContain('B8-judge');
+    expect(chain.filter((e) => e.gate === 'B8-assert')[0]?.gate_family).toBe('deterministic');
+  });
+});
+
+describe('a deterministic gate must be witnessed by something other than the agent', () => {
+  test('a self-reported pass with no hook row is demoted to llm in the gate log', async () => {
+    const { port } = makePort(happyReply, 0.1, []);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const tscRows = readEntries().filter((e) => e.gate === 'tsc');
+    expect(tscRows.length).toBeGreaterThan(0);
+    for (const row of tscRows) {
+      expect(row.gate_family, 'an unwitnessed tsc claim must not count as deterministic').toBe('llm');
+      expect(row.caught).toContain('unverified-self-report');
+    }
+  });
+
+  test('the same claim keeps deterministic when a hook really wrote the row', async () => {
+    const { port } = makePort(happyReply, 0.1, ['tsc']);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const fromAgent = readEntries().filter((e) => e.gate === 'tsc' && e.lane === 'bug-lon');
+    expect(fromAgent.length).toBeGreaterThan(0);
+    for (const row of fromAgent) {
+      expect(row.gate_family).toBe('deterministic');
+      expect(row.caught ?? '').not.toContain('unverified-self-report');
+    }
+  });
+
+  test('an unwitnessed deterministic failure warns instead of blocking', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute')
+        return verdictJson({
+          verdict: 'pass',
+          reason: 'ok',
+          gates: [{ gate: 'tsc', gate_family: 'deterministic', verdict: 'caught', caught: 'TS2345' }],
+        });
+      return PASS_VERDICT;
+    }, 0.1, []);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state, 'a claim nothing corroborates must not block on its own').toBe('REPORTED');
+    expect(task?.report_lines.join(' ')).toContain('WARN');
+    expect(task?.findings.map((f) => f.gate_family)).toContain('llm');
+  });
+
+  test('a hook row from another project does not vouch for this one', async () => {
+    appendGateLog({ project: 'someone-else', gate: 'tsc', gate_family: 'deterministic', verdict: 'pass' });
+    const { port } = makePort(happyReply, 0.1, []);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const rows = readEntries(PROJECT).filter((e) => e.gate === 'tsc');
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.gate_family).toBe('llm');
+  });
+});
+
+// The unit test proves the prompt builder is clean. This proves the whole
+// wiring is: a builder that says as much as it likes, through every field the
+// manager records, still cannot put a word in front of spec-check. That is the
+// only version of the invariant that survives a refactor of the orchestrator.
+describe('spec-check stays blind through the real driver', () => {
+  test('nothing the builder said reaches the spec-check prompt', async () => {
+    const MARKER = 'BUILDER-NARRATIVE-I-refactored-the-cart-module-while-I-was-in-there';
+    const prompts: string[] = [];
+    const { port } = makePort((phase, call) => {
+      if (call.phase === 'spec-check' || call.phase === 'tech-review') return PASS_VERDICT;
+      if (phase === 'size') return envelopeJson();
+      return verdictJson({
+        verdict: 'pass',
+        reason: MARKER,
+        root_cause: 'the rule engine returns the base price on mixed carts',
+        gates: [],
+        findings: [],
+        advisories: [MARKER],
+        assumptions: [MARKER],
+        questions: [],
+      });
+    });
+    const recording: SpawnPort = {
+      async run(req) {
+        prompts.push(req.prompt);
+        return port.run(req);
+      },
+    };
+    const manager = newOrchestrator(recording);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const specCheck = prompts.find((p) => p.includes('Report this as gate "spec-check"'));
+    expect(specCheck).toBeDefined();
+    expect(specCheck, 'the builder narrative reached spec-check').not.toContain(MARKER);
+    expect(specCheck).toContain('the rule engine returns the base price on mixed carts');
+    expect(specCheck).toContain('Discount code ignored on mixed carts');
+
+    const task = loadTask(taskId);
+    expect(task?.assumptions, 'the record still keeps what the builder said').toContain(MARKER);
+    expect(task?.root_cause).toContain('rule engine');
+  });
+
+  test('spec-check and the reviewers run with no tool that can edit a file', async () => {
+    const seen: Array<{ gate: string; allowed?: string[]; disallowed?: string[] }> = [];
+    const { port } = makePort(happyReply);
+    const recording: SpawnPort = {
+      async run(req) {
+        const gate = req.prompt.match(/Report this as gate "([^"]+)"/);
+        if (gate) seen.push({ gate: gate[1], allowed: req.allowedTools, disallowed: req.disallowedTools });
+        return port.run(req);
+      },
+    };
+    const manager = newOrchestrator(recording);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(seen.map((s) => s.gate)).toEqual(['spec-check', 'tech-review']);
+    for (const gate of seen) {
+      expect(gate.allowed, `${gate.gate} can still write`).toEqual(['Read', 'Glob', 'Grep']);
+      expect(gate.disallowed).toContain('Edit');
+      expect(gate.disallowed).toContain('Write');
+      expect(gate.disallowed).toContain('Bash');
+    }
+  });
+
+  test('an agent claiming a gate the manager owns has the claim dropped', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute')
+        return verdictJson({
+          verdict: 'pass',
+          reason: 'done',
+          gates: [
+            { gate: 'B8-assert', gate_family: 'deterministic', verdict: 'pass', caught: '' },
+            { gate: 'spec-check', gate_family: 'llm', verdict: 'pass', caught: '' },
+          ],
+        });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.report_lines.join(' ')).toContain('dropped agent-claimed gate "B8-assert"');
+    expect(task?.report_lines.join(' ')).toContain('dropped agent-claimed gate "spec-check"');
+    const assertRows = readEntries().filter((e) => e.gate === 'B8-assert');
+    expect(assertRows).toHaveLength(1);
+    expect(assertRows[0].caught ?? '').not.toContain('unverified-self-report');
+  });
+});
+
+describe('bad agent output', () => {
+  test('an unparseable envelope blocks instead of routing on a guess', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? 'I could not size this.' : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('BLOCKED');
+    expect(loadTask(taskId)?.failure_reason).toContain('envelope rejected');
+  });
+
+  test('a missing verdict block is a failure, not a pass', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson() : 'all good, trust me'));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('BLOCKED');
+  });
+});
+
+describe('nothing irreversible happens without a human (§10.1)', () => {
+  test('an agent asking to push parks the task and emits an approval', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const stop = subscribe((e) => seen.push(e as unknown as Record<string, unknown>));
+    const { port, calls } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute')
+        return verdictJson({ verdict: 'pass', reason: 'fix staged', gates: [], irreversible: ['git push origin fix/t1'] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    stop();
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('APPROVAL');
+    expect(task?.pending_action).toBe('git push origin fix/t1');
+    expect(task?.resume_state).toBe('RUNNING');
+    expect(calls.map((c) => c.phase)).toEqual(['size', 'execute']);
+
+    const approval = seen.find((e) => e.type === 'approval');
+    expect(approval?.action).toBe('git push origin fix/t1');
+    expect(String(approval?.detail)).toContain('irreversible');
+  });
+
+  test('the ask happens even when the verdict itself passed clean', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'spec-check')
+        return verdictJson({ verdict: 'pass', reason: 'looks right', gates: [], irreversible: ['deploy to prod'] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('APPROVAL');
+    expect(task?.resume_state).toBe('REVIEW');
+  });
+
+  test('approving resumes the exact phase it parked in, without redoing earlier ones', async () => {
+    let executed = 0;
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute') {
+        executed++;
+        return executed === 1
+          ? verdictJson({ verdict: 'pass', reason: 'staged', gates: [], irreversible: ['git commit'] })
+          : PASS_VERDICT;
+      }
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('APPROVAL');
+
+    await manager.approve(taskId, true);
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+    expect(loadTask(taskId)?.attempt).toBe(1);
+  });
+
+  test('rejecting an irreversible ask ends the task without doing it', async () => {
+    const { port, calls } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute')
+        return verdictJson({ verdict: 'pass', reason: 'staged', gates: [], irreversible: ['drop the table'] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    await manager.approve(taskId, false);
+    expect(loadTask(taskId)?.state).toBe('REJECTED');
+    expect(calls.filter((c) => c.phase === 'execute')).toHaveLength(1);
+  });
+});
+
+describe('report events carry the fields the phone renders', () => {
+  test('a finished task reports lane, cost, gates, verify and assumptions', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const stop = subscribe((e) => seen.push(e as unknown as Record<string, unknown>));
+    const { port } = makePort((phase) =>
+      phase === 'size'
+        ? envelopeJson({ assumptions: ['discount applies per line'], assumption_count: 1 })
+        : PASS_VERDICT,
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    stop();
+
+    const report = seen.find((e) => e.type === 'report');
+    expect(report).toBeDefined();
+    expect(report?.taskId).toBe(taskId);
+    expect(report?.lane).toBe('bug-lon');
+    expect(report?.ok).toBe(true);
+    expect(report?.attempt).toBe(1);
+    expect(typeof report?.cost_usd).toBe('number');
+    expect(Array.isArray(report?.gates)).toBe(true);
+    expect(report?.assumptions).toEqual(['discount applies per line']);
+    expect(String(report?.status)).toContain('staged');
+
+    // §7.4: what a human reads has to say how many tests RAN, not just that
+    // the command was green. "12 ran" and "0 ran, 7 skipped" both exit 0.
+    const verify = (report?.verify as string[]).join(' ');
+    expect(verify).toContain('12 test(s) ran');
+    expect(verify).toContain(ASSERT_CMD);
+    expect(loadTask(taskId)?.assert_runs[0]).toMatchObject({ cmd: ASSERT_CMD, ran: 12, state: 'green' });
+  });
+
+  test('a blocked task reports ok:false with the cause', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const stop = subscribe((e) => seen.push(e as unknown as Record<string, unknown>));
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute') return verdictJson({ verdict: 'blocked', reason: 'b2-root-cause-unproven', gates: [] });
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    stop();
+    const report = seen.find((e) => e.type === 'report');
+    expect(report?.ok).toBe(false);
+    expect(String(report?.cause)).toContain('b2-root-cause-unproven');
+  });
+});
