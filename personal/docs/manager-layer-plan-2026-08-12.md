@@ -803,6 +803,70 @@ không có gì thay đổi và không có gì báo. Verify bằng cách ghi qua 
 - **Hook row không mang task id.** Manager khớp theo cửa sổ thời gian + project, nên một session
   vunt tự mở trên cùng repo sẽ có dòng bị tính cho task.
 
+## 11c. Tiếp tục trên MÁY KHÁC — đọc mục này trước
+
+> Viết 13/08 khi chuyển máy giữa chừng. Doc này nằm trong repo nên nó đi theo;
+> **worklog thì không.** Mục này là kênh bàn giao duy nhất đáng tin.
+
+### Cái gì KHÔNG đi theo repo
+
+Đây là chỗ dễ tưởng nhầm nhất — code sang được, nhưng phần lớn *trạng thái đã đo* thì không.
+
+| Thứ | Ở đâu | Sang máy mới? |
+|---|---|---|
+| Toàn bộ code + doc này | repo | ✅ |
+| **Sổ cổng** (`gate-log`) — gồm phép đo guard precision **71,4%** | `~/.gstack/gate-log/` | ❌ **máy-local**. Máy mới bắt đầu từ sổ RỖNG |
+| Worklog / checkpoint | `~/.gstack/projects/<slug>/checkpoints/` | ❌ máy-local |
+| `projects.json` + sổ duyệt lệnh assert | `~/.gstack/manager/` | ❌ máy-local. Phải đăng ký + duyệt lại từ đầu |
+| Symlink skill/command/rules | `~/.claude/` | ❌ phải chạy `/sync-skills` |
+| Đăng ký hook | `~/.claude/settings.json` | ❌ máy-local, phải dán lại |
+| `node_modules` | repo (gitignored) | ❌ `bun install` |
+
+**Hệ quả phải nhớ:** mọi con số trong doc này (`71,4%`, `28,6%`, bảng đo oracle) là **đo trên
+máy cũ**. Đừng cộng dồn số của hai máy như một dãy — chúng là hai phép đo độc lập. Ngưỡng P8
+tính theo từng máy cho tới khi có chỗ gộp sổ.
+
+### Bốn bước đầu trên máy mới
+
+1. `git pull` rồi `bun install`.
+2. **`/sync-skills`** — và **đọc kỹ output**. Thấy `FAILED` thì bật Windows Developer Mode rồi
+   chạy lại; thấy `REALDIR` ở skill lẽ ra phải là link thì đó là bản sao đông cứng từ lần
+   trước, xoá rồi chạy lại. Chi tiết trong mục Windows của chính skill đó.
+3. **Dán lại đăng ký hook** vào `~/.claude/settings.json` (4 hook: PreToolUse, PostToolUse,
+   Stop, SessionStart + statusline). Hook tự suy ra repo từ vị trí script nên **không cần sửa
+   path bên trong**, chỉ cần trỏ đúng checkout mới. Mẫu ở `personal/hooks/README.md`.
+4. Kiểm tra guard còn sống, cả hai chiều — một hook không bao giờ kêu và một hook hỏng **nhìn
+   giống hệt nhau**. Pipe JSON giả vào: một ca phải cho qua, một ca phải chặn, một ca phải hỏi.
+
+### Trạng thái lúc bàn giao (13/08)
+
+**Đã xong và đã push:** sổ cổng · manager core · Telegram bot (chờ token) · `/size-issue` ·
+`/gate-fp` · `personal/oracle/` · chuỗi đóng A8/B9 + `B8-assert` · guard hai bậc ·
+`/sync-skills` · cắt chuỗi leo thang qua `projects.json`.
+
+**Test:** `bun test personal/manager/ personal/skills/size-issue/ personal/oracle/` →
+**491 pass · 3 skip · 0 fail**. Đây là mốc; tụt là có hồi quy.
+
+### Việc còn lại, xếp theo thứ tự nên làm
+
+1. **Token Telegram** — `@BotFather` → `/newbot`, token + chat-id vào `.env`
+   (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_CHAT_IDS`). Xem
+   `personal/manager/telegram/README.md`. **Chỉ vunt làm được.**
+2. **Một vòng chạy THẬT** để chốt tên tool MCP cho làn `B8-judge`. Hiện `allowedTools` trong
+   `personal/manager/config.ts` là `['Read','Glob','Grep','Bash','Edit','Write','TodoWrite']` —
+   **không tool browser nào**, nên manager trao `browser-token` cho một agent không có gì để lái
+   Chrome. Làn judge xây xong nhưng **chưa chạy được**. Không đoán tên allowlist; chạy thật một
+   lần rồi xem agent xin tool gì.
+3. **Cưỡng chế red test** (P6 còn nợ) — lưu output lần chạy đỏ TRƯỚC khi sửa rồi đối chiếu.
+   Chưa có thì `red-test` mãi bị hạ xuống `llm` và ngưỡng deterministic của P8 khó đạt.
+4. **Hai FP nhỏ đã biết trong `assert-runner.ts`**, cùng lớp "giảm ồn" của quyết định #1:
+   `UNSAFE_COMMAND` từ chối `npx --no-install …` vì `-install` khớp regex; và `deno`/`make` có
+   trong regex dò của `discoverFromClaudeMd` nhưng không có trong `RUNNER_ALLOWLIST`, nên project
+   dùng chúng sẽ báo "không tìm thấy lệnh assert".
+5. Chạy thử thật: `manager run <project> <issue>` với runner thật (tới giờ mới chỉ chạy mock).
+
+---
+
 ## 12. Câu hỏi còn mở
 
 - Agent chính: spawn theo task hay session thường trú? **Đề xuất: spawn theo task**, state ở
