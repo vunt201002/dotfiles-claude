@@ -357,6 +357,52 @@ describe('runAgentSdkTest — options propagation', () => {
     expect(opts.pathToClaudeCodeExecutable).toBe('/fake/path/claude');
   });
 
+  test('no signal means no abortController reaches query() — default behavior is unchanged', async () => {
+    freshSem();
+    const stub: StubConfig = {
+      streams: [[systemInit(), assistantTurn([{ type: 'text', text: 'ok' }]), resultSuccess()]],
+      calls: [],
+    };
+    await runAgentSdkTest({ ...BASE_OPTS, queryProvider: makeStubProvider(stub) });
+    expect(stub.calls[0]!.options!).not.toHaveProperty('abortController');
+  });
+
+  test('a supplied signal reaches query() as an abortController that follows it', async () => {
+    freshSem();
+    const stub: StubConfig = {
+      streams: [[systemInit(), assistantTurn([{ type: 'text', text: 'ok' }]), resultSuccess()]],
+      calls: [],
+    };
+    const controller = new AbortController();
+    await runAgentSdkTest({
+      ...BASE_OPTS,
+      signal: controller.signal,
+      queryProvider: makeStubProvider(stub),
+    });
+
+    const forwarded = stub.calls[0]!.options!.abortController;
+    expect(forwarded).toBeInstanceOf(AbortController);
+    expect(forwarded!.signal.aborted).toBe(false);
+    controller.abort();
+    expect(forwarded!.signal.aborted).toBe(true);
+  });
+
+  test('a signal already aborted before the call arrives aborted', async () => {
+    freshSem();
+    const stub: StubConfig = {
+      streams: [[systemInit(), assistantTurn([{ type: 'text', text: 'ok' }]), resultSuccess()]],
+      calls: [],
+    };
+    const controller = new AbortController();
+    controller.abort();
+    await runAgentSdkTest({
+      ...BASE_OPTS,
+      signal: controller.signal,
+      queryProvider: makeStubProvider(stub),
+    });
+    expect(stub.calls[0]!.options!.abortController!.signal.aborted).toBe(true);
+  });
+
   test('empty systemPrompt means no systemPrompt option passed', async () => {
     freshSem();
     const stub: StubConfig = {

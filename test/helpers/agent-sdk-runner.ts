@@ -126,6 +126,20 @@ export interface RunAgentSdkOptions {
    * to auto-allow them.
    */
   canUseTool?: CanUseTool;
+  /**
+   * Cancels an in-flight query. Purely additive: when omitted, no
+   * abortController reaches the SDK and behavior is byte-identical to before.
+   * The SDK takes an AbortController rather than a signal, so the signal is
+   * bridged to one per attempt (an already-aborted signal aborts immediately).
+   */
+  signal?: AbortSignal;
+}
+
+function controllerForSignal(signal: AbortSignal): AbortController {
+  const controller = new AbortController();
+  if (signal.aborted) controller.abort();
+  else signal.addEventListener('abort', () => controller.abort(), { once: true });
+  return controller;
 }
 
 /**
@@ -365,6 +379,7 @@ export async function runAgentSdkTest(
         env: hermeticChildEnv(opts.env),
         pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
         ...(hasCanUseTool ? { canUseTool: opts.canUseTool } : {}),
+        ...(opts.signal ? { abortController: controllerForSignal(opts.signal) } : {}),
       };
       // Empty bare string means "omit entirely" (SDK runs with no override).
       // Any object or non-empty string is passed through.
