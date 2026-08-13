@@ -1,0 +1,226 @@
+{
+  "fixture": "personal/oracle/fixtures",
+  "note": "Every bug below happened. `source` names the commit, debt row, or pattern line it was taken from. Fields id/category/severity/description/detection_hint follow test/fixtures/qa-eval-ground-truth.json; source/bug_class/lang/spec/guard_input are oracle additions.",
+  "bugs": [
+    {
+      "id": "hook-hardcoded-repo-path",
+      "category": "environment",
+      "severity": "high",
+      "description": "The harness audit resolves its repo from a hardcoded $HOME/Project/github/... path, so on a machine that checks out elsewhere the guard on line 2 exits 0 and the audit never runs. The hook written to catch a dead harness is itself dead.",
+      "detection_hint": "hardcode|HOME|path|silent|exit 0|never runs|BASH_SOURCE",
+      "source": "dotfiles-claude 717480d1 fix(hooks): find the dotfiles repo from the script's own location",
+      "bug_class": "environment assumption turns a gate into a silent no-op",
+      "lang": "bash",
+      "spec": "Make harness-check report on the personal/ harness of the checkout it lives in, on any machine."
+    },
+    {
+      "id": "hook-lint-flag-version-drift",
+      "category": "environment",
+      "severity": "high",
+      "description": "The lint hook passes --no-warn-ignored, which only exists from ESLint v9. Older installs reject it at CLI-parse time before linting runs, so the hook blocks every edit instead of just ignored files.",
+      "detection_hint": "eslint|flag|version|--no-warn-ignored|blocks every edit|false positive|CLI parse",
+      "source": "dotfiles-claude 34753b89 fix(hooks): fall back when ESLint rejects --no-warn-ignored",
+      "bug_class": "tool-version drift; a launcher error read as a lint failure",
+      "lang": "bash",
+      "spec": "Lint the file that was just edited and block on real lint errors."
+    },
+    {
+      "id": "hook-gate-without-config",
+      "category": "twin-path",
+      "severity": "high",
+      "description": "The stop gate guards the wishlist branch with a root-tsconfig check but leaves the joy branch unguarded, so on a repo with no root tsconfig the compiler prints help text, exits non-zero, and the gate reports FAIL on every turn including turns that touched no code.",
+      "detection_hint": "tsconfig|no config|help text|false FAIL|every turn|twin|wishlist|joy",
+      "source": "dotfiles-claude a8ac4569 fix(hooks): skip joy tsc check when no root tsconfig exists",
+      "bug_class": "guard added on one branch and not on its twin",
+      "lang": "bash",
+      "spec": "Run the project typecheck at the end of a turn, and only when there is a real config to run it against."
+    },
+    {
+      "id": "guard-denylist-variant",
+      "category": "blast-radius",
+      "severity": "high",
+      "description": "The pre-tool-use denylist blocks `git reset --hard` and `git push --force` but not `git clean -fdx`, which destroys every untracked file with no way back. A regex denylist stops the spellings it was told about, not the intent.",
+      "detection_hint": "denylist|git clean|untracked|destroy|bypass|regex|guard",
+      "source": "personal/hooks/pre-tool-use-guard.sh DENY_CMD + harness-benchmark-2026-08-09.md section 3 (Governance is the weakest layer)",
+      "bug_class": "enumerated denylist, unenumerated variant",
+      "lang": "bash",
+      "spec": "Do not destroy uncommitted work while cleaning the working tree.",
+      "guard_input": {
+        "buggy": { "tool_input": { "command": "git clean -fdx" } },
+        "fixed": { "tool_input": { "command": "git stash push -u -m oracle-sandbox" } }
+      }
+    },
+    {
+      "id": "stage-whole-index",
+      "category": "scope-drift",
+      "severity": "high",
+      "description": "The deploy step stages with `git add -A` and commits the whole index, so any unrelated file that happened to be staged rides into the deploy commit, against the skill's own only-edit-CI gate.",
+      "detection_hint": "git add -A|whole index|unrelated file|scope|deploy commit|stage by path",
+      "source": "dotfiles-claude 21579879 fix(deploy-staging) and ce54f1e9 fix(merge-branch) — the same shape twice, in two skills",
+      "bug_class": "scope drift; a hard gate that lives only in prose",
+      "lang": "bash",
+      "spec": "Commit the CI file and nothing else, then push to trigger the pipeline.",
+      "guard_input": {
+        "buggy": { "tool_input": { "command": "git add -A && git commit -m \"deploy: staging 9\"" } },
+        "fixed": { "tool_input": { "command": "git reset -q && git commit ci.yml -m \"deploy: staging 9\"" } }
+      }
+    },
+    {
+      "id": "worklog-dedupe-key",
+      "category": "logic",
+      "severity": "medium",
+      "description": "The worklog dedupes tasks on the raw branch name while saves are written under two spellings of it (with and without the slash), so one branch shows up as two standup rows, each with its own stale next action.",
+      "detection_hint": "dedupe|branch|slash|normalize|duplicate|two rows|one task",
+      "source": "dotfiles-claude 5f26ea8c fix(my-worklog): count one branch as one task regardless of slashes",
+      "bug_class": "key normalization mismatch between writer and reader",
+      "lang": "js",
+      "spec": "One branch is one task in the standup, newest save wins."
+    },
+    {
+      "id": "symlink-script-path",
+      "category": "environment",
+      "severity": "medium",
+      "description": "The note script resolves its default vault relative to its own file path, but it is reached through a symlink in ~/.claude/skills, so the vault lands next to the link instead of inside the checkout and the notes never get committed.",
+      "detection_hint": "symlink|realpath|__file__|vault|outside repo|not committed|link",
+      "source": "dotfiles-claude 81f407ed fix(note): resolve the vault path through the real script location",
+      "bug_class": "path resolved through a link instead of through the link's target",
+      "lang": "js",
+      "spec": "Default the vault to this repo's own vault directory, wherever the skill is invoked from."
+    },
+    {
+      "id": "sheet-tombstone-resurrection",
+      "category": "logic",
+      "severity": "high",
+      "description": "A row the user cleared by hand still carries its hidden page id, and the update path matches on that id and writes the task back, so deleting a task from the sheet is inverted by the next sync.",
+      "detection_hint": "deleted|resurrect|tombstone|hidden id|hand edit|sync overwrites",
+      "source": "dotfiles-claude 9ecc7bcf feat(monthly-point-sync): never resurrect deleted tasks (2026-08-06 incident)",
+      "bug_class": "two paths disagree about what a user's edit meant",
+      "lang": "js",
+      "spec": "Sync Notion tasks into the month tab: update rows that exist, append rows that do not."
+    },
+    {
+      "id": "sheet-empty-row-footprint",
+      "category": "boundary",
+      "severity": "high",
+      "description": "The append target is chosen by looking at column A alone, so a hand-edited row with a blank title but live data in every other column reads as empty and is overwritten outright.",
+      "detection_hint": "empty row|column A|footprint|overwrite|hand edit|data loss|blank title",
+      "source": "dotfiles-claude c52959ff feat(monthly-point-sync): safe row append (live data loss in the 08/2026 tab)",
+      "bug_class": "partial emptiness check treated as total emptiness",
+      "lang": "js",
+      "spec": "Append a new task into the first genuinely empty row of the month tab."
+    },
+    {
+      "id": "cross-surface-token-drift",
+      "category": "twin-path",
+      "severity": "medium",
+      "description": "The same card is duplicated across admin, storefront and preview surfaces; one copy drifted to a different spacing token. QC reports one surface, so a fix that only touches that surface leaves the other copies wrong.",
+      "detection_hint": "duplicate|surface|token|drift|one surface|grep class name|N copies",
+      "source": "design-eye.md section D1 pattern 22 (Gap = 1)",
+      "bug_class": "N duplicated copies, one drifted",
+      "lang": "js",
+      "spec": "The reward card uses --space-4 padding and --space-3 gap on every surface it appears on."
+    },
+    {
+      "id": "scope-drift-extra-endpoint",
+      "category": "scope-drift",
+      "severity": "medium",
+      "description": "The change delivers the requested cart summary and also ships a /discount/preview endpoint and a telemetry beacon nobody asked for. Every test of the requested behaviour passes.",
+      "detection_hint": "scope|extra endpoint|not requested|drift|telemetry|unasked|spec",
+      "source": "manager-layer-plan-2026-08-12.md section 3.3 gate-log example; workflow.md A8 spec-check target class",
+      "bug_class": "silent scope drift, invisible to tests by construction",
+      "lang": "js",
+      "spec": "Add a cart summary endpoint at /cart/summary that returns subtotal, discount and total. Nothing else."
+    },
+    {
+      "id": "twin-mapper-drift",
+      "category": "twin-path",
+      "severity": "high",
+      "description": "purchasingEntity was added to both order queries but mapped in only one of the two mapping functions, so an order first invoiced by the bulk sweep is built as retail even when the buyer is a company. Nothing could notice because each path had its own mapper.",
+      "detection_hint": "two mappers|bulk|detail|B2B|company|drift|duplicate mapping|symmetry",
+      "source": "eivno docs/DEBT.md T-124",
+      "bug_class": "two copies of one mapping; a field added to both queries, mapped in one",
+      "lang": "ts",
+      "spec": "Both order fetch paths produce the same DTO, and a company buyer stays a company buyer."
+    },
+    {
+      "id": "pagination-truncation",
+      "category": "boundary",
+      "severity": "high",
+      "description": "The detail query returns the first 50 line items and the invoice is built from whatever came back. The guard compares the document total against the sum of its own lines, so a truncated order is invoiced for less than the customer owed and every guard passes it.",
+      "detection_hint": "pagination|first 50|truncat|line items|under-invoiced|guard passed|compares itself",
+      "source": "eivno docs/DEBT.md T-130",
+      "bug_class": "boundary above a page size, plus a guard that compares a document with itself",
+      "lang": "ts",
+      "spec": "Invoice an order for the amount the customer was charged."
+    },
+    {
+      "id": "tautological-validation",
+      "category": "fake-oracle",
+      "severity": "high",
+      "description": "Retry validates a credit note against a total computed from the very lines that may be short, so the document always agrees with itself and a note held for crediting too little is one Retry click from being transmitted.",
+      "detection_hint": "tautolog|validates itself|same figure|retry|held|credit note|second opinion",
+      "source": "eivno docs/DEBT.md T-147 (and T-148, the third surface running the same tautology)",
+      "bug_class": "an oracle whose reference figure is derived from the thing it is checking",
+      "lang": "ts",
+      "spec": "Refuse to retry a document whose total does not match what the customer was actually charged."
+    },
+    {
+      "id": "ignored-input-field",
+      "category": "logic",
+      "severity": "high",
+      "description": "taxes_included arrives on the order and is read nowhere, so a shop that quotes prices with VAT included has VAT added on top a second time. The dashboard shows the correct stored total; only the transmitted document is wrong.",
+      "detection_hint": "taxes_included|VAT twice|over-invoiced|never read|grep returns zero|tax inclusive",
+      "source": "eivno docs/DEBT.md T-81",
+      "bug_class": "an input field that exists and is never read",
+      "lang": "ts",
+      "spec": "Build a document whose payable amount equals what the customer paid, for both tax-inclusive and tax-exclusive shops."
+    },
+    {
+      "id": "silent-skip-without-env",
+      "category": "fake-oracle",
+      "severity": "high",
+      "description": "The integration suite returns ok when TEST_DATABASE_URL is absent, so the same commit runs on the machine that has a .env.test and reports green without running anything on the machine that does not.",
+      "detection_hint": "skip|silent|TEST_DATABASE_URL|env missing|reports ok|zero ran|green without running",
+      "source": "eivno integration suite, recorded as oracle law 2 in manager-layer-plan-2026-08-12.md section 7.4; related row T-113",
+      "bug_class": "a suite that reports pass when it did not run",
+      "lang": "ts",
+      "spec": "Run the integration cases and report the result."
+    },
+    {
+      "id": "idempotency-key-race",
+      "category": "concurrency",
+      "severity": "high",
+      "description": "When the refund reader is down the webhook path falls back to the payload, issues a short credit note, and spends the refund idempotency key. The reconcile sweep that would have issued the correct document is then locked out permanently.",
+      "detection_hint": "race|idempotency|key spent|fallback|webhook|sweep|permanent|fail closed",
+      "source": "eivno docs/DEBT.md T-146 (decision 2: a failed read throws, it does not fall back)",
+      "bug_class": "two writers race for one key and the loser spends it",
+      "lang": "ts",
+      "spec": "Issue exactly one credit note per refund, for the amount Shopify states."
+    },
+    {
+      "id": "global-queue-drain",
+      "category": "concurrency",
+      "severity": "medium",
+      "description": "The queue drain takes every row in the table regardless of which run enqueued it, so two concurrent runs eat each other's rows and both report on work they never did.",
+      "detection_hint": "concurrent|drain|global|run id|scope|eats rows|two runs",
+      "source": "eivno docs/DEBT.md T-120",
+      "bug_class": "shared-state drain with no per-run scope",
+      "lang": "ts",
+      "spec": "Each run processes the rows it enqueued."
+    },
+    {
+      "id": "scroll-pinned-control",
+      "category": "boundary",
+      "severity": "medium",
+      "description": "The floating close control is a sibling of the scroller rather than a child of it, so its rect never moves while content scrolls under it. The layout is correct in the state the screenshot was taken in and wrong from the first scroll onward.",
+      "detection_hint": "scroll|overlap|floating control|sibling|rect invariant|only after scrolling|z-index",
+      "source": "design-eye.md section D1 pattern 21 (Gap = 1)",
+      "bug_class": "correct at the one state anybody looked at",
+      "lang": "ts",
+      "spec": "The close control stays clear of list content at every scroll position."
+    }
+  ],
+  "total_bugs": 19,
+  "minimum_detection": 1,
+  "max_false_positives": 2
+}
