@@ -4,6 +4,20 @@
 # full tsc mỗi edit đốt ~25 phút wall-clock/feature).
 # Exit 2 + stderr = Claude thấy lỗi ngay và sửa trước khi đi tiếp.
 # Cần: jq. Tune LINT_CMD theo repo (Wishlist: yarn eslint · Joy: npx eslint).
+#
+# Lint fail ghi 1 dòng gate log (plan §3.3). Cố ý KHÔNG ghi dòng pass: hook này chạy trên
+# MỌI edit, một dòng/edit sẽ ngập sổ và thêm ~100ms vào đường nóng. Đổi lại, lint không có
+# mẫu số — cột catch-rate của nó trong `gate-log stats` đọc là vô nghĩa, chỉ đọc cột share.
+
+# Đường nóng (mọi Edit/Write) không được trả giá cho việc chỉ dùng khi lint FAIL.
+log_caught() {
+  local bin
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/bin/gate-log"
+  [ -f "$bin" ] || return 0
+  command -v bun >/dev/null 2>&1 || return 0
+  bun "$bin" append --project "${repo:-unknown}" --gate lint \
+    --family deterministic --verdict caught --caught "$1" >/dev/null 2>&1 || true
+}
 
 # --- Repo dispatch (cho global-hook mode: đăng ký 1 lần ở ~/.claude/settings.json,
 # không cần file nào trong repo app). Repo lạ / không config → exit 0 im lặng.
@@ -37,6 +51,7 @@ if printf '%s' "$fp" | grep -Eq "\.($EXT)$"; then
   fi
 
   if [ $status -ne 0 ]; then
+    log_caught "file=$(basename "$fp") $(printf '%s' "$out" | tail -5 | tr '\n\r\t' '   ' | cut -c1-260)"
     printf '%s\n' "LINT FAIL trên file vừa sửa ($fp) — sửa trước khi làm tiếp:" >&2
     printf '%s\n' "$out" | tail -30 >&2
     exit 2
