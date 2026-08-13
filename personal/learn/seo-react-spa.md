@@ -3,8 +3,8 @@ topic: SEO toàn diện (content + technical + off-page) — áp dụng tienvu-b
 mode: plan
 status: in-progress
 started: 2026-06-24
-last_session: 2026-07-27
-next_start: "Buổi 4 XONG (title 6 trang + 2 H1 đã chốt, xem bảng cuối Ghi chú 27/07). TRƯỚC KHI VÀO BUỔI 5 — làm 2 việc P0: (1) set NEXT_PUBLIC_SITE_URL=https://tienvujsc.com.vn ở production + đổi 2 fallback trong code (SEO.js:11 'https://tienvu-bt.com' → domain thật; ThemeLayout.js:33 '' → domain thật); (2) kéo Buổi 9 (sitemap+robots, cả 2 đang 404) lên làm TRƯỚC Buổi 5. Rồi mới vào Buổi 5 (Site Architecture). MỞ ĐẦU HỎI: (a) search site:tienvujsc.com.vn đã ra chưa, (b) GSC Hiệu suất/Lập chỉ mục đã có data chưa, (c) đã áp 6 title + 2 H1 lên site chưa."
+last_session: 2026-08-10
+next_start: "CHẠY THEO /learn v2 — buổi mở bằng REVIEW, không mở bằng audit. (1) REVIEW: rút thẻ tới hạn trong seo-react-spa.cards.md, ưu tiên 5 thẻ Buổi 9 vì đã giảng 10/08 mà CHƯA hỏi kiểm lần nào (disallow-khong-chan-index, 4-cong-cu-2-tang, sitemap-la-goi-y, url-tuyet-doi-bat-buoc, robots-txt-vi-tri-va-pham-vi) — 3 câu hỏi đã đặt cuối buổi 10/08 vẫn còn treo, hỏi lại đúng 3 câu đó. (2) DẠY TIẾP Buổi 9 phần 4: quyết định kiến trúc sitemap cho tienvu-bt — next-sitemap sinh lúc BUILD, nhưng page tạo qua CMS/Mongo nên sitemap build hôm trước không biết pillar mới thêm hôm sau → cân next-sitemap vs tự viết API route `pages/sitemap.xml.js` dùng getServerSideProps. (3) APPLY: dựng thật robots.txt + sitemap.xml (cả 2 đang 404). Việc P0 còn nguyên chưa động: NEXT_PUBLIC_SITE_URL chưa set ở production, SEO.js:11 vẫn fallback 'https://tienvu-bt.com' (NXDOMAIN) khiến canonical 10 trang product trỏ domain chết, ThemeLayout.js:33 vẫn fallback '' khiến hreflang ra URL tương đối. Audit chạy NGOÀI buổi học, đưa kết quả gọn, không tiêu giờ dạy."
 ---
 ## Bối cảnh (CẬP NHẬT 2026-07-09 — mở rộng scope)
 - User là frontend dev, hướng frontend depth + senior/system design.
@@ -456,3 +456,43 @@ Domain thật: `tienvujsc.com.vn` (live, HTTP 200). DNS đang ở **Tenten** (ns
   chính**; khảo sát chủ yếu **qua bản vẽ trước** vì công trình xa, đi khảo sát mà không chốt đơn
   thì tốn chi phí. → Dùng làm H1 `/contact`, và lộ ra lệch giữa content site (hứa "khảo sát tận
   nơi" 5 chỗ) và quy trình thật (xem Action items §3, mục cuối).
+
+## Ghi chú buổi 2026-08-10 (phiên 5) — ĐỔI CÁCH HỌC
+
+- Mở buổi bằng audit live (curl): **cả 3 việc P0 vẫn chưa động sau 2 tuần**. robots.txt +
+  sitemap.xml vẫn 404. Canonical + og:url 10 trang product vẫn trỏ `tienvu-bt.com` (NXDOMAIN).
+  6 title vẫn trơ trọi, `/blog` + `/contact` vẫn h1=0. Không JSON-LD Organization ở đâu.
+  CTA `/lien-he` trên /about vẫn 404. Hotline giả `0912345678` vẫn còn trên /contact.
+  `site:tienvujsc.com.vn` — công cụ search dùng trong phiên ra 0 trang (không phải Google
+  thật nên chưa kết luận; cần user tự search lại trên điện thoại).
+- Dạy **Buổi 9 phần 1-3**: bảng 4 công cụ (robots/sitemap ở tầng crawl · noindex/canonical ở
+  tầng index), Disallow không chặn index, robots.txt phải ở gốc host và bó theo
+  protocol+host+port, URL tuyệt đối bắt buộc, sitemap là gợi ý không phải lệnh. Đặt 3 câu
+  kiểm tra → **user chưa trả lời, buổi rẽ hướng**. Năm khái niệm này đã vào cards ở level 0,
+  hẹn kiểm ngay buổi tới.
+- **User feedback về CÁCH HỌC** (điểm quan trọng nhất của phiên): "kiến thức hơi ít", "thuật
+  ngữ hơi khó hiểu", "chưa thực sự hiệu quả" → yêu cầu đi tra xem người khác dùng AI học thế
+  nào rồi cải thiện chính skill `/learn`, làm trước khi học tiếp SEO.
+- **Tra cứu** (nguồn đầy đủ ở `skills/learn/references/why.md`): fluency illusion ·
+  metacognitive laziness + performance–learning paradox (Fan et al., BJET 2025, đã bình
+  duyệt) · cognitive debt (MIT, preprint n=54, đọc có dè dặt) · retrieval practice + spaced
+  repetition (+15 percentile, arXiv 2309.13060) · LearnLM đo bằng **chuyển giao sang bài mới**
+  (+5.5pp) · teach-back + ladder 3/7/14/30/90 · conversational spaced repetition ·
+  learn-faster-kit. Phản đề quan trọng: **"the student is still in the driver's seat"** —
+  và soi lại thấy đúng, một quan sát N=1 của user (khách B2B xem fanpage) đã được dựng thành
+  hẳn Buổi 13 trong lộ trình.
+- **Phát hiện phụ**: các repo roadmap SEO trên GitHub đều KÉM hơn file này (chỉ là danh sách
+  chủ đề, không có tracking/bài tập). Không đi tìm roadmap khác. Cái đáng mượn từ
+  learningseo.io: "Keep up with SEO News" là stage thường trực, và execution nằm ở stage 2
+  chứ không phải sau 15 buổi lý thuyết.
+- **Đã viết lại `/learn` v2**: REVIEW mở đầu mọi buổi · understanding gate CỨNG (user chọn)
+  với escape hatch 3 lần fail thì dừng · level 3 chỉ trao khi áp được vào ca chưa từng gặp ·
+  luật ANTI-FLUENCY (khái niệm mới: văn xuôi, không bảng/bôi đậm, ≤150 chữ rồi hỏi) · luật
+  ANTI-SYCOPHANCY (giả thuyết người học không được vào lộ trình khi chưa có gì kiểm chứng) ·
+  cuối buổi **user tự viết tổng kết**, không phải tôi viết.
+- **File mới**: `seo-react-spa.cards.md` (27 thẻ rút từ 4 buổi + Buổi 9, tất cả level 0 vì
+  chưa từng kiểm, next_review rải sẵn ≤5 thẻ/buổi) và `seo-react-spa.glossary.md` (37 thuật
+  ngữ, mỗi mục 4 dòng cố định, mọi URL đã curl xác nhận 200).
+- **Chưa làm, chờ user quyết**: đổi tên slug `seo-react-spa` → `seo-nextjs-b2b` (tên hiện tại
+  sai từ 24/06, site là Next.js Pages Router chứ không phải React SPA). Đổi thì phải đổi cả
+  3 file.
