@@ -79,10 +79,10 @@ _Ảnh: Màn chọn mode lúc mở session mới, liệt kê Standard, Code, Min
 
 Màn chọn mode (danh sách trên UI, dòng gợi ý: "Describe what you want to build"):
 
-- **Standard mode** — Coding agent đầy đủ: sửa file, shell, search file và web, skill, planning, goal, subagent, workflow.
-- **Code mode** — Vẫn đúng bộ năng lực của Standard mode, chỉ khác ở chỗ tool được expose qua Code Mode SDK, để model gộp nhiều bước vào chung một chương trình TypeScript.
-- **Minimal mode** — Coding agent hai tool: bash chạy xuyên suốt và str_replace_editor.
-- **Creator mode** — Dựng riêng để tạo preset agent tuỳ chỉnh, có hết năng lực Standard mode, cộng thêm phần soi runtime, thử nghiệm plugin và hướng dẫn viết preset.
+- **Standard mode** là coding agent đầy đủ: sửa file, shell, search file và web, skill, planning, goal, subagent, workflow.
+- **Code mode**: vẫn đúng bộ năng lực của Standard mode, chỉ khác ở chỗ tool được expose qua Code Mode SDK, để model gộp nhiều bước vào chung một chương trình TypeScript.
+- **Minimal mode** là coding agent hai tool: bash chạy xuyên suốt và str_replace_editor.
+- **Creator mode**: dựng riêng để tạo preset agent tuỳ chỉnh, có hết năng lực Standard mode, cộng thêm phần soi runtime, thử nghiệm plugin và hướng dẫn viết preset.
 
 ---
 
@@ -127,9 +127,3 @@ _Nhãn: Developer preview_
 DeepSeek Harness vẫn ở developer preview, mấy dev làm agent harness đang thử nó. Plugin lõi và API của nó còn thay đổi tiếp. DeepSeek mong cùng dev khắp nơi khám phá giới hạn của trí tuệ, bằng hạ tầng mã nguồn mở, dùng lại và ghép lại đều được.
 
 Link: View on GitHub -> https://github.com/deepseek-ai/deepseek-harness · Developer docs -> https://deepseek-harness.github.io/deepseek-harness/en/guide/quickstart · Community plugins -> https://github.com/topics/dsh-plugin
-
----
-
-Footer: Open source · MIT · © 2026 DeepSeek. All rights reserved.
-Footer links (Policies and statements): Safe Use Policy · Data Processing Statement
-Footer block: Official WeChat account — Scan to follow (QR Code)
