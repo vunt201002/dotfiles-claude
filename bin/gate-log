@@ -34,22 +34,31 @@ import {
   gateLogPath,
   shouldBlindSample,
   isKnownGate,
+  originOf,
+  isUnstamped,
   VERDICTS,
+  GATE_ORIGINS,
   type GateLogEntry,
+  type GateOrigin,
   type Verdict,
 } from '../personal/manager/lib/gate-log';
 
 const USAGE = `gate-log append --project X --gate Y --family deterministic|llm --verdict ${VERDICTS.join('|')}
                  [--issue I] [--lane L] [--attempt N] [--cost-usd N] [--caught "..."]
                  [--review-depth summary|full-diff] [--human-intervened [true|false]] [--ts ISO]
+                 [--origin ${GATE_ORIGINS.join('|')}]   default work, or $GSTACK_GATE_LOG_ORIGIN
 gate-log append --json '{...}'
-gate-log read   [--project X] [--gate Y] [--since 7d] [--raw] [--json]
-gate-log recent [--project X] [--gate Y] [--verdict V] [--since 7d] [--limit N] [--json]
+gate-log read   [--project X] [--gate Y] [--since 7d] [--origin O] [--raw] [--json]
+gate-log recent [--project X] [--gate Y] [--verdict V] [--since 7d] [--origin O] [--limit N] [--json]
 gate-log fp <N> [--note "..."]                      mark line N of the last listing
 gate-log fp --all-matching <regex> --note "..." [--project X] [--gate Y] [--dry-run]
 gate-log reclassify <N> --verdict ${VERDICTS.join('|')} [--note "..."]
-gate-log stats  [--project X] [--gate Y] [--since 7d] [--json]
-gate-log sample`;
+gate-log stats  [--project X] [--gate Y] [--since 7d] [--origin O] [--json]
+gate-log sample
+
+--origin ${GATE_ORIGINS.join('|')}|all — read/recent show everything by default;
+stats counts only \`work\`, because §7.3 and the P8 threshold are about what the
+gates catch in the field, not about what a probe run can produce on demand.`;
 
 function fail(message: string): never {
   process.stderr.write(`gate-log: ${message}\n`);
@@ -137,6 +146,7 @@ function cmdAppend(args: string[]): void {
       caught: str(flags, 'caught'),
       review_depth: str(flags, 'review-depth'),
       human_intervened: flags['human-intervened'] === true ? 'true' : str(flags, 'human-intervened'),
+      origin: str(flags, 'origin'),
       ts: str(flags, 'ts'),
     };
   }
@@ -154,9 +164,28 @@ function cmdAppend(args: string[]): void {
   process.stdout.write(`${gateLogPath(String(input.project))}\n`);
 }
 
-function selectEntries(flags: Flags, read: (project?: string) => GateLogEntry[] = readGateLog): GateLogEntry[] {
+type OriginScope = GateOrigin | 'all';
+
+function originScope(flags: Flags, fallback: OriginScope): OriginScope {
+  const raw = str(flags, 'origin');
+  if (raw === undefined) return fallback;
+  if (raw === 'all') return 'all';
+  if (!GATE_ORIGINS.includes(raw as GateOrigin)) {
+    fail(`--origin must be one of ${GATE_ORIGINS.join(' | ')} | all — got ${raw}`);
+  }
+  return raw as GateOrigin;
+}
+
+function selectEntries(
+  flags: Flags,
+  read: (project?: string) => GateLogEntry[] = readGateLog,
+  defaultOrigin: OriginScope = 'all',
+): GateLogEntry[] {
   const project = str(flags, 'project');
   let entries = read(project);
+
+  const scope = originScope(flags, defaultOrigin);
+  if (scope !== 'all') entries = entries.filter((e) => originOf(e) === scope);
 
   const gate = str(flags, 'gate');
   if (gate) entries = entries.filter((e) => e.gate === gate);
@@ -192,9 +221,10 @@ function cmdRead(args: string[]): void {
     const depth = e.review_depth ? ` {${e.review_depth}}` : '';
     const human = e.human_intervened ? ' [human]' : '';
     const fixed = e.reclassified ? ` (was ${e.reclassified.from})` : '';
+    const prov = originOf(e) === 'work' ? '' : ` <${originOf(e)}>`;
     const detail = e.caught ? `  ${e.caught}` : '';
     process.stdout.write(
-      `${e.ts}  ${e.verdict.padEnd(14)} ${e.gate.padEnd(14)} ${`[${e.gate_family}]`.padEnd(16)} ${who}${depth}${human}${fixed}${detail}\n`,
+      `${e.ts}  ${e.verdict.padEnd(14)} ${e.gate.padEnd(14)} ${`[${e.gate_family}]`.padEnd(16)} ${who}${depth}${human}${prov}${fixed}${detail}\n`,
     );
   }
   process.stdout.write(`\n${entries.length} entries\n`);
@@ -207,6 +237,7 @@ interface ListedLine {
   entry_ts: string;
   gate: string;
   verdict: Verdict;
+  origin: GateOrigin;
   caught?: string;
 }
 
@@ -271,6 +302,7 @@ function cmdRecent(args: string[]): void {
     entry_ts: e.ts,
     gate: e.gate,
     verdict: e.verdict,
+    origin: originOf(e),
     caught: e.caught,
   }));
 
@@ -290,8 +322,9 @@ function cmdRecent(args: string[]): void {
     const entry = newestFirst[line.n - 1];
     const when = line.entry_ts.replace('T', ' ').replace(/\.\d+Z$/, 'Z');
     const mark = entry.reclassified ? ` (was ${entry.reclassified.from})` : '';
+    const prov = line.origin === 'work' ? '' : ` <${line.origin}>`;
     process.stdout.write(
-      `${String(line.n).padStart(3)}. ${when}  ${line.gate.padEnd(12)} ${line.verdict.padEnd(15)}${shorten(line.caught ?? '', 70)}${mark}\n`,
+      `${String(line.n).padStart(3)}. ${when}  ${line.gate.padEnd(12)} ${line.verdict.padEnd(15)}${shorten(line.caught ?? '', 70)}${prov}${mark}\n`,
     );
   }
   process.stdout.write('\nmark one wrong: gate-log fp <N> --note "why it was wrong"\n');
@@ -386,7 +419,14 @@ function pct(n: number, d: number): string {
 
 function cmdStats(args: string[]): void {
   const flags = parseFlags(args);
-  const entries = selectEntries(flags);
+  const originWanted = originScope(flags, 'work');
+
+  const withoutOrigin: Flags = { ...flags };
+  delete withoutOrigin.origin;
+  const all = selectEntries(withoutOrigin, readGateLog, 'all');
+  const entries = originWanted === 'all' ? all : all.filter((e) => originOf(e) === originWanted);
+  const excluded = all.length - entries.length;
+  const unstamped = entries.filter(isUnstamped).length;
 
   const byGate = new Map<string, VerdictCounts>();
   const byFamily = new Map<string, VerdictCounts>();
@@ -428,7 +468,10 @@ function cmdStats(args: string[]): void {
       `${JSON.stringify(
         {
           scope: str(flags, 'project') ?? '(all projects)',
+          origin: originWanted,
           entries: entries.length,
+          excluded_by_origin: excluded,
+          unstamped: unstamped,
           corrections: corrections.length,
           overall,
           by_gate: Object.fromEntries([...byGate].map(([g, c]) => [g, { ...c, precision: precision.get(g) ?? null }])),
@@ -458,7 +501,16 @@ function cmdStats(args: string[]): void {
 
   const scope = str(flags, 'project') ?? '(all projects)';
   const corrected = `${entries.length} entries · ${corrections.length} correction${corrections.length === 1 ? '' : 's'}`;
-  process.stdout.write(`gate log — ${scope} — ${corrected}\n\n`);
+  process.stdout.write(`gate log — ${scope} — origin:${originWanted} — ${corrected}\n`);
+  if (excluded > 0) {
+    process.stdout.write(`${excluded} line${excluded === 1 ? '' : 's'} excluded by origin — see them with --origin all\n`);
+  }
+  if (unstamped > 0) {
+    process.stdout.write(
+      `${unstamped} line${unstamped === 1 ? '' : 's'} predate the origin field and are counted as work — provenance assumed, not measured\n`,
+    );
+  }
+  process.stdout.write('\n');
   if (entries.length === 0) return;
 
   const showPrecision = (gate: string): string => {

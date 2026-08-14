@@ -23,6 +23,18 @@ export type GateFamily = 'deterministic' | 'llm';
 export type Verdict = 'pass' | 'caught' | 'false-positive' | 'skipped' | 'error';
 export type ReviewDepth = 'summary' | 'full-diff';
 
+/**
+ * `work` — the gate fired while doing real work. `gate-test` — the gate fired
+ * because something was deliberately probing it.
+ *
+ * Both are true positives, so marking a probe `false-positive` would be a lie and
+ * would drag precision down for the wrong reason. But probe lines still must not
+ * reach the §7.3 family split or the P8 unlock threshold: those numbers are meant
+ * to say what the gates catch in the field, and a probe run can inflate `caught`
+ * to any number you like. So provenance is a separate axis from verdict.
+ */
+export type GateOrigin = 'work' | 'gate-test';
+
 /** Read-time only: what a later correction record did to this line. */
 export interface Reclassification {
   ts: string;
@@ -41,8 +53,19 @@ export interface GateLogEntry {
   attempt?: number;
   cost_usd?: number;
   caught?: string;
+  /**
+   * Which model produced an llm row, and which family it belongs to.
+   *
+   * Recorded per row because §7.3's independence claim is otherwise unfalsifiable
+   * after the fact: a task reviewed on `opus-fresh` and one reviewed on `codex`
+   * leave identical logs, and the only statement of which ran is a line the
+   * daemon printed to a log nobody reopens.
+   */
+  model?: string;
+  model_family?: string;
   review_depth?: ReviewDepth;
   human_intervened?: boolean;
+  origin?: GateOrigin;
   ref?: string;
   reclassified?: Reclassification;
 }
@@ -73,6 +96,16 @@ export interface GateLogCorrection {
 export const GATE_FAMILIES: readonly GateFamily[] = ['deterministic', 'llm'];
 export const VERDICTS: readonly Verdict[] = ['pass', 'caught', 'false-positive', 'skipped', 'error'];
 export const REVIEW_DEPTHS: readonly ReviewDepth[] = ['summary', 'full-diff'];
+export const GATE_ORIGINS: readonly GateOrigin[] = ['work', 'gate-test'];
+
+/**
+ * Set by whatever is probing a gate; every writer below it inherits it through
+ * the environment, which is what makes hooks carry it without knowing they do.
+ * A probe harness sets it once and every guard/lint/tsc line the probed run
+ * produces is stamped, including lines written by shell hooks it never sees.
+ */
+export const ORIGIN_ENV = 'GSTACK_GATE_LOG_ORIGIN';
+export const DEFAULT_ORIGIN: GateOrigin = 'work';
 
 /**
  * §3.3 taxonomy plus `test` — the Stop hook runs a project's own suite, which is
@@ -161,6 +194,24 @@ function optionalBoolean(value: unknown, field: string): boolean | undefined {
   throw new Error(`gate-log: ${field} must be a boolean — got ${JSON.stringify(value)}`);
 }
 
+/**
+ * Explicit argument wins, then the environment, then `work`.
+ *
+ * A misspelt `GSTACK_GATE_LOG_ORIGIN` throws rather than quietly falling back to
+ * `work`. Falling back would stamp probe lines as real work, which is precisely
+ * the contamination this field exists to stop, and it would do it silently — the
+ * one failure shape this book must never have. `logGate` catches the throw and
+ * reports it, so a bad value is loud without taking a running task down.
+ */
+function resolveOrigin(value: unknown): GateOrigin {
+  if (value !== undefined && value !== null && value !== '') {
+    return requireOneOf(value, GATE_ORIGINS, 'origin');
+  }
+  const fromEnv = process.env[ORIGIN_ENV]?.trim();
+  if (!fromEnv) return DEFAULT_ORIGIN;
+  return requireOneOf(fromEnv, GATE_ORIGINS, ORIGIN_ENV);
+}
+
 /** Key order follows the §3.3 example so a raw log line reads like the spec. */
 export function validateGateLogEntry(input: Omit<GateLogEntry, 'ts'> & { ts?: string }): GateLogEntry {
   const gate = optionalString(input.gate, 'gate');
@@ -183,8 +234,11 @@ export function validateGateLogEntry(input: Omit<GateLogEntry, 'ts'> & { ts?: st
     attempt: optionalNumber(input.attempt, 'attempt'),
     cost_usd: optionalNumber(input.cost_usd, 'cost_usd'),
     caught: caught && caught.length > MAX_CAUGHT_CHARS ? `${caught.slice(0, MAX_CAUGHT_CHARS)}…` : caught,
+    model: optionalString(input.model, 'model'),
+    model_family: optionalString(input.model_family, 'model_family'),
     review_depth: reviewDepth,
     human_intervened: optionalBoolean(input.human_intervened, 'human_intervened'),
+    origin: resolveOrigin(input.origin),
   };
 
   for (const key of Object.keys(entry) as (keyof GateLogEntry)[]) {
@@ -389,6 +443,29 @@ export function reclassify(target: GateLogRef, verdict: Verdict, note: string): 
   fs.mkdirSync(path.dirname(file), { recursive: true });
   rotateIfNeeded(file);
   fs.appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
+}
+
+/**
+ * Lines written before this field existed carry no `origin`. §3.3 makes `work`
+ * the default, so that is how they read — but `isUnstamped` keeps them countable
+ * separately, because a number that silently mixes measured provenance with
+ * assumed provenance is the kind of number this book exists to stop.
+ */
+export function originOf(entry: GateLogEntry): GateOrigin {
+  return entry.origin ?? DEFAULT_ORIGIN;
+}
+
+export function isUnstamped(entry: GateLogEntry): boolean {
+  return entry.origin === undefined;
+}
+
+/**
+ * The one implementation of "§7.3 and P8 only count `origin: work`". Callers
+ * filter through this rather than writing the predicate themselves, so the rule
+ * cannot drift apart across the CLI, the manager, and whatever reads next.
+ */
+export function workOnly(entries: GateLogEntry[]): GateLogEntry[] {
+  return entries.filter((entry) => originOf(entry) === 'work');
 }
 
 export interface GatePrecision {

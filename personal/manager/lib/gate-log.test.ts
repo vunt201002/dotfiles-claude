@@ -16,20 +16,28 @@ import {
   shouldBlindSample,
   isKnownGate,
   validateGateLogEntry,
+  originOf,
+  isUnstamped,
+  workOnly,
+  ORIGIN_ENV,
   BLIND_SAMPLE_RATE,
 } from './gate-log';
 
 let sandbox: string;
 const originalDir = process.env.GSTACK_GATE_LOG_DIR;
+const originalOrigin = process.env[ORIGIN_ENV];
 
 beforeEach(() => {
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-log-test-'));
   process.env.GSTACK_GATE_LOG_DIR = sandbox;
+  delete process.env[ORIGIN_ENV];
 });
 
 afterEach(() => {
   if (originalDir === undefined) delete process.env.GSTACK_GATE_LOG_DIR;
   else process.env.GSTACK_GATE_LOG_DIR = originalDir;
+  if (originalOrigin === undefined) delete process.env[ORIGIN_ENV];
+  else process.env[ORIGIN_ENV] = originalOrigin;
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -92,6 +100,80 @@ describe('append / read round-trip', () => {
     const raw = fs.readFileSync(gateLogPath('kivora'), 'utf8').trim();
     expect(raw).not.toContain('null');
     expect(JSON.parse(raw)).not.toHaveProperty('issue');
+  });
+});
+
+describe('origin separates real work from probing the gate (§3.3)', () => {
+  const line = { project: 'kivora', gate: 'guard', gate_family: 'deterministic', verdict: 'caught' } as const;
+
+  test('a line is stamped work by default, and the stamp is written, not implied', () => {
+    appendGateLog(line);
+    expect(readGateLog('kivora')[0].origin).toBe('work');
+    expect(JSON.parse(fs.readFileSync(gateLogPath('kivora'), 'utf8').trim()).origin).toBe('work');
+  });
+
+  test('the environment stamps every writer below it, which is how hooks carry it', () => {
+    process.env[ORIGIN_ENV] = 'gate-test';
+    appendGateLog(line);
+    expect(readGateLog('kivora')[0].origin).toBe('gate-test');
+  });
+
+  test('an explicit origin beats the environment', () => {
+    process.env[ORIGIN_ENV] = 'gate-test';
+    appendGateLog({ ...line, origin: 'work' });
+    expect(readGateLog('kivora')[0].origin).toBe('work');
+  });
+
+  test('an unknown origin throws instead of writing', () => {
+    expect(() => appendGateLog({ ...line, origin: 'probe' as never })).toThrow(/origin must be one of/);
+    expect(fs.existsSync(gateLogPath('kivora'))).toBe(false);
+  });
+
+  test('a misspelt env value throws instead of quietly falling back to work', () => {
+    process.env[ORIGIN_ENV] = 'gatetest';
+    expect(() => appendGateLog(line)).toThrow(new RegExp(ORIGIN_ENV));
+    expect(fs.existsSync(gateLogPath('kivora'))).toBe(false);
+  });
+
+  test('an empty env value is not a value — it falls through to the default', () => {
+    process.env[ORIGIN_ENV] = '   ';
+    appendGateLog(line);
+    expect(readGateLog('kivora')[0].origin).toBe('work');
+  });
+
+  test('lines written before the field read as work, but say so', () => {
+    fs.mkdirSync(sandbox, { recursive: true });
+    fs.writeFileSync(
+      gateLogPath('dotfiles-claude'),
+      `${JSON.stringify({ ts: '2026-08-12T09:00:00.000Z', project: 'dotfiles-claude', gate: 'guard', gate_family: 'deterministic', verdict: 'caught' })}\n`,
+      'utf8',
+    );
+    const [legacy] = readGateLog('dotfiles-claude');
+    expect(legacy.origin).toBeUndefined();
+    expect(originOf(legacy)).toBe('work');
+    expect(isUnstamped(legacy)).toBe(true);
+  });
+
+  test('workOnly drops probe lines and keeps unstamped ones', () => {
+    appendGateLog({ ...line, caught: 'real' });
+    appendGateLog({ ...line, caught: 'probe', origin: 'gate-test' });
+    fs.appendFileSync(
+      gateLogPath('kivora'),
+      `${JSON.stringify({ ts: '2026-08-12T09:00:00.000Z', project: 'kivora', gate: 'guard', gate_family: 'deterministic', verdict: 'caught', caught: 'legacy' })}\n`,
+      'utf8',
+    );
+
+    expect(readGateLog('kivora')).toHaveLength(3);
+    expect(workOnly(readGateLog('kivora')).map((e) => e.caught)).toEqual(['real', 'legacy']);
+  });
+
+  test('precision over a probe run and precision over work are different numbers', () => {
+    appendGateLog({ ...line, caught: 'real catch' });
+    for (const n of [1, 2, 3]) appendGateLog({ ...line, caught: `probe ${n}`, origin: 'gate-test' });
+    reclassify(refOf(workOnly(readGateLog('kivora'))[0]), 'false-positive', 'oan');
+
+    expect(precisionByGate(readGateLog('kivora'))[0].precision).toBe(0.75);
+    expect(precisionByGate(workOnly(readGateLog('kivora')))[0].precision).toBe(0);
   });
 });
 
