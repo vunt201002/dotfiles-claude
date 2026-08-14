@@ -6,9 +6,9 @@
 > Xưng hô: mình
 > Kèm phần tổng hợp 73 comment trên Hacker News (mục cuối, không phải nội dung trang gốc): https://news.ycombinator.com/item?id=49283063
 > Pass 2 (editor mù nguồn): 3 vòng · điểm vòng cuối (vòng 3 chấm bản vòng 2): nhịp câu 9 · từ ngữ 8 · xưng hô 10 · mạch đoạn 9 · thuật ngữ 8
-> Pass 3 (soát nghĩa): 13 finding · đã sửa 10 · còn lại 3 (đều Medium): thiếu ghi nhận có installer Windows; thiếu tên `maki.sh` của tontinton; thiếu hai tên `orca` / `herdr` của 0kk33
+> Pass 3 (soát nghĩa): 13 finding · đã sửa 13 · còn lại: không còn
 
-Bullet là coding agent, bán bằng đúng một lời hứa: nhanh. Trang chủ mở bằng dòng `FAST, BY DESIGN.`, cạnh đó là nhãn `95.8% ON SWE-BENCH VERIFIED` dẫn sang trang kết quả benchmark. Đang private beta, dùng miễn phí, có bản macOS và Linux, version `1.3.32`. Y Combinator rót vốn.
+Bullet là coding agent, bán bằng đúng một lời hứa: nhanh. Trang chủ mở bằng dòng `FAST, BY DESIGN.`, cạnh đó là nhãn `95.8% ON SWE-BENCH VERIFIED` dẫn sang trang kết quả benchmark. Đang private beta, dùng miễn phí, version `1.3.32`. Phần giới thiệu đầu trang và nút tải chỉ nói tới macOS và Linux, nhưng danh sách link tải lại có sẵn `Setup-x64.exe` cho Windows. Y Combinator rót vốn.
 
 Câu mô tả gọn nhất nằm trong thẻ meta: coding agent rất nhanh, lớp orchestration mỏng hơn.
 
@@ -122,7 +122,7 @@ Hai người, ở hai nhánh khác nhau, cùng bắn một mũi tên. `Terretta`
 
 Ba tài khoản chê, hai tài khoản nói lại, không ai đổi ý ai.
 
-`tontinton` mở màn gay gắt nhất: YC mà ném tiền vào thứ như thế này thì chính `tontinton` cũng gọi vốn được, còn sớm hơn thiên hạ mấy tháng. `Supermancho` nói lý hơn. Không hiểu sao lại có người bỏ tiền cho chuyện "dựng một agent". OpenCode vốn đã cạnh tranh với Codex và Claude, còn project agent mới thì mọc lên rồi chết liên tục, mà chết không phải vì thiếu vốn. `docheinestages` gọn hơn: dạo này YC đầu tư toàn thứ đáng ngờ.
+`tontinton` mở màn gay gắt nhất: cũng tự dựng một công cụ riêng tên `maki.sh`, nên YC mà ném tiền vào thứ như thế này thì chính `tontinton` cũng gọi vốn được, còn sớm hơn thiên hạ mấy tháng. `Supermancho` nói lý hơn. Không hiểu sao lại có người bỏ tiền cho chuyện "dựng một agent". OpenCode vốn đã cạnh tranh với Codex và Claude, còn project agent mới thì mọc lên rồi chết liên tục, mà chết không phải vì thiếu vốn. `docheinestages` gọn hơn: dạo này YC đầu tư toàn thứ đáng ngờ.
 
 `tomhow` kéo mốc lịch sử ra: năm 2009 người ta cũng nói y hệt về YC, đúng vào lúc Airbnb và Stripe được rót vốn. Triết lý YC xưa nay là đầu tư thật nhiều công ty, chấp nhận không biết trước cái nào sống. Phần lớn chết, mấy cái sống đủ lớn để bù hết chỗ lỗ. `kkotak` chốt lại: đó không riêng gì YC, cả ngành seed đều chạy vậy, rải đạn rồi cầu nguyện.
 
@@ -175,7 +175,7 @@ Phần này ít tranh cãi nhưng là chỗ đọc ra được sản phẩm đan
 - `etchalon` nói một câu đủ để mất một user: agent tự ghi tên nó làm author trong commit, tắt không được, nên chịu, không dùng được. Cái đó phải là tuỳ chọn chứ không phải ép. `alsima` nhận là điểm đúng, và đang sửa.
 - `andai` bấm nút Download trên điện thoại Android và bị tải thẳng về một file `.dmg` nặng 200MB. `alsima` xin lỗi: họ chặn tải trên iOS mà quên Android, sẽ sửa; app không thiết kế để chạy trên điện thoại, trừ tính năng điều khiển từ xa.
 - `retropragma` hỏi harness có hỗ trợ ACP không. `alsima`: hiện chưa, Bullet dùng harness nội bộ riêng cùng phần tích hợp CLI, tương lai thì có thể làm.
-- `0kk33` hỏi hỗ trợ nhà cung cấp model nào, có gọi thẳng claude-code CLI để dùng chung subscription Anthropic không. `adi1`: hỗ trợ OpenCode, Codex, Grok, Claude, qua cả subscription lẫn API key.
+- `0kk33` hỏi hỗ trợ nhà cung cấp model nào, có gọi thẳng claude-code CLI để dùng chung subscription Anthropic không, theo kiểu `orca` hay `herdr` vẫn làm. `adi1`: hỗ trợ OpenCode, Codex, Grok, Claude, qua cả subscription lẫn API key.
 - `exe34` hỏi chạy trong Docker được không và có cắm được endpoint OpenAI tuỳ ý không. `alsima`: bản CLI chạy được trong Docker, bản desktop thì không thiết kế để chạy trong đó; endpoint nào theo chuẩn OpenAI qua HTTPS đều cắm được, kể cả base URL và model ID tự đặt.
 - `japborst` góp một ý về cách trình bày: nên nói rõ hơn là thứ này không đòi thêm subscription nào, và nó chỉ là harness chứ không phải thêm một model.
 - `throw03172019` trích lại đoạn bài đăng kể Bullet từng là quỹ đầu cơ AI. Rồi agent điều khiển browser, rồi dữ liệu tài chính tổng hợp, rồi IDE cho mobile, rồi vài thứ nữa. Rồi hỏi thẳng: liệu còn cú pivot tiếp theo không, vì chuyện đó làm `throw03172019` ngại. `alsima` đáp không, vì họ làm cái này cho chính họ dùng. `throw03172019` cảm ơn và nói sẽ thử.
