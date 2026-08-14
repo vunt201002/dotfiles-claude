@@ -66,13 +66,37 @@ thời gian. Giải thích trôi chảy ngay sau khi vừa được dạy thì v
 
 - id: availability-nhan
   concept: Độ sẵn sàng của một request nhân lên chứ không cộng. Mỗi service nằm trên đường đi của request đều kéo tụt độ sẵn sàng của mình. Không bao giờ ổn định hơn tích của mọi thứ phải hỏi mới trả lời được — kể cả khi mọi service đều đạt đúng cam kết của nó.
-  neo: buổi 13/08 — 6 thành phần × 99.9% = 99.4%; đổi ra phút là 43 phút chết/tháng thành 259 phút, không ai viết sai dòng code nào
-  level: 1
-  streak: 0
+  neo: buổi 14/08 — dây đèn mắc nối tiếp 6 bóng: cần 6 bóng sống để sáng, cần 1 bóng cháy để tối
+  level: 2
+  streak: 1
   taught: 2026-08-13
-  last_tested: 2026-08-13
-  next_review: 2026-08-14
-  note: TRƯỢT. Tính đúng cả 99.8% lẫn 99.4% nhưng không rút ra được ý nghĩa, còn hỏi ngược "câu này chưa liên quan lắm nhỉ". Đã giảng lại theo đường đổi phần trăm ra phút + khung "cả 6 service đều khoẻ mà hệ thống yếu đi". CHƯA kiểm lại — buổi tới hỏi trước tiên. Đây là bản lề mở sang Buổi 3, thẻ này không qua thì Buổi 3 mất lý do tồn tại.
+  last_tested: 2026-08-14
+  next_review: 2026-08-17
+  note: Mất 3 lần mới qua, và chỉ qua khi bỏ hẳn phần trăm. Lần 1 (13/08) "chưa hiểu cốt lõi". Lần 2 (14/08) rút nhầm thẻ — trả lời bằng latency + lãng phí công (Saga). Lần 3 qua sạch sau khi đổi sang dây đèn nối tiếp và bắt ĐẾM hai con số (6 để sáng, 1 để tối) thay vì suy luận. Câu user tự phát biểu, giữ nguyên vì nó là chỗ chốt: "Vấn đề không nằm ở số lượng. Mà là chúng đang phụ thuộc vào nhau." Bài học phương pháp: khái niệm xác suất mà giảng bằng phần trăm thì trượt, giảng bằng đếm vật thể thì qua.
+
+---
+
+## Buổi 2 (tiếp, 14/08) — Đường tới hạn
+
+- id: duong-toi-han
+  concept: Thước chia việc đồng bộ / bất đồng bộ KHÔNG phải "cái nào quan trọng hơn", mà là "khi màn hình báo thành công thì ta vừa hứa điều gì". Cái CHÍNH LÀ lời hứa đó thì bắt buộc đồng bộ; mọi thứ chảy ra TỪ nó là hệ quả và chờ được. Vùng xám (trừ tiền, trừ kho) là quyết định nghiệp vụ đổi độ tin cậy lấy độ chặt dữ liệu, không phải luật kiến trúc.
+  neo: buổi 14/08 — đặt hàng: ghi đơn vào DB là bản thân request (không ghi thì chữ "Đặt hàng thành công" là nói dối); mail/điểm/analytics là hệ quả; `authorize` đồng bộ còn `capture` bất đồng bộ là bằng chứng vùng xám có thật
+  level: 2
+  streak: 1
+  taught: 2026-08-14
+  last_tested: 2026-08-14
+  next_review: 2026-08-17
+  note: Lần đầu user xếp "ghi đơn vào DB" vào nhóm trễ được NHIỀU NHẤT, ngang analytics — sai nặng nhất có thể. Chữa bằng một câu duy nhất: "màn hình đã hiện thành công, việc ghi đơn để sau, ngay giây đó server chết — đơn hàng ở đâu?". User tự thấy ngay. Hỏi lại chỗ vùng xám ở lần ôn sau: user có còn phát biểu "trừ tiền/trừ kho là bản thân request" như một sự thật thay vì một lựa chọn không.
+
+- id: cat-phep-nhan
+  concept: Cách duy nhất giảm phép nhân availability mà không bỏ service nào là đẩy service ra khỏi ĐƯỜNG TỚI HẠN của request. Số service không đổi; số service mà request phải chờ mới đổi. Aggregator đặt TRÊN đường tới hạn thì làm mọi thứ tệ đi (thêm một thứ phải còn sống); đặt SAU khi đã trả lời khách thì cắt được thật.
+  neo: buổi 14/08 — 6 thành phần 99.4% (259 phút chết/tháng) xuống 2 thành phần 99.8% (86 phút), chỉ bằng cách đẩy mail/điểm/analytics/kho ra sau. Không thêm dòng logic nào, không thêm server nào. Aggregator gọi 5 service lúc khách đang chờ = 7 thành phần = 99.3%, tệ hơn lúc chưa có nó.
+  level: 2
+  streak: 1
+  taught: 2026-08-14
+  last_tested: 2026-08-14
+  next_review: 2026-08-17
+  note: User tự tính đúng cả 99.3% (bẫy aggregator) lẫn 99.8%/86 phút (phần thưởng). Nhưng khi giải thích VÌ SAO 99.3% tệ hơn thì lại nói "vì trễ thêm" — gắn latency vào lần thứ ba. Con số đúng, lý do sai. Lần ôn sau hỏi thẳng lý do, đừng hỏi con số.
 
 ---
 
@@ -85,5 +109,5 @@ thời gian. Giải thích trôi chảy ngay sau khi vừa được dạy thì v
   streak: 0
   taught: 2026-08-10
   last_tested: 2026-08-13
-  next_review: 2026-08-14
-  note: TRƯỢT sạch, trả lời "chưa nhớ lắm". Bằng chứng phương pháp: xem sim mà không bị bắt dự đoán trước mỗi chặng thì không dính lại gì. Buổi 3 dạy lại tử tế, và lần này phải hỏi dự đoán TRƯỚC mỗi chặng.
+  next_review: 2026-08-15
+  note: TRƯỢT sạch 13/08 ("chưa nhớ lắm"). Hỏi lại 14/08, user không trả lời — tôi chủ động bỏ qua, KHÔNG kiểm nguội nữa vì khái niệm này chưa từng được dạy tử tế, mới lướt qua bản sim. Bằng chứng phương pháp: xem sim mà không bị bắt dự đoán trước mỗi chặng thì không dính lại gì. Buổi 3 dạy lại đàng hoàng, và lần này phải hỏi dự đoán TRƯỚC mỗi chặng.

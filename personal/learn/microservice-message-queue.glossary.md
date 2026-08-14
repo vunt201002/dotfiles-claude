@@ -85,6 +85,12 @@ trong bản sim, chưa qua cổng hiểu bài — đừng coi là đã nắm.
 **Trong hệ của anh:** endpoint lấy giá của cả 50 product trong một call, đúng cái anh tự mô tả ra hôm 13/08.
 **Nguồn:** https://martinfowler.com/articles/distributed-objects-microservices.html
 
+### Aggregator (API composition)
+**Là gì:** một service đứng ra gọi nhiều service khác rồi gom kết quả lại trả về một lần.
+**Ví von:** người chạy việc vặt — đưa cho một danh sách, họ đi khắp chợ rồi mang về đủ.
+**Trong hệ của anh:** đặt **trên** đường tới hạn thì nó làm mọi thứ tệ đi (order + aggregator + 5 service = 7 thành phần = 99.3%, tệ hơn 99.4% lúc chưa có nó). Đặt **sau** khi đã trả lời khách thì mới cắt được phép nhân. Cùng một thứ, hai vị trí, hai kết quả trái ngược.
+**Nguồn:** https://microservices.io/patterns/data/api-composition.html
+
 ### Partial failure — "kết cục thứ ba"
 **Là gì:** trạng thái sau một lời gọi qua mạng khi không có hồi âm nào, và không thể biết bên kia đã chạy xong hay chưa chạy. ("Kết cục thứ ba" là cách gọi trong buổi học, không phải thuật ngữ chuẩn — tên chuẩn là partial failure.)
 **Ví von:** gửi thư bảo đảm rồi mất liên lạc — không biết thư tới nơi mà biên nhận lạc, hay thư chưa từng tới.
@@ -118,6 +124,24 @@ trong bản sim, chưa qua cổng hiểu bài — đừng coi là đã nắm.
 **Ví von:** 99.9% nghe như hoàn hảo; đổi ra là 43 phút chết mỗi tháng.
 **Trong hệ của anh:** một tháng có 43.200 phút. 99.9% = 43 phút chết. 99.4% = 259 phút, hơn bốn tiếng rưỡi.
 **Nguồn:** https://sre.google/sre-book/embracing-risk/
+
+### Đường tới hạn (critical path)
+**Là gì:** tập hợp những việc BẮT BUỘC phải xong trước khi trả lời người dùng. Chỉ những thứ nằm trên đường này mới nhân vào availability; thứ nằm ngoài thì không.
+**Ví von:** dây đèn mắc nối tiếp — chỉ bóng nào nằm trên dây mới làm tối cả dây; bóng để trong ngăn kéo thì cháy bao nhiêu cũng không sao.
+**Trong hệ của anh:** thước để chia là "khi màn hình hiện *Đặt hàng thành công*, ta vừa hứa gì?". Ghi đơn vào DB **chính là** lời hứa đó. Mail, điểm thưởng, analytics chỉ là hệ quả chảy ra từ nó, chờ được. Đẩy 4 việc ra ngoài: 99.4% → 99.8%, 259 phút chết/tháng → 86 phút.
+**Nguồn:** https://sre.google/sre-book/addressing-cascading-failures/
+
+### Authorize vs Capture
+**Là gì:** hai bước tách rời của một lần thanh toán thẻ. `authorize` giữ chỗ số tiền và xác nhận thẻ dùng được; `capture` mới thật sự lấy tiền về.
+**Ví von:** đặt cọc giữ bàn, rồi tới lúc ăn xong mới thanh toán.
+**Trong hệ của anh:** đây là bằng chứng vùng xám có thật. Rất nhiều hệ thống `authorize` đồng bộ lúc khách bấm nút (để biết thẻ còn tiền) rồi `capture` bất đồng bộ lúc giao hàng, có khi vài ngày sau. Cùng một việc "trừ tiền", một nửa trên đường tới hạn, một nửa ngoài — nên "trừ tiền có phải bản thân request không" là **lựa chọn nghiệp vụ**, không phải luật.
+**Nguồn:** https://docs.stripe.com/payments/place-a-hold-on-a-payment-method
+
+### Oversell (bán quá số lượng)
+**Là gì:** bán ra nhiều hơn số hàng thật có, vì kho chưa kịp trừ lúc đơn sau ập tới.
+**Ví von:** hai người cùng đặt chiếc ghế cuối cùng vì sổ đặt chỗ ghi chậm mất mấy giây.
+**Trong hệ của anh:** đúng cái giá phải trả khi đẩy trừ kho ra khỏi đường tới hạn — kho còn 1 món, chưa trừ, khách thứ hai đặt, cả hai đều thấy "thành công", tiền đã trừ, mà hàng không có để giao. Cùng một cái giá với ca timeout-rồi-retry ở Buổi 2.
+**Nguồn:** https://microservices.io/patterns/data/saga.html
 
 ### Cascading failure (hỏng dây chuyền)
 **Là gì:** một service hỏng kéo theo service phụ thuộc nó hỏng, lan tiếp thành đổ cả hệ.
