@@ -30,7 +30,11 @@ export interface Probe {
 }
 
 export function sandbox(label: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `oracle-${label}-`));
+  // realpath, không phải mkdtemp trần: trên macOS os.tmpdir() là /var/... còn /var là
+  // symlink tới /private/var. Code dưới đo dùng realpathSync ra một nhánh, probe dựng
+  // path.join ra nhánh kia, và fixture đúng bị chấm là sai. Cùng lớp lỗi với tsc
+  // path-tương-đối trong §P6 — sai ở dụng cụ đo, không sai ở thứ đang đo.
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `oracle-${label}-`)));
 }
 
 /** Best effort — a temp dir Windows still has a handle on must not fail a measurement. */

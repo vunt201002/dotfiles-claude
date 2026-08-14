@@ -10,7 +10,8 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ORACLE_DIR, type FixtureCase, type GuardFpProbe } from './cases';
+import { APPARATUS_DIR, type FixtureCase, type GuardFpProbe } from './cases';
+import { ORIGIN_ENV } from '../../manager/lib/gate-log';
 
 export type Verdict = 'caught' | 'missed' | 'n_a' | 'error';
 export type GateFamily = 'deterministic' | 'llm';
@@ -35,9 +36,9 @@ export interface GateOutcome {
   fp_denominator: number;
 }
 
-const GUARD_SCRIPT = path.resolve(ORACLE_DIR, '..', 'hooks', 'pre-tool-use-guard.sh');
-const ESLINT_CONFIG = path.join(ORACLE_DIR, 'lib', 'eslint.config.mjs');
-const CANARY_DIR = path.join(ORACLE_DIR, 'lib', 'canaries');
+const GUARD_SCRIPT = path.resolve(APPARATUS_DIR, '..', 'hooks', 'pre-tool-use-guard.sh');
+const ESLINT_CONFIG = path.join(APPARATUS_DIR, 'lib', 'eslint.config.mjs');
+const CANARY_DIR = path.join(APPARATUS_DIR, 'lib', 'canaries');
 const TOOL_TIMEOUT_MS = 600_000;
 
 function quote(arg: string): string {
@@ -51,11 +52,12 @@ interface Run {
   spawnError: string;
 }
 
-function runShell(cmd: string, args: string[], input?: string): Run {
+function runShell(cmd: string, args: string[], input?: string, env?: NodeJS.ProcessEnv): Run {
   const res = spawnSync(cmd, args.map(quote), {
     encoding: 'utf-8',
     shell: true,
     input,
+    env: env ? { ...process.env, ...env } : undefined,
     timeout: TOOL_TIMEOUT_MS,
     maxBuffer: 32 * 1024 * 1024,
   });
@@ -106,8 +108,9 @@ export function runGuardGate(cases: FixtureCase[], fpProbes: GuardFpProbe[]): Ga
     return markAll(out, cases, 'error', out.unavailable_reason);
   }
 
+  // Stamped on the child, not on process.env — a test file sharing this process must not inherit it.
   const call = (payload: unknown): Run =>
-    runShell('bash', [GUARD_SCRIPT], JSON.stringify(payload));
+    runShell('bash', [GUARD_SCRIPT], JSON.stringify(payload), { [ORIGIN_ENV]: 'gate-test' });
 
   const canary = call({ tool_input: { command: 'rm -rf /' } });
   if (canary.code !== 2) {

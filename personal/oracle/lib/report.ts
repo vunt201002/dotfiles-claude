@@ -5,7 +5,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ORACLE_DIR, type FixtureCase } from './cases';
+import { ORACLE_DIR, type CorpusFingerprint, type FixtureCase } from './cases';
 import type { GateOutcome, Verdict, FixtureIntegrity } from './gates';
 
 export const BASELINE_PATH = path.join(ORACLE_DIR, 'baseline.json');
@@ -29,6 +29,8 @@ export interface GateStats {
 
 export interface OracleReport {
   generated_at: string;
+  /** Which fixtures these numbers were measured on. Absent in baselines frozen before the pin existed. */
+  corpus?: CorpusFingerprint;
   fixtures_total: number;
   fixtures_verified: number;
   fixtures_unverified: string[];
@@ -73,6 +75,7 @@ export function buildReport(
   outcomes: GateOutcome[],
   integrity: FixtureIntegrity[],
   ratchet: Record<string, { holds: boolean; detail: string }>,
+  corpus: CorpusFingerprint,
 ): OracleReport {
   const total = cases.length;
   const gates = outcomes.map(o => summarize(o, total));
@@ -105,6 +108,7 @@ export function buildReport(
 
   return {
     generated_at: new Date().toISOString(),
+    corpus,
     fixtures_total: total,
     fixtures_verified: integrity.filter(i => i.ok).length,
     fixtures_unverified: integrity.filter(i => !i.ok).map(i => `${i.id}: ${i.detail}`),
@@ -119,54 +123,381 @@ export function buildReport(
   };
 }
 
+export type MetricName = 'detection' | 'false positives';
+
+interface Harm {
+  rateRiseIsWorse: boolean;
+  worseSays: string;
+  /**
+   * What counts as worse once the denominator has grown, where rate and count
+   * disagree. Catches are an absolute good, so losing one is unambiguous while a
+   * falling rate can come purely from newly-judged fixtures. Wrong blocks only
+   * mean anything per opportunity, so widening the probe set raises the count
+   * proportionally and only the rate says whether the gate got worse.
+   */
+  worseOverWiderGround: (was: ScoredMetric, now: ScoredMetric) => boolean;
+}
+
+const HARM: Record<MetricName, Harm> = {
+  detection: {
+    rateRiseIsWorse: false,
+    worseSays: 'fewer bugs caught',
+    worseOverWiderGround: (was, now) => now.numerator < was.numerator,
+  },
+  'false positives': {
+    rateRiseIsWorse: true,
+    worseSays: 'a worse false positive rate',
+    worseOverWiderGround: (was, now) => now.rate > was.rate,
+  },
+};
+
+interface ScoredMetric {
+  gate: string;
+  metric: MetricName;
+  numerator: number;
+  denominator: number;
+  rate: number;
+  errors: number;
+  fixtures: number;
+}
+
+export interface DiffContext {
+  /**
+   * Gates the operator deliberately switched off for this run. Only a switch the
+   * operator actually threw belongs here — never a gate's own `unavailable_reason`,
+   * and never a backend that merely failed, since neither is a choice (§7.3b
+   * lesson 2). The caller must sample it before any fixture code has run, because
+   * fixtures execute in this process and can reach the environment. Empty means
+   * strict, so a caller that forgets gets more alarms, not fewer.
+   */
+  operatorDisabledGates: string[];
+  operatorReason: string;
+}
+
+const STRICT: DiffContext = { operatorDisabledGates: [], operatorReason: '' };
+
 export interface BaselineDiff {
   hasBaseline: boolean;
+  /** Fields on either side that contradict each other. Nothing is compared when this is non-empty. */
+  corruption: string[];
+  /**
+   * The fixtures moved, or one side does not say which fixtures it used. Numbers
+   * measured on different exams are not comparable, so nothing else is compared
+   * and the run cannot pass. An absent pin counts as a mismatch: not knowing the
+   * ground is not the same as standing on the same ground.
+   */
+  corpusChanged: string[];
   regressions: string[];
+  /** The measured set shrank without the operator asking for it. An alarm, not an advisory. */
+  lostMeasurements: string[];
   improvements: string[];
+  /** The measured set grew: a number that did not exist before, or one now scored over more fixtures. */
+  firstMeasurements: string[];
+  /**
+   * A gate that scored nothing at all, that the operator switched off, and that
+   * reports itself unavailable. All three are required: a gate cannot excuse
+   * itself, and naming a gate the operator did not actually switch off cannot
+   * excuse it either. Anything short of all three is a loss.
+   */
+  acknowledgedAbsences: string[];
+  /** Baseline numbers frozen from a run that was itself partly broken. */
+  baselineCaveats: string[];
   newCases: string[];
   droppedCases: string[];
 }
 
-export function diffBaseline(report: OracleReport): BaselineDiff {
-  if (!fs.existsSync(BASELINE_PATH)) {
-    return { hasBaseline: false, regressions: [], improvements: [], newCases: [], droppedCases: [] };
-  }
-  const base = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8')) as OracleReport;
+function emptyDiff(hasBaseline: boolean): BaselineDiff {
+  return {
+    hasBaseline,
+    corruption: [], corpusChanged: [], regressions: [], lostMeasurements: [], improvements: [],
+    firstMeasurements: [], acknowledgedAbsences: [], baselineCaveats: [],
+    newCases: [], droppedCases: [],
+  };
+}
 
-  const regressions: string[] = [];
-  const improvements: string[] = [];
+/**
+ * Why this run must not be frozen as the baseline. A baseline is the yardstick
+ * every later run is judged against, so freezing a run with a gate that scored
+ * nothing retires that gate's ratchet silently: the next healthy run reads as a
+ * first measurement rather than a recovery.
+ */
+export function unfitToFreeze(report: OracleReport, context: DiffContext = STRICT): string[] {
+  const reasons = inconsistencies(report, 'this run');
+  if (!report.corpus) {
+    reasons.push('this run does not record which fixtures it measured, so freezing it would pin numbers to a corpus nobody can name');
+  }
+  for (const unverified of report.fixtures_unverified) {
+    reasons.push(`a fixture does not demonstrate its bug: ${unverified}`);
+  }
+  for (const g of report.gates) {
+    if (!g.available && g.family === 'deterministic') {
+      reasons.push(`${g.gate} could not run: ${g.unavailable_reason}`);
+      continue;
+    }
+    const scoredNothing = g.detection_rate === null && g.fp_rate === null;
+    const switchedOff = context.operatorDisabledGates.includes(g.gate) && g.available === false;
+    if (scoredNothing && !switchedOff) {
+      reasons.push(`${g.gate} scored nothing at all (${g.error}/${report.fixtures_total} fixtures errored)`);
+    }
+  }
+  return reasons;
+}
+
+/**
+ * Exit code this diff earns, so `run.ts` and the tests read the same rule from
+ * one place instead of a copy that can drift.
+ */
+export function exitCodeFor(diff: BaselineDiff): number {
+  if (diff.corruption.length > 0 || diff.corpusChanged.length > 0) return 1;
+  if (diff.regressions.length > 0 || diff.lostMeasurements.length > 0) return 2;
+  return 0;
+}
+
+function metricText(m: ScoredMetric): string {
+  return `${m.numerator}/${m.denominator} (${m.rate})`;
+}
+
+function incompleteSuffix(m: ScoredMetric): string {
+  return m.errors > 0 ? ` — INCOMPLETE, ${m.errors}/${m.fixtures} fixtures errored` : '';
+}
+
+/**
+ * Cross-checks the counts, rates, coverage, matrix and corpus count against each
+ * other, since `summarize` derives them together and they cannot disagree in a
+ * real run. One edited number contradicts its neighbours. It does NOT check the
+ * matrix verdicts against the counts, so a forgery that flips cells without
+ * touching the totals passes, and it does not constrain `available`,
+ * `unavailable_reason`, `family` (which drives the P8 share) or the ratchet
+ * block. The corpus digest is checked separately, against the fixtures on disk.
+ */
+function inconsistencies(report: OracleReport, side: string): string[] {
+  const found: string[] = [];
+  const declared = report.gates.map(g => g.gate);
+  const names = new Set(declared);
+  if (names.size !== declared.length) found.push(`${side}: the same gate is recorded twice in gates[]`);
+
+  if (report.fixtures_total > 0 && report.gates.length > 0 && Object.keys(report.matrix).length === 0) {
+    found.push(`${side}: ${report.gates.length} gates over ${report.fixtures_total} fixtures, but no per-fixture scores at all`);
+  }
+
+  const scoredInMatrix = new Set<string>();
+  for (const row of Object.values(report.matrix)) for (const gate of Object.keys(row)) scoredInMatrix.add(gate);
+  if (scoredInMatrix.size > 0) {
+    for (const gate of scoredInMatrix) {
+      if (!names.has(gate)) found.push(`${side}: every fixture scores "${gate}" but gates[] has no record of it`);
+    }
+    for (const gate of names) {
+      if (!scoredInMatrix.has(gate)) found.push(`${side}: gates[] records "${gate}" but no fixture scores it`);
+    }
+  }
 
   for (const g of report.gates) {
-    const prev = base.gates.find(p => p.gate === g.gate);
-    if (!prev) continue;
-    if (prev.detection_rate !== null && g.detection_rate !== null && g.detection_rate < prev.detection_rate) {
-      regressions.push(`${g.gate}: detection ${prev.detection_rate} -> ${g.detection_rate}`);
+    const where = `${side}: gate "${g.gate}"`;
+    if (g.applicable !== g.caught + g.missed) {
+      found.push(`${where} says applicable ${g.applicable} but caught ${g.caught} + missed ${g.missed} is ${g.caught + g.missed}`);
     }
-    if (prev.detection_rate !== null && g.detection_rate !== null && g.detection_rate > prev.detection_rate) {
-      improvements.push(`${g.gate}: detection ${prev.detection_rate} -> ${g.detection_rate}`);
+    if (g.detection_rate !== ratio(g.caught, g.applicable)) {
+      found.push(`${where} says detection ${g.detection_rate} but ${g.caught}/${g.applicable} is ${ratio(g.caught, g.applicable)}`);
     }
-    if (g.false_positives > prev.false_positives) {
-      regressions.push(`${g.gate}: false positives ${prev.false_positives} -> ${g.false_positives}`);
+    if (g.fp_rate !== ratio(g.false_positives, g.fp_denominator)) {
+      found.push(`${where} says false positive rate ${g.fp_rate} but ${g.false_positives}/${g.fp_denominator} is ${ratio(g.false_positives, g.fp_denominator)}`);
     }
-    if (g.error > prev.error) {
-      regressions.push(`${g.gate}: gate errors ${prev.error} -> ${g.error}`);
+    if (g.coverage !== (ratio(g.applicable, report.fixtures_total) ?? 0)) {
+      found.push(`${where} says coverage ${g.coverage} but ${g.applicable}/${report.fixtures_total} is ${ratio(g.applicable, report.fixtures_total) ?? 0}`);
+    }
+    const cells = g.caught + g.missed + g.n_a + g.error;
+    if (report.fixtures_total > 0 && cells !== report.fixtures_total) {
+      found.push(`${where} accounts for ${cells} fixtures, not ${report.fixtures_total}`);
     }
   }
 
+  if (report.corpus && report.corpus.fixtures !== report.fixtures_total) {
+    found.push(`${side}: the corpus pin counts ${report.corpus.fixtures} fixtures but the run scored ${report.fixtures_total}`);
+  }
+  return found;
+}
+
+/**
+ * Recomputed from the per-gate catches rather than read from the stored field,
+ * so editing `deterministic_catch_share` in the baseline changes nothing.
+ */
+function deterministicCatchShare(report: OracleReport): number | null {
+  const all = report.gates.reduce((sum, g) => sum + g.caught, 0);
+  const deterministic = report.gates
+    .filter(g => g.family === 'deterministic')
+    .reduce((sum, g) => sum + g.caught, 0);
+  return ratio(deterministic, all);
+}
+
+function scoredMetrics(report: OracleReport): Map<string, ScoredMetric> {
+  const scored = new Map<string, ScoredMetric>();
+  for (const g of report.gates) {
+    const shared = { gate: g.gate, errors: g.error, fixtures: report.fixtures_total };
+    if (g.detection_rate !== null) {
+      scored.set(`${g.gate}/detection`, {
+        ...shared, metric: 'detection', numerator: g.caught, denominator: g.applicable, rate: g.detection_rate,
+      });
+    }
+    if (g.fp_rate !== null) {
+      scored.set(`${g.gate}/false positives`, {
+        ...shared, metric: 'false positives', numerator: g.false_positives, denominator: g.fp_denominator, rate: g.fp_rate,
+      });
+    }
+  }
+  return scored;
+}
+
+function compareOverSameGround(diff: BaselineDiff, was: ScoredMetric, now: ScoredMetric): void {
+  if (now.rate === was.rate) return;
+  const move = `${now.gate}: ${now.metric} ${metricText(was)} -> ${metricText(now)}`;
+  const worse = HARM[now.metric].rateRiseIsWorse ? now.rate > was.rate : now.rate < was.rate;
+  if (worse) diff.regressions.push(move);
+  else diff.improvements.push(move);
+}
+
+function compareOverWiderGround(diff: BaselineDiff, was: ScoredMetric, now: ScoredMetric): void {
+  const harm = HARM[now.metric];
+  const move = `${metricText(was)} -> ${metricText(now)}`;
+  if (harm.worseOverWiderGround(was, now)) {
+    diff.regressions.push(`${now.gate}: ${now.metric} ${move} — ${harm.worseSays}, on ground that only got wider`);
+    return;
+  }
+  diff.firstMeasurements.push(
+    `${now.gate}: ${now.metric} denominator ${was.denominator} -> ${now.denominator} — ${move}${incompleteSuffix(now)}`,
+  );
+}
+
+function noteShrink(
+  diff: BaselineDiff,
+  context: DiffContext,
+  was: ScoredMetric,
+  now: ScoredMetric | undefined,
+  nowGate: GateStats | undefined,
+): void {
+  const shrank = now
+    ? `${was.gate}: ${was.metric} denominator ${was.denominator} -> ${now.denominator} — ${metricText(was)} -> ${metricText(now)}`
+    : `${was.gate}: ${was.metric} is no longer scored at all — the baseline had ${metricText(was)}`;
+  const switchedOff = now === undefined
+    && context.operatorDisabledGates.includes(was.gate)
+    && nowGate?.available === false;
+  if (switchedOff) diff.acknowledgedAbsences.push(`${shrank} — ${context.operatorReason}`);
+  else diff.lostMeasurements.push(shrank);
+}
+
+function compareRatchets(diff: BaselineDiff, report: OracleReport, base: OracleReport): void {
+  for (const [id, was] of Object.entries(base.ratchet)) {
+    const now = report.ratchet[id];
+    if (!now) {
+      diff.lostMeasurements.push(`${id}: the type ratchet is no longer checked — the baseline checked it`);
+    } else if (was.holds && !now.holds) {
+      diff.regressions.push(`${id}: type ratchet HOLDS -> LOOSE — ${now.detail}`);
+    } else if (!was.holds && now.holds) {
+      diff.improvements.push(`${id}: type ratchet LOOSE -> HOLDS`);
+    }
+  }
+  for (const id of Object.keys(report.ratchet)) {
+    if (!base.ratchet[id]) diff.firstMeasurements.push(`${id}: type ratchet checked for the first time`);
+  }
+}
+
+function fixtureIds(report: OracleReport): string[] {
+  return Object.keys(report.matrix).sort();
+}
+
+function corpusMismatch(report: OracleReport, base: OracleReport): string[] {
+  if (!base.corpus) {
+    return ['the baseline does not record which fixtures it measured, so nothing can be compared against it — re-freeze with --write-baseline'];
+  }
+  if (!report.corpus) {
+    return ['this run does not record which fixtures it measured, so nothing can be compared'];
+  }
+  if (base.corpus.digest === report.corpus.digest) return [];
+
+  const before = new Set(fixtureIds(base));
+  const after = new Set(fixtureIds(report));
+  const added = [...after].filter(id => !before.has(id));
+  const removed = [...before].filter(id => !after.has(id));
+  const moved = added.length === 0 && removed.length === 0
+    ? 'same fixture names, changed contents'
+    : [added.length ? `added ${added.join(', ')}` : '', removed.length ? `removed ${removed.join(', ')}` : '']
+      .filter(Boolean).join('; ');
+  return [
+    `the fixture corpus changed since the baseline was frozen — baseline ${base.corpus.fixtures} fixtures (${base.corpus.digest}), this run ${report.corpus.fixtures} (${report.corpus.digest}): ${moved}. Numbers measured on different fixtures are not comparable; re-freeze with --write-baseline.`,
+  ];
+}
+
+export function diffAgainstBaseline(
+  report: OracleReport,
+  base: OracleReport,
+  context: DiffContext = STRICT,
+): BaselineDiff {
+  const diff = emptyDiff(true);
+  diff.corruption = [...inconsistencies(base, 'baseline'), ...inconsistencies(report, 'this run')];
+  if (diff.corruption.length > 0) return diff;
+
+  diff.corpusChanged = corpusMismatch(report, base);
+  if (diff.corpusChanged.length > 0) return diff;
+
+  const before = scoredMetrics(base);
+  const after = scoredMetrics(report);
+  const nowGates = new Map(report.gates.map(g => [g.gate, g]));
+
+  for (const [key, was] of before) {
+    const now = after.get(key);
+    const nowGate = nowGates.get(was.gate);
+    if (!now) noteShrink(diff, context, was, undefined, nowGate);
+    else if (now.denominator < was.denominator) noteShrink(diff, context, was, now, nowGate);
+    else if (now.denominator > was.denominator) compareOverWiderGround(diff, was, now);
+    else compareOverSameGround(diff, was, now);
+  }
+
+  for (const [key, now] of after) {
+    if (before.has(key)) continue;
+    diff.firstMeasurements.push(`${now.gate}: ${now.metric} scored for the first time — ${metricText(now)}${incompleteSuffix(now)}`);
+  }
+
+  for (const g of base.gates) {
+    const switchedOff = context.operatorDisabledGates.includes(g.gate) && g.available === false;
+    if (g.error > 0 && !switchedOff) {
+      const scored = g.detection_rate !== null || g.fp_rate !== null;
+      const what = scored ? 'froze this gate' : 'recorded no number for this gate';
+      diff.baselineCaveats.push(`${g.gate}: the baseline ${what} from a run where ${g.error}/${base.fixtures_total} fixtures errored`);
+    }
+  }
+
+  const sameMetrics = before.size === after.size && [...before.keys()].every(k => after.has(k));
+  const wasShare = deterministicCatchShare(base);
+  const nowShare = deterministicCatchShare(report);
+  if (sameMetrics && wasShare !== null && nowShare !== null && nowShare !== wasShare) {
+    const move = `deterministic share of all catches ${wasShare} -> ${nowShare}`;
+    if (nowShare < wasShare) diff.regressions.push(`${move} (P8 wants >= 0.2)`);
+    else diff.improvements.push(move);
+  }
+
+  compareRatchets(diff, report, base);
+
+  const chosenOff = new Set(context.operatorDisabledGates);
   for (const [id, row] of Object.entries(report.matrix)) {
     const prevRow = base.matrix[id];
     if (!prevRow) continue;
     for (const [gate, verdict] of Object.entries(row)) {
-      const prev = prevRow[gate];
-      if (prev === 'caught' && verdict !== 'caught') regressions.push(`${id} / ${gate}: caught -> ${verdict}`);
-      if (prev && prev !== 'caught' && verdict === 'caught') improvements.push(`${id} / ${gate}: ${prev} -> caught`);
+      const was = prevRow[gate];
+      if (!was || chosenOff.has(gate)) continue;
+      if (was === 'caught' && verdict !== 'caught') diff.regressions.push(`${id} / ${gate}: caught -> ${verdict}`);
+      if (was === 'missed' && verdict === 'caught') diff.improvements.push(`${id} / ${gate}: missed -> caught`);
     }
   }
 
-  const newCases = Object.keys(report.matrix).filter(id => !base.matrix[id]);
-  const droppedCases = Object.keys(base.matrix).filter(id => !report.matrix[id]);
+  diff.newCases = Object.keys(report.matrix).filter(id => !base.matrix[id]);
+  diff.droppedCases = Object.keys(base.matrix).filter(id => !report.matrix[id]);
 
-  return { hasBaseline: true, regressions, improvements, newCases, droppedCases };
+  return diff;
+}
+
+export function diffBaseline(report: OracleReport, context: DiffContext = STRICT): BaselineDiff {
+  if (!fs.existsSync(BASELINE_PATH)) return emptyDiff(false);
+  const base = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8')) as OracleReport;
+  return diffAgainstBaseline(report, base, context);
 }
 
 export function writeBaseline(report: OracleReport): void {
@@ -184,6 +515,9 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   lines.push('');
   lines.push(`ORACLE MEASUREMENT — ${report.fixtures_total} fixtures, all from bugs that really happened`);
   lines.push(`generated ${report.generated_at}`);
+  lines.push(report.corpus
+    ? `corpus: ${report.corpus.fixtures} fixtures, ${report.corpus.digest}`
+    : 'corpus: NOT RECORDED — this run does not say which fixtures produced these numbers');
   lines.push('');
 
   if (report.fixtures_unverified.length > 0) {
@@ -228,6 +562,8 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   lines.push('           B5 given a ticket, NOT a detection rate for unreported bugs.');
   lines.push('  guard fp measured against a probe set built to press on precision, not against');
   lines.push('           observed traffic. Real-world precision needs the gate log, not this file.');
+  lines.push('  floors   ground-truth.json declares minimum_detection and max_false_positives, and');
+  lines.push('           nothing reads either: no gate, no exit code, no baseline comparison.');
   lines.push('');
 
   lines.push(`caught by at least one deterministic gate: ${report.caught_by_any_deterministic}/${report.fixtures_total}`);
@@ -255,11 +591,18 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   if (!diff.hasBaseline) {
     lines.push('no baseline on disk — run with --write-baseline to freeze this run');
   } else {
-    if (diff.regressions.length === 0 && diff.improvements.length === 0) {
-      lines.push('baseline: no change');
-    }
+    const said = diff.corruption.length + diff.corpusChanged.length + diff.regressions.length + diff.lostMeasurements.length
+      + diff.improvements.length + diff.firstMeasurements.length + diff.acknowledgedAbsences.length
+      + diff.baselineCaveats.length + diff.newCases.length + diff.droppedCases.length;
+    if (said === 0) lines.push('baseline: no change');
+    for (const c of diff.corruption) lines.push(`CORRUPT     ${c}`);
+    for (const c of diff.corpusChanged) lines.push(`CORPUS      ${c}`);
+    for (const l of diff.lostMeasurements) lines.push(`LOST        ${l}`);
     for (const r of diff.regressions) lines.push(`REGRESSION  ${r}`);
     for (const i of diff.improvements) lines.push(`improved    ${i}`);
+    for (const f of diff.firstMeasurements) lines.push(`MEASURED    ${f}`);
+    for (const a of diff.acknowledgedAbsences) lines.push(`not run     ${a}`);
+    for (const b of diff.baselineCaveats) lines.push(`caveat      ${b}`);
     for (const n of diff.newCases) lines.push(`new fixture ${n}`);
     for (const d of diff.droppedCases) lines.push(`DROPPED     ${d}`);
   }
