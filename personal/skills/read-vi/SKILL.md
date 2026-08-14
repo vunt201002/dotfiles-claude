@@ -130,6 +130,35 @@ Write the English into `$WORK/en/source.md`. Record: title, author, publish date
 If the fetch produced fewer than a couple of real paragraphs, stop and report it. A thin
 fetch translated confidently is worse than no translation.
 
+### What counts as "the article", and what is the site around it
+
+**`DỊCH SÁT`'s "drop nothing" rule covers the ARTICLE. It does not cover the website.**
+Two runs read this differently — one dropped a "Related reads" block, the other folded the
+footer licence line, the policy links and a WeChat QR into the translation and then counted
+them toward "nothing missing". The first was right.
+
+**Cut before you translate:** nav bars, footers, licence and copyright lines, cookie and
+policy links, social/QR blocks, share and subscribe widgets, "related posts", comment-box
+chrome, newsletter forms, button labels (`Copy`, `Download`), and locale switchers.
+
+**Keep:** everything the author wrote, including code, figures, captions, footnotes, and
+the article's own outbound links. A repo or docs link the piece is pointing you at is
+content; the site's privacy-policy link is not.
+
+Two traps worth naming, both seen for real:
+
+- **A page can render the same section twice** (desktop and mobile variants in one
+  document). Deduplicate before translating, or you will faithfully translate a block twice
+  and every count will still say it matches.
+- **A section can be missing from the DOM entirely** — an unresolved framework placeholder
+  leaves nothing to extract, and no tag census will notice, because the tags are gone too.
+  If the prose jumps a beat, look for the page's own data payload before concluding the
+  article simply reads that way.
+
+Extraction accounting belongs in the run report: what you cut as chrome, and what you
+deduplicated. "0 content missing" earned by counting the footer as content is a number that
+lies.
+
 ---
 
 ## Step 2 — Classify: `DỊCH SÁT` or `VIẾT LẠI`
@@ -237,8 +266,21 @@ Read the output and decide:
    Every `<` line must contain `{{`. Any other differing line, and any added line at all,
    means you wrote prose of your own into the brief → **STOP**, recompose from the
    template.
-2. **B** and **C** must both print `OK`. A hit is a leak → **STOP**, remove it.
-3. **D** must list only Vietnamese working files. If anything English is sitting in
+2. **B** must print `OK`. A URL or source path is always a leak → **STOP**, remove it.
+3. **C** is a **heuristic, not a verdict.** `OK` and you are clear. A hit means *look at the
+   matched text and rule on it*, because this regex fires on Vietnamese too: `trong`, `qua`,
+   `danh`, `cho`, `khi` carry no diacritics, so a run of them around product tokens
+   (`form`, `app`, `Code mode`) matches "six ascii words" without a word of English being
+   present. Two separate runs hit this.
+   - **A real English clause** — subject + verb reading as a sentence → **STOP**, remove it.
+   - **Diacritic-free Vietnamese, or a bare token list** → not a leak. Proceed, but **name
+     the matched string in your run report** and say why you cleared it.
+   - Genuinely unsure → treat it as a leak and rewrite the line. The cost is one rewrite;
+     the cost of being wrong is the whole round.
+
+   Never clear a hit silently. A gate you waved through is worse than no gate, because next
+   time it reads as precedent.
+4. **D** must list only Vietnamese working files. If anything English is sitting in
    `$WORK/vi`, move it to `$WORK/en` before spawning.
 
 Do not spawn on a failed gate, and do not "fix it in the prompt" by asking the editor to
@@ -257,14 +299,26 @@ not something you can actually comply with.
 
 ### 4d. Verify the receipt
 
-The report's **first line** must be exactly:
+The report's **first meaningful line** must be exactly:
 
 ```
 MÙ NGUỒN: OK — brief chỉ có đường dẫn, không có văn bản tiếng Anh, không fetch/search gì.
 ```
 
-- Missing or altered → **the round is void.** Discard it, re-run 4a-4c. Do not accept the
-  edit "since it looks fine anyway".
+"First meaningful line" means: skip a leading code fence (```` ``` ````) and skip blank
+lines, then the next line must be the receipt, character for character. Nothing else may
+precede it — not a greeting, not "Done.", not a one-line summary of how the round went.
+
+**Why the wording is this fussy:** the brief template *displays* the receipt inside a code
+fence, so editors keep echoing the fence, and some prepend a status line. Three separate
+runs hit this. A fence is formatting; a sentence is content. The first is noise, the second
+means the agent wrote prose before certifying blindness — which is exactly the habit the
+receipt exists to catch.
+
+- **A leading fence or blank line → accept**, note it in the run report.
+- **Any prose before the receipt → the round is void.** Discard it, re-run 4a-4c.
+- Receipt text altered by even one character → **void.** Do not accept the edit "since it
+  looks fine anyway".
 - `MÙ NGUỒN: VỠ — …` → blindness actually broke. Find the leak channel, fix it, re-run from
   a fresh copy of the draft. Report the leak to the user; it means the gate has a hole
   worth closing permanently.

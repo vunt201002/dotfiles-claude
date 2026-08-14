@@ -82,6 +82,11 @@ chỉ sửa đúng chúng.
 MÙ NGUỒN: OK — brief chỉ có đường dẫn, không có văn bản tiếng Anh, không fetch/search gì.
 ```
 
+**TUYỆT ĐỐI KHÔNG viết bất cứ chữ nào trước dòng đó** — không lời chào, không `Done.`,
+không một câu tóm tắt tình hình, không "mọi cổng đều pass". Dòng receipt phải là thứ đầu
+tiên trong report. Khối ``` ở trên chỉ là cách trình bày trong brief này; bạn có thể bọc
+lại bằng ``` hoặc không, nhưng **một câu văn đứng trước là vòng bị huỷ**.
+
 Không có dòng này thì vòng bị coi là hỏng và phải chạy lại, nên đừng quên.
 
 Rồi tiếp:
