@@ -17,8 +17,24 @@ bun personal/oracle/run.ts --matrix           # thêm lưới fixture × cổng
 bun personal/oracle/run.ts --json             # bản máy đọc
 bun personal/oracle/run.ts --write-baseline   # đóng băng lần chạy này làm mốc
 
-ORACLE_LLM=1 ANTHROPIC_API_KEY=... bun personal/oracle/run.ts   # thêm spec-check + reviewer (TỐN TIỀN)
+ORACLE_LLM=1 bun personal/oracle/run.ts       # thêm spec-check + reviewer
+ORACLE_LLM=1 ORACLE_LLM_LIMIT=2 bun test personal/oracle/   # smoke 2 fixture trước khi chạy đủ
 ```
+
+**Cổng LLM không cần API key nữa.** Mặc định cổng chạy bằng `codex` (auth từ
+`~/.codex/`) và chấm bằng `claude -p` (auth subscription) — hai họ model khác
+nhau trên hai nửa, đúng luật ensemble §7.3, thay vì Claude chấm Claude như bản
+gọi thẳng Anthropic SDK. Đổi bằng `ORACLE_GATE_BACKEND` / `ORACLE_JUDGE_BACKEND`
+(`codex` · `claude-cli` · `anthropic-api`); mỗi lần chạy in ra cặp backend đang
+dùng, và **cảnh báo khi hai nửa trùng họ** vì lúc đó con số yếu hẳn.
+
+Chi phí đổi chỗ chứ không biến mất: nó ăn vào **hạn mức CLI**, không phải dollar
+theo API. Đo được: ~11s/call, một lần chạy đủ là 19 fixture × 2 cổng × 4 call =
+**152 call, khoảng 28 phút**.
+
+Cổng chạy trong `$HOME` tạm chỉ chứa auth, **không copy `skills/`** — một cổng
+đang bị đo mà đọc được 40 skill của máy thì không còn là cổng sẽ chạy ngoài thực
+địa nữa.
 
 Test:
 
@@ -198,11 +214,57 @@ ngược là tự dựng số.
 
 ## Baseline
 
-`baseline.json` là lần chạy đã đóng băng. Mỗi lần chạy sau diff lại và báo:
+`baseline.json` là lần chạy đã đóng băng. Mọi phép so đều chạy ra từ **một bất biến**:
 
-- `REGRESSION` — cổng nào tụt detection, thêm false positive, thêm error, hoặc một ô
-  từ `caught` rơi xuống khác `caught`
-- `improved` — ngược lại
-- `new fixture` / `DROPPED`
+> **Tập đã đo** = ánh xạ `(cổng, metric) → mẫu số`, tính một lần từ cả hai phía.
+> Mọi thứ khác suy ra từ việc tập đó đã làm gì.
+
+| Tập đã đo | Nhãn in ra | exit |
+|---|---|---:|
+| co lại (mất metric, hoặc mẫu số tụt) | `LOST` | **2** |
+| co lại, và **cả ba kênh** đồng ý là cố ý | `not run` | 0 |
+| nở ra (có metric mới, hoặc mẫu số tăng) | `MEASURED` | 0 |
+| giữ nguyên → so tỉ lệ bình thường | `REGRESSION` / `improved` | 2 / 0 |
+| hai phía tự mâu thuẫn | `CORRUPT` | **1** |
+
+Ngoài ra: `caveat` (baseline này đóng băng từ một lượt phần lớn fixture lỗi),
+`new fixture` / `DROPPED`. Chín nhãn đều rộng đúng 12 ký tự, có test ghim cột.
+
+`exitCodeFor()` là luật **duy nhất**; `run.ts` và mọi test đều đọc nó, không bản sao nào
+trôi được.
+
+**Ba kênh phải cùng đồng ý** thì một phép đo mất mới được hạ xuống `not run`: cổng ghi
+được **con số nào cả**, cổng nằm trong danh sách tắt của caller (`llmGatesEnabled()`, đọc
+từ env — kênh mà cổng bị đo **không ghi vào được**, §7.3b bài 2), và cổng tự khai
+unavailable. Từng kênh một là không đủ:
+
+- chỉ tự khai ⟹ canary hỏng tự xin miễn
+- chỉ danh sách caller ⟹ gọi tên `red-test` là giết được nó lặng lẽ
+- chỉ "không có số" ⟹ tắt một cổng không giải thích được vì sao nó ra số **một phần**,
+  nên lượt trả tiền bị rate-limit vẫn phải tính là mất
+
+Mặc định là **nghiêm**: caller quên khai thì được nhiều báo động hơn, không phải ít hơn.
+
+**Chống sửa tay.** Mỗi số phải khớp hàng xóm của nó — `applicable` với `caught+missed`,
+`detection_rate` với `caught/applicable`, `fp_rate`, `coverage`, và các ô matrix. Lệch
+một field là `CORRUPT` + exit 1, chứ không phải lặng lẽ tắt một phép so. `deterministic
+catch share` được **tính lại**, nên sửa nó trong file không đổi được gì.
+
+Riêng `NOT MEASURED — <cổng>: <lý do>` nằm ở bảng cổng phía trên, in mỗi lần chạy, độc
+lập với baseline.
+
+**Lỗ còn lại, nói thẳng:**
+
+- Khối `ratchet` không có hàng xóm nào ràng buộc — xoá nguyên khối là tắt được phép so
+  ratchet bằng một thao tác. Bịt được thì cần một nguồn nằm ngoài baseline.
+- Giả mạo **nhất quán nhiều field** vẫn lọt. Phòng tuyến này chống một số lệch với hàng
+  xóm, không chống người tính lại cả cụm.
+- So khớp dùng `!==` tuyệt đối với `ratio()`. Baseline thật luôn do `writeBaseline` ghi
+  nên luôn khớp; nhưng **đổi cách làm tròn là mọi baseline đang có hoá `CORRUPT`**. Viết
+  fixture tay phải theo đúng quy ước làm tròn.
+- Bỏ một fixture khỏi corpus sẽ exit 2 (mẫu số mọi cổng đều co). Đúng với một dụng cụ đo,
+  nhưng nên biết trước khi sửa bộ fixture.
+- `--write-baseline` vẫn đóng băng được một lượt hỏng. Giảm hại bằng dòng `caveat` in ra
+  mỗi lần so, chứ chưa chặn.
 
 Đây là thứ trả lời câu hỏi mà cả P6 tồn tại vì nó: **oracle có đang tụt không.**

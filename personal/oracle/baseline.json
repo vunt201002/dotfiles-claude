@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-12T16:13:36.526Z",
+  "generated_at": "2026-08-14T04:57:24.244Z",
   "fixtures_total": 19,
   "fixtures_verified": 19,
   "fixtures_unverified": [],
@@ -16,9 +16,9 @@
       "applicable": 2,
       "detection_rate": 0,
       "coverage": 0.105,
-      "false_positives": 4,
+      "false_positives": 1,
       "fp_denominator": 8,
-      "fp_rate": 0.5
+      "fp_rate": 0.125
     },
     {
       "gate": "lint",
@@ -72,7 +72,7 @@
       "gate": "spec-check",
       "family": "llm",
       "available": false,
-      "unavailable_reason": "ORACLE_LLM=1 is not set — the paid gates are off by default",
+      "unavailable_reason": "ORACLE_LLM=1 is not set — the LLM gates are off by default",
       "caught": 0,
       "missed": 0,
       "n_a": 0,
@@ -88,7 +88,7 @@
       "gate": "reviewer",
       "family": "llm",
       "available": false,
-      "unavailable_reason": "ORACLE_LLM=1 is not set — the paid gates are off by default",
+      "unavailable_reason": "ORACLE_LLM=1 is not set — the LLM gates are off by default",
       "caught": 0,
       "missed": 0,
       "n_a": 0,
@@ -261,171 +261,159 @@
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "audit produced no output at all (exit 0) — the check silently did nothing",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "hook-lint-flag-version-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "a file with no lint errors was blocked because the CLI rejected the flag before linting",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "hook-gate-without-config": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "the stop gate reported FAIL on a repo that has no root tsconfig, so every turn is blocked by a check that never ran",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "guard-denylist-variant": {
       "guard": "guard allowed the call (exit 0)",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "untracked work was destroyed with no way back",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "stage-whole-index": {
       "guard": "guard allowed the call (exit 0)",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "the deploy commit swept in unrelated files: ci.yml, scratch-token.txt",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "worklog-dedupe-key": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "one branch showed up as 2 tasks in the standup, each with its own next action",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "symlink-script-path": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
-      "red-test": "notes would be written to C:\\Users\\Admin\\AppData\\Local\\Temp\\oracle-symlink-path-6G5Bbb\\home\\.claude\\brain-vault, outside the checkout, so they never get committed",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-9yJMDV/home/.claude/brain-vault, outside the checkout, so they never get committed",
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "sheet-tombstone-resurrection": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "a row the user cleared by hand came back as \"Task the user deleted by hand\"",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "sheet-empty-row-footprint": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "a hand-edited row with a blank title but live data in every other column was overwritten by the append",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "cross-surface-token-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "the test written from the ticket stays green: admin card matches the spec, which is the only surface QC named",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "scope-drift-extra-endpoint": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "the test written from the ticket stays green: the requested cart summary is correct, which is all the ticket asked for",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "twin-mapper-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "an order the bulk sweep invoiced first was built as retail even though the buyer is a company",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "pagination-truncation": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "invoice charged 500 against an order total of 600 and every guard passed it",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "tautological-validation": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "a credit note held for crediting too little was transmitted by one retry, because validation compared the document with itself",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "ignored-input-field": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the document demands 87.85 while the customer paid 72.6",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "silent-skip-without-env": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "2 integration cases did not run and the suite still reported ok",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "idempotency-key-race": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the stored credit note is 40 instead of 61 — the losing path spent the idempotency key, so the correct document can never be issued",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "global-queue-drain": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "run-a took 2 rows and run-b took 0 — two concurrent runs eat one another's rows",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
     "scroll-pinned-control": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the close control sits on top of content",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the paid gates are off by default"
+      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
+      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     }
   },
   "false_positives": {
     "guard": [
       {
-        "on": "fp-echo-mentions-rm",
-        "detail": "printing advice that quotes a dangerous command is not running it — blocked anyway"
-      },
-      {
-        "on": "fp-grep-for-denied-string",
-        "detail": "searching the docs for a string is read-only — blocked anyway"
-      },
-      {
         "on": "fp-doc-with-credentials-in-name",
         "detail": "a runbook about credential rotation contains no credentials — blocked anyway"
-      },
-      {
-        "on": "fp-reset-mentioned-in-message",
-        "detail": "a commit message that names a command is not the command — blocked anyway"
       }
     ],
     "lint": [],
