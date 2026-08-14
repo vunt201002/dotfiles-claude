@@ -251,6 +251,29 @@ việc thử cổng chứ không phải từ việc làm thật**.
 Không có `origin` thì mọi con số của P8 đều nhiễm. Harness bơm fixture vào hook đặt
 `GSTACK_GATE_LOG_ORIGIN=gate-test`; hook truyền xuống. **§7.3 và P8 chỉ đếm `origin: work`.**
 
+> **Cài thật 13/08 — trước đó đoạn trên là mô tả một thứ KHÔNG tồn tại.** `grep -rn
+> "GSTACK_GATE_LOG_ORIGIN"` toàn repo cho đúng một hit: chính dòng này. Không có `origin`
+> trong `gate-log.ts`, không có trong hook, không có trong bất kỳ reader nào. Đây là §7.3b
+> bài học 1 xảy ra ngay trong doc mô tả nó — **văn bản khiến người đọc sau tin rằng có hàng
+> rào**. Bằng chứng nó có hại: sổ trên máy mới vừa sinh ra đã có 10/10 dòng là probe guard
+> ghi thành `work`.
+
+**Bốn đầu dây, cắt một cái là probe lại chảy vào số:**
+
+| Đầu dây | Ở đâu |
+|---|---|
+| Đóng dấu lúc ghi | `resolveOrigin` trong `gate-log.ts` — tham số > env > `work`. Env sai chính tả **ném lỗi**, không âm thầm về `work` |
+| Harness đóng dấu probe | `runGuardGate` trong `oracle/lib/gates.ts` đóng dấu **child**, không đóng `process.env` — test chạy chung process không dính lây |
+| Reader §7.3 | `verifyDeterministicGates` chỉ nhận dòng `work` làm chứng từ; `collectLoggedGates` lọc qua `workOnly()` |
+| Reader P8 | `gate-log stats` mặc định chỉ đếm `work`, in rõ đã loại bao nhiêu dòng; `--origin all` để xem hết |
+
+Bốn cái được khoá bằng tripwire tĩnh 22-25 trong `personal/manager/test/tripwire.test.ts`, vì
+một đảm bảo chỉ nằm trong bảng này thì lần refactor sau sẽ gỡ mà không có gì đỏ.
+
+**Dòng ghi trước 13/08 không có `origin`.** Chúng đọc ra `work` theo đúng mặc định §3.3, nhưng
+`stats` đếm riêng và in *"provenance assumed, not measured"* — một con số trộn xuất xứ đo được
+với xuất xứ suy ra mà không nói thì đúng là thứ sổ này sinh ra để chặn.
+
 **Đã biết, chưa vá:** guard **chỉ log rule ĐẦU TIÊN khớp**. Một lệnh bị chặn có thể khớp nhiều
 rule mà sổ chỉ ghi một, nên **precision theo từng RULE không khôi phục được từ sổ này — chỉ có
 precision theo từng GATE.** Muốn tune từng rule thì phải ghi mọi rule khớp.
@@ -329,7 +352,26 @@ chưa chứng minh) hay B4 (red-team thủng) → **dừng ngay, không retry**.
 ## 6. Manager (chỉ xây sau cổng §4)
 
 ### 6.1 Process model
-- **Daemon nhẹ** `manager daemon` + **CLI**: `manager run|status|stop|stopall|report|cost`
+- **Daemon nhẹ** `manager daemon` + **CLI**: `manager run|status|stop|stopall|report|cost|fleet|worktrees`
+
+**Agent khởi động daemon/bot phải đi qua `bin/gstack-detach`.** CLAUDE.md đã bắt
+làm thế cho eval dài; nó áp cho **service** còn gắt hơn, và tôi ăn đúng lỗi này
+ngày 13/08: daemon + bot chạy bằng background task thường thì nằm trong process
+group của harness, nên một SIGTERM "xin nghỉ lịch sự" ở ranh giới lượt giết cả
+hai. Chúng tắt *sạch sẽ* — log ghi "shutting down" — nên nhìn không giống lỗi,
+chỉ giống đã xong. Sau đó `/fleet` trên điện thoại im lặng và không ai biết tại sao.
+
+```bash
+bin/gstack-detach --label manager-daemon --log ~/.gstack/manager/daemon.log \
+  -- env EVALS_HERMETIC=0 bun personal/manager/cli.ts daemon
+bin/gstack-detach --label telegram-bot --log ~/.gstack/manager/telegram-bot.log \
+  -- bun personal/manager/telegram/bot.ts
+```
+
+Không `--timeout` cho service (mặc định 0 = không watchdog). `EVALS_HERMETIC=0`
+là bắt buộc cho daemon: hermetic env dựng `CLAUDE_CONFIG_DIR` mới, và agent sẽ
+báo `Not logged in`. Kiểm đã tách thật bằng `ps -o pgid=` — pgid của service phải
+KHÁC pgid của shell gọi nó.
 - **State ở đĩa:** `~/.gstack/manager/state.json`, `tasks/<id>.json`, `~/.gstack/gate-log/`
 
 ### 6.2 Spawn primitive — dùng đồ đã có, KHÔNG lái Warp
@@ -346,14 +388,72 @@ chưa chứng minh) hay B4 (red-team thủng) → **dừng ngay, không retry**.
 Lái Warp bằng GUI là mảnh giòn nhất có thể chọn: không đọc được kết quả có cấu trúc, không
 cap được concurrency, không đo được tiền, chết câm khi cửa sổ đổi.
 
+#### 6.2b Bốn phản đối trên KHÔNG đúng với cmux — đo lại ngày 13/08
+
+Bốn lý do ở trên viết cho Warp. Đem nguyên si sang cmux thì ba trong bốn cái sai,
+và cái sai đó đã được kiểm bằng cách đọc `~/.cmuxterm/claude-hook-sessions.json`
+trên máy này chứ không phải bằng cách đọc tài liệu cmux.
+
+| Phản đối (viết cho Warp) | Với cmux | Bằng chứng |
+|---|---|---|
+| không đọc được kết quả có cấu trúc | **sai** — `agentLifecycle` (running·idle·needsInput) + `transcriptPath` | `lib/cmux-sessions.ts` |
+| không cap được concurrency | **sai, và tốt hơn semaphore** — đếm session sống trong store, thấy CẢ pane user tự mở | `busyCount()`, `waitForSlot()` |
+| không đo được tiền | **sai** — usage nằm trong transcript agent tự ghi cho mình | `usageFromTranscript()` |
+| chết câm khi cửa sổ đổi | **đúng một nửa** — pid chết mà lifecycle còn `running` là crash, phát hiện được; nhưng vẫn phải cross-check pid | `healthOf()` |
+
+Cái thứ ba mới là cái đáng giá: transcript là **kênh thứ được đo không viết cho
+manager**, đúng yêu cầu §7.3b bài 2 cho mọi con số được phép mở autonomy. Semaphore
+trong SDK runner ngược lại chỉ thấy spawn của chính manager — một người mở 3 pane tay
+đẩy máy lên 11 agent trong khi mọi con số manager báo vẫn là 8.
+
+**Đổi lại được gì:** work chạy trong pane user nhìn thấy, ngắt được, cướp lái được
+giữa chừng. Đó là thứ SDK runner không bao giờ cho.
+
+**Giá phải trả, ghi rõ chứ không giấu:**
+- `cmux send` là **gõ vào TUI**, không phải API. Gửi lúc agent đang chạy = chèn ký tự
+  vào giữa lượt; gửi chuỗi có `\n` = submit sớm, phần còn lại thành lệnh thứ hai.
+  Nên: prompt đầu **không bao giờ được gõ** — ghi ra file, launch command đọc bằng
+  `"$(cat …)"`; và `sendText` từ chối khi lifecycle không phải idle/needsInput.
+- Pane chạy `claude` thật với settings của user, nên `--dangerously-skip-permissions`
+  chỉ chấp nhận được khi `pre-tool-use-guard.sh` có thật — `guardIsWired()` kiểm
+  trước, từ chối spawn chứ không tin cái cờ.
+- Chỉ role trong `cmuxRoles` (mặc định `main`, `subagent`) mới có pane. Gate
+  report-only đi SDK: 5 pane phụ cho mỗi task sẽ chôn mất cái pane đáng nhìn.
+
+#### 6.2c Một repo, N worktree — thay cho joy-1/joy-2/joy-3
+
+Trước: mỗi task một bản copy repo, nên hai task cùng repo không chạy song song được;
+manager lấy khoá theo project để che, mà khoá theo project là **hàng đợi mặc áo
+concurrency** — 8 repo là trần 8 agent bất kể máy bao nhiêu core.
+
+Giờ: `lib/worktrees.ts`, mỗi task một `git worktree` riêng + branch riêng
+`manager/<taskId>`, đặt ở `~/.gstack/manager/worktrees/<project>/<taskId>` —
+**ngoài repo**, vì để trong repo thì scope của task A chứa checkout của task B và
+guard sẽ cho qua write từ A sang B.
+
+Hai điều module này TỪ CHỐI làm, và lý do:
+1. **Không xoá thư mục nó không tạo ra.** Mọi worktree ghi vào `worktrees.json`
+   trước, `remove` đối chiếu file đó. Máy này đang có `joy-2`, `joy-3`,
+   `wishlist-2`, `wishlist-3` nằm cạnh bản gốc giữ 19 stash; một pass dọn dẹp đi
+   theo pattern tên thay vì theo sổ sẽ ăn mất chúng.
+2. **Không xoá worktree còn thay đổi chưa commit** trừ khi ép. Việc dở của agent
+   là thứ đắt nhất trên đĩa.
+
 ### 6.3 Concurrency và tài nguyên khan hiếm
 
 | Tài nguyên | Cap | Cơ chế |
 |---|---|---|
-| Agent toàn cục | `min(8, cores-2)` | semaphore sẵn có |
+| Agent toàn cục | `min(8, cores-2)` | semaphore SDK; runner cmux đếm `busyCount(fleet())` |
 | Agent chính / project | **1** | khoá theo `project` |
 | Chrome thật (`/my-chrome`, DevTools MCP) | **1 token toàn cục** | FIFO, `holds: ["browser-token"]` |
 | Playwright headless | không giới hạn | không tranh Chrome |
+
+**Khoá theo project còn cần không?** Với runner cmux thì mỗi task đã có worktree
+riêng, nên hai task cùng repo không còn giẫm file của nhau — lý do gốc của khoá đã
+mất. Khoá vẫn giữ nguyên chưa gỡ, vì nó còn che một thứ khác: lệnh install
+(`bun install`) ghi vào `node_modules` **dùng chung qua symlink** giữa mọi worktree.
+Gỡ khoá là việc riêng, phải làm sau khi tách được install ra khỏi task, không phải
+tiện tay lúc thêm cmux.
 
 ### 6.4 Model routing
 
@@ -580,39 +680,78 @@ chi phí p90, brainstorm, crash recovery, scope theo project, `/stopall`.
 
 **DoD:** có `detection_rate` + `false_positives` thật cho từng cổng, thay con số đi mượn
 `~60-70%` đang nằm trong `workflow.md`.
+**→ ĐẠT 13/08** cho phần đo (bảng ngay dưới, cả 6 cổng đều có số thật). **Còn nợ**: cưỡng chế
+red test — B5 vẫn chỉ là prose, chưa lưu output lần chạy đỏ để B8 đối chiếu.
 
-#### Kết quả đo lần đầu — 19 fixture từ lỗi THẬT (12/08)
+#### Kết quả đo — 19 fixture từ lỗi THẬT (12/08, đo lại đầy đủ 13/08)
 
 Fixture lấy từ git history của repo này, `design-eye §D1` (pattern 21/22, cột "Gặp" = 1), và
 chuỗi T-124 → T-148 trong `DEBT.md` của eivno. **19/19 verify đỏ trên `buggy`, xanh trên
 `fixed`** — không fixture nào là mô tả suông.
 
-| Cổng | family | detect | coverage | FP rate |
-|---|---|---:|---:|---:|
-| `guard` | deterministic | **0%** | 11% | **50%** (4/8) |
-| `lint` | deterministic | 0% | 32% | 0% |
-| `tsc` | deterministic | 0% | 42% | 0% |
-| `red-test` | deterministic | 90% | 100% | 0% |
-| `spec-check` | llm | — | — | **CHƯA ĐO** (thiếu API key) |
-| `reviewer` | llm | — | — | **CHƯA ĐO** |
+| Cổng | family | detect | coverage | FP rate | **precision** |
+|---|---|---:|---:|---:|---:|
+| `guard` | deterministic | **0%** | 11% | 13% (1/8) | **0%** |
+| `lint` | deterministic | 0% | 32% | 0% (0/6) | n/a |
+| `tsc` | deterministic | 0% | 42% | 0% (0/8) | n/a |
+| `red-test` | deterministic | 90% | 100% | 0% (0/19) | **100%** |
+| `spec-check` | llm | 90% | 100% | **68%** (13/19) | **57%** |
+| `reviewer` | llm | 72% | 95% | **44%** (8/18) | **62%** |
 
-**Bốn điều đọc ra được, theo thứ tự quan trọng:**
+`precision` = `caught / (caught + false_positives)` — trong bao nhiêu lần cổng kêu "có bug"
+thì thật sự có bug. Cột này thêm vào 13/08 vì **xếp hạng theo `detect` sẽ chọn nhầm cổng**,
+xem hai đoạn ngay dưới bảng.
 
-1. **`guard` sai cả HAI chiều.** Chặn 4/6 lệnh vô hại (gồm đúng ca `echo "...đừng dùng
-   rm -rf ~"` mà benchmark ghi lại ngày 08/08), và bắt **0/2** fixture thật sự phá hoại —
-   `git clean -fdx` đi thẳng qua denylist, `git add -A` trong đường deploy cũng vậy. Cái thứ
-   hai đặc biệt đáng nói: `git add -A` bị CẤM rõ trong `CLAUDE.md` mà cổng không thấy.
+> **13/08 — đã bấm nút chạy, 24 phút, 19 fixture. Hai cổng LLM lần đầu có số.**
+> Hai cổng từng gọi thẳng Anthropic SDK nên bắt buộc có `ANTHROPIC_API_KEY`. Giờ chúng chạy qua backend
+> tách rời (`personal/oracle/lib/llm-backends.ts`): **cổng bằng `codex`** (auth từ
+> `~/.codex/`), **chấm bằng `claude -p`** (auth subscription). Không có key nào
+> trong env, cả lượt smoke 2 fixture lẫn lượt đầy đủ 19 fixture.
+>
+> Cái được lớn hơn tiền: **BLOCKER 4 vá được một nửa**. §7.3 nói ba cổng LLM độc
+> lập về context nhưng không độc lập về failure mode vì cùng họ Claude. Giờ nửa
+> sinh-report là openai, nửa chấm là anthropic. Mỗi lần chạy in ra cặp backend và
+> **kêu lên khi hai nửa trùng họ**.
+>
+> Chạy thật hết **24 phút** (ước lượng trước đó ~28), ăn hạn mức CLI chứ không phải
+> dollar API. Chạy: `ORACLE_LLM=1 bun test personal/oracle/`
+> (`ORACLE_LLM_LIMIT=2` để smoke trước). Log đầy đủ — gồm danh sách false positive
+> từng fixture kèm nguyên văn lý do của judge — cất ở
+> `~/.gstack/manager/evidence/20260813/oracle-full.log`, vì lần chạy sau **ghi đè** bản gốc.
+
+**Sáu điều đọc ra được, theo thứ tự quan trọng:**
+
+1. **Cổng LLM báo bug ở bản ĐÃ SỬA gần bằng ở bản lỗi.** `spec-check` detect 90% nghe như
+   cổng tốt nhất bảng — nhưng nó kêu ở **13/19 bản `fixed`**. Precision thật **57%**, so với
+   **50%** của một cổng lúc nào cũng kêu "có bug". `reviewer` headline xấu hơn (72%) nhưng
+   sức phân biệt (detect − FP) là **28 điểm** so với **22** của spec-check, tức nó là cổng
+   *tốt hơn*. **Xếp hạng theo cột `detect` sẽ chọn nhầm cổng.** Cả hai còn xa ngưỡng
+   `precision ≥ 90%` của P8 → LLM chain hiện **không đủ điều kiện mở autonomy cho lane nào**.
+2. **`guard` sai cả HAI chiều — nhưng chiều FP đã vá được và có số chứng minh.** Nó vẫn bắt
+   **0/2** fixture thật sự phá hoại: `git clean -fdx` đi thẳng qua denylist, `git add -A`
+   trong đường deploy cũng vậy — cái thứ hai đặc biệt đáng nói vì `git add -A` bị CẤM rõ
+   trong `CLAUDE.md` mà cổng không thấy. Chiều còn lại: FP từ **4/8 (50%) xuống 1/8 (13%)**
+   nhờ commit `e6e1efae` tách denylist thành hard-block và ask, và thôi khớp chuỗi nằm trong
+   nháy — ca `echo "...đừng dùng rm -rf ~"` mà benchmark ghi ngày 08/08 giờ đi qua được.
    *Caveat của chính phép đo: probe set dựng để ép precision, không phải traffic quan sát được.*
-2. **`tsc` và `lint` bắt 0 — đúng như kỳ vọng, và đó mới là điểm.** Đây là những bug đã
+3. **`tsc` và `lint` bắt 0 — đúng như kỳ vọng, và đó mới là điểm.** Đây là những bug đã
    **lọt qua** chúng. Giá trị của `tsc` nằm ở cột **ratchet**: hai fixture mà bản vá thật siết
    kiểu (`twin-mapper-drift` T-124, `ignored-input-field` T-81) giờ làm `tsc` đỏ ở call site cũ.
    Đó là việc của tsc ở đây — **chặn tái phát, không phải phát hiện**.
-3. **2/19 fixture không cổng nào bắt được**: `scope-drift-extra-endpoint` và
-   `cross-surface-token-drift` — đúng lớp lỗi mà `spec-check` nhận là của mình. Nghĩa là con số
-   `~60-70%` **chịu lực**: spec-check không bắt thì **không gì bắt**.
-4. **`red-test` 90% KHÔNG phải detection rate.** Mọi fixture đều là bug rốt cuộc đã được tìm ra
-   và viết lại, nên đây là **cận trên của B5 khi đã có ticket**. Hai ca trượt là hai lớp không
-   ticket nào mô tả. Runner in caveat này ngay cạnh số để không ai trích trần.
+   `applicable` của tsc nghĩa là **"fixture này là file .ts"**, KHÔNG phải "ground truth nói
+   tsc phải bắt được" — đọc nhầm chỗ này thì `0/8` trông như cổng hỏng. Nó là câu trả lời đúng.
+4. **`red-test` là cổng tốt nhất bảng, và giờ có cột để thấy điều đó**: detect 90% với
+   precision **100%** — 17 lần kêu, 17 lần đúng. Nhưng 90% **KHÔNG phải detection rate**: mọi
+   fixture đều là bug rốt cuộc đã được tìm ra và viết lại, nên đây là **cận trên của B5 khi đã
+   có ticket**. Hai ca trượt là hai lớp không ticket nào mô tả. Runner in caveat này ngay cạnh
+   số để không ai trích trần.
+5. **`caught_by_nothing` từ 2/19 xuống 0/19 khi cổng LLM bật.** Hai ca cũ không ai bắt —
+   `scope-drift-extra-endpoint` và `cross-surface-token-drift` — đúng là `spec-check` bắt,
+   đúng lớp lỗi nó nhận là của mình. Giả thuyết "spec-check không bắt thì không gì bắt" giờ
+   là **số đo chứ không phải kỳ vọng**. Đây là lý do không được bỏ cổng LLM chỉ vì precision xấu:
+   nó là cổng DUY NHẤT phủ lớp scope-drift.
+6. **`deterministic_catch_share` = 36%** (17 trong 47 lần bắt), so với ngưỡng P8 là ≥20%. Đạt —
+   nhưng xem lưu ý P8 ngay dưới về việc con số này từng đọc ra 100% vì lý do sai.
 
 **Một bug tìm thấy trong chính dụng cụ đo.** Lần chạy đầu báo *"tsc caught 0/8"* — **sai**:
 tsc in path tương đối, matcher so path tuyệt đối, nên mọi lỗi biên dịch bị quy về không ai.
@@ -622,9 +761,10 @@ Chỉ lộ ra vì có người bơm một lỗi đã biết vào để thử ph�
 `silent-skip-without-env` — và nó sống trong chính cái máy đo. Đây là lý do §3.2 có lấy mẫu mù
 và §7.3b có luật "kênh độc lập": **một phép đo im lặng sai trông y hệt một phép đo đạt.**
 
-**Lưu ý khi đọc P8:** tỉ lệ "deterministic ≥ 20%" hiện đọc ra 100% — **chỉ vì cổng LLM chưa
-được đo**. Nó sẽ tụt khi đo. Nguồn đúng cho tỉ lệ này lúc chạy thật là gate log (P1), không
-phải file này.
+**Lưu ý khi đọc P8:** tỉ lệ "deterministic ≥ 20%" từng đọc ra **100%** — chỉ vì cổng LLM chưa
+được đo, và bản kế hoạch này đã đoán trước là nó sẽ tụt khi đo. Đo 13/08: **36%**. Vẫn qua
+ngưỡng, nhưng khoảng an toàn hẹp hơn nhiều so với con số cũ. Nguồn đúng cho tỉ lệ này lúc chạy
+thật vẫn là gate log (P1), không phải file này.
 
 ### P8 — Tắt review theo lane
 **Điều kiện mở** cho một `(project, lane)`:
@@ -642,6 +782,12 @@ phải file này.
 (10 caught / 4 false-positive), tức FP chiếm 28.6% so với ngưỡng 10%. **Guard còn xa mới đủ
 điều kiện tự trị, và giờ đó là một con số chứ không phải một cảm giác.** Trước khi có đường
 đánh dấu, cùng cổng đó hiện 100% — con số đẹp duy nhất vì chưa ai đếm được cái sai.
+
+> **Con số 71.4% này có TRƯỚC commit `e6e1efae`, và chưa đo lại.** Trên probe set 8 lệnh của
+> oracle, cùng bản vá đó kéo FP từ 4/8 xuống 1/8 — nên precision thật của guard hôm nay gần
+> như chắc chắn cao hơn 71.4%. Nhưng hai phép đo có **mẫu số khác nhau** (14 lệnh so với 8),
+> nên không được suy con số này ra từ con số kia. Muốn có số mới thì phải chạy lại chính
+> benchmark 14 lệnh. Chưa chạy — để nguyên số cũ còn hơn ghi một số suy diễn.
 
 **Cách mở:** từng lane một, `trivial` → `bug-nho`. `bug-lon`/`feature` giữ review lâu nhất.
 Tắt rồi mà lô mẫu mù có `human_touches > 0` → **bật lại ngay**, không thương lượng.
@@ -875,4 +1021,40 @@ tính theo từng máy cho tới khi có chỗ gộp sổ.
 - "Chế độ tập lái" giữa P6 và P8: tắt review nhưng manager vẫn gửi diff để anh liếc, không
   bắt buộc trả lời — có đáng làm như bước đệm không?
 - Grok/X search nối vào manager (brainstorm) hay agent chính (research lúc size)?
-- Cài lại codex? Luật ensemble §7.3 yếu hẳn khi cả ba cổng LLM đều là Claude.
+- ~~Cài lại codex?~~ **ĐÃ TRẢ LỜI 13/08: codex đã có sẵn trên máy** (`codex-cli
+  0.147.0`, auth trong `~/.codex/`). Câu hỏi này mở suốt vì không ai kiểm tra lại
+  — chính nó là lý do §11c bảo phải dò chứ đừng giả định. Tầng đo đã chuyển sang
+  dùng codex. **ĐÃ ĐÓNG NỐT 14/08:** mặc định `reviewProvider` là `codex`, nên
+  `spec-check` / `tech-review` / `impact-review` ở đường chạy thật là OpenAI chấm
+  Claude. `reviewIndependence()` in ra cặp family lúc daemon khởi động và kêu khi
+  hai nửa trùng family; một provider gõ sai trong config rơi về mặc định (codex)
+  chứ không rơi về `opus-fresh` như trước — gõ nhầm một chữ không được phép âm
+  thầm gỡ tính độc lập.
+- **Chưa đóng, thuộc BLOCKER 4:** hai cổng judge (`B8-judge`, `design-judge`) vẫn
+  là Claude. `roleForGate()` xếp chúng vào role `judge`, và orchestrator định
+  tuyến `judge` sang `spawnPort` chứ không sang `reviewPort`. Đó không phải sơ
+  suất: hai cổng này cần `browserTools` để mở trang thật, còn cổng codex chạy
+  `sandbox: 'read-only'` và không lái được Chrome. Muốn chuyển thì phải có
+  transport browser cho codex trước.
+- Chi phí review giờ **không đo được bằng USD**: codex tiêu quota CLI chứ không
+  phải dollar API. Mọi lượt review trả về `costKnown: false`, đếm vào
+  `cost_unmeasured_runs` trên task, và **không** ghi `cost_usd` vào gate log —
+  trần §6.5 đọc một con số thiếu chứ không đọc một con số bịa. Task nào có lượt
+  chưa đo thì bị loại khỏi mẫu p90 (một cái sàn không phải một mẫu).
+- **Hệ quả phải nói thẳng:** vì mọi task `bug-lon`/`feature` đều có lượt review
+  chưa đo, hai làn đó **không bao giờ đủ mẫu để lên p90** khi còn chạy codex —
+  chúng nằm mãi ở trần bootstrap. `laneCeiling` báo `rejected_partial` (đếm theo
+  TỪNG làn) để chỗ đó hiện ra thành lý do chứ không thành một làn im lặng không
+  bao giờ rời bootstrap. Bù lại, thứ chặn lượt chưa đo không còn là tiền mà là
+  `maxUnmeasuredRunsPerTask` — nó chặn SỐ LƯỢT, không chặn tiền.
+- **Một cổng không trả lời không phải một cổng không tìm thấy gì.** Hai cổng
+  review cùng hỏng trả về đúng một chuỗi hằng của `parseVerdict`, và ensemble
+  vốn khớp theo văn bản nên hai cái hỏng **tự xác nhận lẫn nhau** thành
+  `block: "two llm gates agree"` — đúng câu §7.3 dành cho corroboration độc
+  lập, trong khi chẳng cổng nào phán xử gì. Nay dòng `error` không tham gia
+  cross-confirm; nó vào `broken`, và `phaseReview` park chờ người y như làn
+  VERIFYING vẫn làm với oracle của nó.
+- Ensemble ghi thêm `family` cho mỗi dòng llm. Hai cổng cùng family vẫn block
+  (an toàn hơn), nhưng câu chữ nói rõ là cùng nhà — không được gọi đó là
+  corroboration. Family không ghi được thì báo `không xác minh được`, không suy
+  bừa là cùng nhà.
