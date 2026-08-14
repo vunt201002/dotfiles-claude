@@ -113,16 +113,113 @@ describe('every agent spawn goes through the shared semaphore', () => {
   // invariant, checked here on the file itself: git.ts may name only git, and
   // assert-runner.ts must refuse an agent binary before it runs anything.
 
-  test('4. only lib/git.ts and lib/assert-runner.ts shell out', () => {
+  test('4. only the four named files shell out', () => {
     const hits = offenders(/\b(Bun\.spawn|Bun\.spawnSync|child_process|execSync|spawnSync)\s*[(.]/, [
       path.join('lib', 'git.ts'),
       path.join('lib', 'assert-runner.ts'),
+      path.join('lib', 'worktrees.ts'),
+      path.join('lib', 'cmux-control.ts'),
     ]);
     expect(hits, `the manager never drives a terminal; it spawns through the SDK runner:\n${hits.join('\n')}`).toEqual([]);
 
     const gitSrc = fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'git.ts'), 'utf-8');
     const argv = [...gitSrc.matchAll(/Bun\.spawnSync\(\s*\[\s*'([^']+)'/g)].map((m) => m[1]);
     expect(argv, 'lib/git.ts may run git and nothing else').toEqual(['git']);
+  });
+
+  // worktrees.ts is git.ts's rule applied to a second file: it exists to run
+  // `git worktree`, and a binary other than git appearing in it is a new
+  // subprocess route wearing a plumbing file's name.
+  test('4c. lib/worktrees.ts may run git and nothing else', () => {
+    const src = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'worktrees.ts'), 'utf-8'));
+    const argv = [...src.matchAll(/spawnSync\(\s*'([^']+)'/g)].map((m) => m[1]);
+    expect(argv.length, 'worktrees.ts must still spawn something').toBeGreaterThan(0);
+    expect([...new Set(argv)], 'lib/worktrees.ts may run git and nothing else').toEqual(['git']);
+  });
+
+  // cmux-control.ts is the one file that opens a SECOND route to an agent, so
+  // it carries the most conditions. The pane it opens runs a real `claude`
+  // outside the SDK semaphore, outside the SDK's cost report, and outside the
+  // hermetic child env — which is fine only because each of those is replaced
+  // by something checked here rather than assumed.
+  //
+  // The exception it does NOT get: spawning the agent itself. Everything it
+  // executes is the cmux binary; `claude` reaches a shell only as text inside
+  // `cmux workspace create --command`, where the pane's own env carries the
+  // scope and the guard hook fences the writes.
+  test('4e. the cmux route runs only cmux, and never types a prompt into a TUI', () => {
+    const control = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'cmux-control.ts'), 'utf-8'));
+    const argv = [...control.matchAll(/spawnSync\(\s*([A-Za-z_$][\w$]*|'[^']+')/g)].map((m) => m[1]);
+    expect(argv.length, 'cmux-control.ts must still spawn something').toBeGreaterThan(0);
+    for (const target of new Set(argv)) {
+      expect(target, `cmux-control.ts may only execute the cmux binary, got ${target}`).toBe('CMUX_BIN');
+    }
+    expect(control, 'CMUX_BIN stopped resolving to cmux').toMatch(/CMUX_BIN\s*=[^\n]*'cmux'/);
+
+    // `cmux send` types characters into a live TUI. Sending mid-turn injects
+    // text into whatever the agent is doing, and a newline submits early and
+    // leaves the tail as a second instruction. Both are gated in sendText, and
+    // both gates are one deleted line away from silently not existing.
+    const send = control.slice(control.indexOf('export function sendText'));
+    const body = send.slice(0, send.indexOf('\n}\n'));
+    expect(body, 'sendText no longer refuses a mid-turn send').toContain("lifecycle !== 'idle'");
+    expect(body, 'sendText no longer refuses a newline').toMatch(/\[\\r\\n\]/);
+  });
+
+  // The three numbers §6.2 said a terminal could not produce. Each is replaced
+  // by a channel the measured agent does not write for us (§7.3b lesson 2), and
+  // a cmux run that lost any one of them would report a plausible number
+  // nobody could check.
+  test('4f. a cmux spawn is still capped, scoped, and costed', () => {
+    const src = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'cmux-spawn.ts'), 'utf-8'));
+    expect(src, 'the cmux spawn no longer waits for a free slot, so the agent cap is gone').toContain('waitForSlot');
+    expect(src, 'the fleet cap is no longer read from cmux-sessions').toContain('busyCount');
+    expect(src, 'the scope directive is no longer prepended to the prompt').toContain('scopeDirective');
+    expect(src, 'GSTACK_MANAGER_SCOPE is no longer set in the pane env').toContain('GSTACK_MANAGER_SCOPE');
+    expect(src, 'cost is no longer measured from the transcript').toContain('usageFromTranscript');
+    expect(src, 'the pane runs permission-free without checking that the guard exists').toContain('guardIsWired');
+    expect(
+      src.includes('spawnSync') || src.includes('child_process'),
+      'cmux-spawn.ts must not shell out directly; it goes through cmux-control.ts',
+    ).toBe(false);
+  });
+
+  // §6.8's kill switch is reachable from a phone, and closing the workspace is
+  // what actually ends the process. A stop that only stopped WATCHING would
+  // leave the agent editing files and spending money with nothing observing
+  // it — the failure mode where the safety control reports success and the
+  // dangerous thing keeps running.
+  test('4g. stopping a cmux task closes the pane, so stop means stop', () => {
+    const src = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'cmux-spawn.ts'), 'utf-8'));
+    expect(src, 'the abort path no longer closes the workspace').toMatch(
+      /aborted[\s\S]{0,400}closeWorkspace\(/,
+    );
+    expect(src, 'the run no longer carries an abort signal into the watcher').toContain('signal: req.signal');
+  });
+
+  // 14/08 review finding. `failure()` claimed in its own docblock that every
+  // caller was a refusal before a pane opened, so its zero was a measured zero.
+  // Five of six were. The sixth followed the only process launch in the file:
+  // createWorkspace returns no ref both when cmux refused AND when cmux
+  // SUCCEEDED but its ref line did not parse — and in the second case the pane
+  // is open with `claude --dangerously-skip-permissions` already running. A
+  // measured zero there is the fabricated-zero bug in the one place an agent is
+  // genuinely spending, and with no ref there is nothing left to close it with.
+  test('4h. a cmux failure after the launch does not claim a measured zero', () => {
+    const src = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'cmux-spawn.ts'), 'utf-8'));
+
+    const launch = src.slice(src.indexOf('function launchFailure'));
+    expect(launch.slice(0, launch.indexOf('\n}\n')), 'the post-launch failure went back to claiming a measured cost').toContain(
+      'costKnown: false',
+    );
+
+    const createFailed = src.slice(src.indexOf('cmux_create_failed') - 200, src.indexOf('cmux_create_failed') + 200);
+    expect(createFailed, 'cmux_create_failed is back on the pre-launch helper').toContain('launchFailure');
+
+    const refusal = src.slice(src.indexOf('function refusal'));
+    expect(refusal.slice(0, refusal.indexOf('\n}\n')), 'the pre-launch refusal stopped reporting its zero as measured').toContain(
+      'costKnown: true',
+    );
   });
 
   test('4b. the assert runner refuses an agent binary, on every path that runs a command', () => {
@@ -301,6 +398,45 @@ describe('the write scope is actually enforced, not just announced', () => {
     );
     const envBlock = spawnSrc.slice(spawnSrc.indexOf('function childEnv'));
     expect(envBlock.slice(0, 400)).toContain('GSTACK_MANAGER_SCOPE');
+  });
+});
+
+describe('probe lines cannot re-enter the numbers that open autonomy', () => {
+  // origin only works while all three ends stay wired: the probe harness stamps
+  // the child it spawns, and both readers that feed §7.3 and P8 drop anything
+  // that is not work. Cut any one and probe traffic silently counts as field
+  // evidence again — the exact 10-of-14 contamination §3.3 was written for, and
+  // nothing would fail to say so.
+
+  const ORACLE_GATES = path.resolve(MANAGER_DIR, '..', 'oracle', 'lib', 'gates.ts');
+
+  test('22. the oracle stamps the guard calls it makes as gate-test', () => {
+    const src = fs.readFileSync(ORACLE_GATES, 'utf-8');
+    expect(src, 'the probe harness no longer stamps its guard calls').toContain('ORIGIN_ENV');
+    const guardFn = src.slice(src.indexOf('export function runGuardGate'));
+    expect(guardFn.slice(0, 1500), 'the guard probe is spawned without a gate-test stamp').toContain("'gate-test'");
+  });
+
+  test('23. deterministic corroboration only accepts work rows', () => {
+    const src = fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'verdict.ts'), 'utf-8');
+    const fn = src.slice(src.indexOf('export function verifyDeterministicGates'));
+    expect(fn.slice(0, 900), 'a probe row can vouch for an agent-claimed deterministic gate').toMatch(
+      /originOf\([^)]*\)\s*===\s*'work'/,
+    );
+  });
+
+  test('24. the closing chain reads work rows only', () => {
+    const src = fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'closing-chain.ts'), 'utf-8');
+    const fn = src.slice(src.indexOf('export function collectLoggedGates'));
+    expect(fn.slice(0, 700), 'a task can collect a probe run as its own evidence').toContain('workOnly(');
+  });
+
+  test('25. gate-log stats counts work by default, not everything', () => {
+    const src = fs.readFileSync(path.resolve(MANAGER_DIR, '..', '..', 'bin', 'gate-log'), 'utf-8');
+    const fn = src.slice(src.indexOf('function cmdStats'));
+    expect(fn.slice(0, 600), 'stats no longer defaults to work — P8 would read probe traffic').toMatch(
+      /originScope\(flags,\s*'work'\)/,
+    );
   });
 });
 

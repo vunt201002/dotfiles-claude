@@ -7,7 +7,8 @@ process.env.MANAGER_HOME = HOME;
 process.env.GSTACK_GATE_LOG_DIR = path.join(HOME, 'gate-log');
 
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
-import { appendGateLog } from '../lib/gate-log';
+import { resetConfigCache } from '../config';
+import { appendGateLog, type GateLogEntry } from '../lib/gate-log';
 import { readEntries } from '../lib/gate-log-port';
 import {
   BROWSER_GATES,
@@ -27,8 +28,8 @@ import {
 import type { ExecFn } from '../lib/assert-runner';
 import { approveCommands } from '../lib/assert-approvals';
 import type { DiffResult } from '../lib/git';
-import { ensureManagerDirs, projectsFile } from '../lib/paths';
-import { parseVerdict } from '../lib/verdict';
+import { ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths';
+import { parseVerdict, verifyDeterministicGates, UNVERIFIED_MARK, type GateReport } from '../lib/verdict';
 import type { Lane, TaskEnvelope } from '../types';
 
 const REPO = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-chain-repo-'));
@@ -86,7 +87,7 @@ function harness(
     diff: () => DIFF,
     spawn: async (req) => {
       prompts.push(req);
-      return { output: reply(req.gate), costUsd: 0.05 };
+      return { output: reply(req.gate), costUsd: 0.05, costKnown: true, exitReason: 'success' };
     },
     ...overrides,
   };
@@ -95,6 +96,8 @@ function harness(
 
 beforeEach(() => {
   ensureManagerDirs();
+  fs.writeFileSync(managerConfigFile(), JSON.stringify({ browserTools: ['mcp__test-browser__navigate'] }));
+  resetConfigCache();
   fs.rmSync(path.join(HOME, 'gate-log'), { recursive: true, force: true });
   fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: { path: REPO, assert: ['bun run test'] } }));
   approveCommands(PROJECT, ['bun run test']);
@@ -306,6 +309,30 @@ describe('judges only run when there is something to judge', () => {
     expect(prompts.map((p) => p.gate)).toContain('B8-judge');
     expect(readEntries(PROJECT).find((r) => r.gate === 'B8-judge')?.gate_family).toBe('llm');
   });
+
+  test('the judge gets the browser tools, not just the token', async () => {
+    const { ctx, prompts } = harness({ hasRealBrowser: true, envelope: envelope({ oracle_kind: ['my-chrome'] }) });
+    await runVerifyChain(ctx);
+    expect(prompts.find((p) => p.gate === 'B8-judge')?.extraTools).toContain('mcp__test-browser__navigate');
+  });
+
+  // A task that needs the browser, on a manager with no way to reach one, is the
+  // case that used to hand out the token and accept whatever came back. It has
+  // to be an error: `skipped` would read as "nothing to judge" and `pass` would
+  // be a verdict nobody produced.
+  test('no browser transport is an error, not a verdict', async () => {
+    fs.writeFileSync(managerConfigFile(), JSON.stringify({ browserTools: [] }));
+    resetConfigCache();
+
+    const { ctx, prompts } = harness({ hasRealBrowser: true, envelope: envelope({ oracle_kind: ['my-chrome'] }) });
+    const chain = await runVerifyChain(ctx);
+
+    expect(prompts.map((p) => p.gate), 'nothing may be spawned for a gate that cannot see').not.toContain('B8-judge');
+    const row = readEntries(PROJECT).find((r) => r.gate === 'B8-judge');
+    expect(row?.verdict).toBe('error');
+    expect(row?.caught).toContain('no browser transport configured');
+    expect(chain.proven, 'a gate that could not run must not be read as proof').toBe(false);
+  });
 });
 
 describe('the verify chain stops at an unproven assert', () => {
@@ -357,6 +384,44 @@ describe('hook rows are read, not re-run', () => {
     appendGateLog({ project: PROJECT, gate: 'B8-assert', gate_family: 'deterministic', verdict: 'pass', ts: '2026-08-12T10:00:00Z' });
     expect(collectHookGates({ project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' })).toEqual([]);
   });
+
+  test('a probe run inside the window is not this task evidence', () => {
+    appendGateLog({ project: PROJECT, gate: 'guard', gate_family: 'deterministic', verdict: 'caught', caught: 'probe', origin: 'gate-test', ts: '2026-08-12T10:00:00Z' });
+    expect(collectHookGates({ project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' })).toEqual([]);
+
+    appendGateLog({ project: PROJECT, gate: 'guard', gate_family: 'deterministic', verdict: 'caught', caught: 'real', ts: '2026-08-12T10:30:00Z' });
+    const gates = collectHookGates({ project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' });
+    expect(gates.map((g) => g.caught)).toEqual(['real']);
+  });
+});
+
+describe('a deterministic claim needs a witness from a channel the agent cannot write', () => {
+  const window = { project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' };
+  const claimed: GateReport[] = [{ gate: 'tsc', gate_family: 'deterministic', verdict: 'pass', caught: '' }];
+  const row = (origin?: 'work' | 'gate-test'): GateLogEntry[] => [
+    {
+      ts: '2026-08-12T10:00:00Z',
+      project: PROJECT,
+      gate: 'tsc',
+      gate_family: 'deterministic',
+      verdict: 'pass',
+      ...(origin ? { origin } : {}),
+    },
+  ];
+
+  test('a work row inside the window corroborates it', () => {
+    expect(verifyDeterministicGates(claimed, window, () => row('work'))[0].gate_family).toBe('deterministic');
+  });
+
+  test('a row from before the origin field still corroborates it', () => {
+    expect(verifyDeterministicGates(claimed, window, () => row())[0].gate_family).toBe('deterministic');
+  });
+
+  test('a probe row does not — it is a real row, from a run that was not this one', () => {
+    const [checked] = verifyDeterministicGates(claimed, window, () => row('gate-test'));
+    expect(checked.gate_family).toBe('llm');
+    expect(checked.caught).toContain(UNVERIFIED_MARK);
+  });
 });
 
 describe('the manager owns its own gates', () => {
@@ -373,5 +438,73 @@ describe('a diff that cannot be read is reported, never assumed clean', () => {
     expect(prompts).toHaveLength(0);
     expect(chain.reports.map((r) => r.verdict)).toEqual(['error', 'error']);
     expect(chain.reports[0].caught).toContain('not a git work tree');
+  });
+});
+
+// 14/08: the review gates moved onto codex (§7.3 BLOCKER 4). That put a second
+// binary on the critical path, and the failure it can produce is the dangerous
+// shape — `runCodexSkill` answers "SKIP: codex binary not found", parseVerdict
+// finds no JSON in it, and the row that lands says "agent returned no parseable
+// verdict block". A machine with no codex installed would read as a model that
+// answered badly, and the retry would be aimed at the model.
+describe('a review gate whose transport never ran says so', () => {
+  function missingTransport(): Partial<ChainContext> {
+    return {
+      spawn: async () => ({
+        output: 'SKIP: codex binary not found',
+        costUsd: 0,
+        costKnown: false,
+        exitReason: 'codex_not_installed',
+      }),
+    };
+  }
+
+  test('every gate is an error, and not one of them is a pass', async () => {
+    const { ctx } = harness(missingTransport());
+    const chain = await runReviewChain(ctx);
+
+    expect(chain.reports.length).toBeGreaterThan(0);
+    for (const report of chain.reports) {
+      expect(report.verdict, `${report.gate} passed on a transport that never ran`).toBe('error');
+    }
+    expect(chain.reports.map((r) => r.verdict)).not.toContain('pass');
+  });
+
+  test('the row blames the transport, not the model that was never asked', async () => {
+    const { ctx } = harness(missingTransport());
+    await runReviewChain(ctx);
+
+    const row = readEntries(PROJECT).find((r) => r.gate === 'spec-check');
+    expect(row?.verdict).toBe('error');
+    expect(row?.caught).toContain('codex_not_installed');
+    expect(row?.caught).toContain('never ran');
+    expect(row?.caught, 'a missing binary is not the model returning bad JSON').not.toContain(
+      'no parseable verdict block',
+    );
+  });
+
+  test('the run is marked unavailable, so a retry is not aimed at the same absent binary', async () => {
+    const { ctx } = harness(missingTransport());
+    const chain = await runReviewChain(ctx);
+    for (const run of chain.runs) expect(run.unavailable, `${run.gate} did not report unavailable`).toBe(true);
+  });
+
+  // Chua do != bang 0. A zero here would be averaged into the lane p90 as a
+  // cheap run and drag every future ceiling below what the lane really costs.
+  test('an unpriced run writes no cost at all, rather than a zero', async () => {
+    const { ctx } = harness({
+      spawn: async () => ({ output: verdictJson({}), costUsd: 0, costKnown: false, exitReason: 'success' }),
+    });
+    await runReviewChain(ctx);
+
+    const row = readEntries(PROJECT).find((r) => r.gate === 'spec-check');
+    expect(row?.verdict).toBe('pass');
+    expect(row?.cost_usd, 'an unpriced run must not be logged as costing $0').toBeUndefined();
+  });
+
+  test('a priced run still records its cost', async () => {
+    const { ctx } = harness();
+    await runReviewChain(ctx);
+    expect(readEntries(PROJECT).find((r) => r.gate === 'spec-check')?.cost_usd).toBe(0.05);
   });
 });

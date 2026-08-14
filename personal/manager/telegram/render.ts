@@ -1,4 +1,4 @@
-import type { ApprovalEvent, CostReport, ReportEvent, TaskRecord } from './manager-client';
+import type { ApprovalEvent, CostReport, FleetReport, ReportEvent, TaskRecord } from './manager-client';
 import type { PendingQuestion } from './pending';
 import type { InlineKeyboardMarkup } from './telegram-api';
 
@@ -7,6 +7,18 @@ const MAX_LIST = 20;
 function usd(value: number | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
   return `$${value.toFixed(2)}`;
+}
+
+/**
+ * The phone's copy of lib/cost.ts formatSpend. A card that shows `$0.00` for a
+ * task whose whole review ran on unpriced CLI quota reads as "this was free",
+ * which is the one thing the number cannot say.
+ */
+function spend(value: number | undefined, unmeasured: number | undefined): string {
+  const runs = typeof unmeasured === 'number' && unmeasured > 0 ? unmeasured : 0;
+  if (runs === 0) return usd(value);
+  const tail = `${runs} lượt chưa đo`;
+  return typeof value === 'number' && value > 0 ? `${usd(value)} + ${tail}` : `chưa đo được (${tail})`;
 }
 
 function slug(project: string | undefined, issue: string | undefined, fallback = '—'): string {
@@ -19,7 +31,7 @@ export function renderReport(event: ReportEvent): string {
     `${event.ok === false ? '⚠️' : '✅'} ${slug(event.project, event.issue, event.taskId ?? 'task')}`,
     event.lane,
     typeof event.attempt === 'number' ? `${event.attempt} attempt` : undefined,
-    typeof event.cost_usd === 'number' ? usd(event.cost_usd) : undefined,
+    typeof event.cost_usd === 'number' ? spend(event.cost_usd, event.cost_unmeasured_runs) : undefined,
   ]
     .filter(Boolean)
     .join(' — ');
@@ -27,7 +39,12 @@ export function renderReport(event: ReportEvent): string {
   const lines = [head];
   if (event.cause) lines.push(`Nguồn: ${event.cause}`);
 
-  const caught = (event.gates ?? []).filter((gate) => gate.caught);
+  // Truthy `caught` alone does not mean a catch: verifyDeterministicGates
+  // stamps `unverified-self-report` into that field on gates that PASSED, which
+  // filed them under this heading. The verdict is the field that answers the
+  // question. A gate arriving with no verdict at all is an older daemon on the
+  // other end of the SSE, and dropping it would lose a real finding.
+  const caught = (event.gates ?? []).filter((gate) => (gate.verdict ? gate.verdict === 'caught' : Boolean(gate.caught)));
   if (caught.length > 0) {
     const rendered = caught
       .map((gate) => `${gate.gate ?? 'gate'}${gate.gate_family ? ` [${gate.gate_family}]` : ''} (${gate.caught})`)
@@ -81,7 +98,7 @@ export function taskLine(task: TaskRecord): string {
     task.state ?? '—',
     slug(envelope.project, envelope.issue),
     typeof task.attempt === 'number' ? `attempt ${task.attempt}/${task.max_attempts ?? 3}` : undefined,
-    typeof task.cost_usd_actual === 'number' ? usd(task.cost_usd_actual) : undefined,
+    typeof task.cost_usd_actual === 'number' ? spend(task.cost_usd_actual, task.cost_unmeasured_runs) : undefined,
     task.holds && task.holds.length > 0 ? `giữ ${task.holds.join(',')}` : undefined,
   ].filter(Boolean);
   return parts.join(' · ');
@@ -119,6 +136,73 @@ export function renderCost(window: 'today' | 'all', report: CostReport): string 
   return lines.join('\n');
 }
 
+function age(sec: number | undefined): string {
+  if (typeof sec !== 'number' || !Number.isFinite(sec) || sec <= 0) return '';
+  if (sec < 60) return `${Math.round(sec)}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  return `${(sec / 3600).toFixed(1)}h`;
+}
+
+/**
+ * Phone-shaped, so the two things needing a human sit above the fold.
+ *
+ * `/status` answers "what did I give the manager"; this answers "what is
+ * running on that machine right now", which is a bigger set — every pane the
+ * operator opened by hand is in it. The two are not merged because a task with
+ * no pane and a pane with no task are both real, and both are worth seeing.
+ */
+export function renderFleetReport(report: FleetReport): string {
+  const members = report.members ?? [];
+  const waiting = report.waiting ?? [];
+  const crashed = report.crashed ?? [];
+  const unpriced = report.unpricedModels ?? [];
+  // "$0.00" next to a fleet of unpriced agents reads as "không tốn gì", which
+  // is the one thing the number cannot support.
+  const spend = unpriced.length > 0 ? (report.totalCostUsd ? `${usd(report.totalCostUsd)} + chưa rõ` : 'chưa tính được') : usd(report.totalCostUsd);
+  const lines = [`🖥 Fleet: ${report.busy ?? 0}/${report.cap ?? 0} bận · ${spend}`];
+
+  if (waiting.length > 0) {
+    lines.push('', '❓ ĐANG CHỜ ANH TRẢ LỜI');
+    for (const m of waiting.slice(0, MAX_LIST)) {
+      // Tuổi phiên, KHÔNG phải idleSec. cmux vẫn cập nhật `updatedAt` đều đặn
+      // trong lúc pane đang kẹt — quan sát được: một pane hiện "Permission"
+      // suốt 5 tiếng mà updatedAt luôn mới. In idleSec ra sẽ thành "im 18s"
+      // cho một thứ đã đứng im từ sáng.
+      const why = m.health === 'blocked' ? 'kẹt ở permission prompt' : m.subtitle || 'hỏi một câu';
+      lines.push(`  ${m.where ?? '?'} — mở ${age(m.ageSec) || '?'} · ${why}`);
+    }
+  }
+  if (crashed.length > 0) {
+    lines.push('', '💥 CHẾT GIỮA CHỪNG');
+    for (const m of crashed.slice(0, MAX_LIST)) lines.push(`  ${m.where ?? '?'} — ${m.subtitle ?? ''}`.trimEnd());
+  }
+
+  // A phone screen holds about a dozen lines. This machine carries fifteen
+  // sessions, eleven of them long dead, so listing everything buries the three
+  // that are actually running under a fortnight of archaeology. Only what is
+  // still alive gets a line; the rest get a count.
+  const working = members.filter((m) => m.health === 'working');
+  if (working.length > 0) {
+    lines.push('');
+    for (const m of working.slice(0, MAX_LIST)) {
+      const who = m.managerOwned ? m.taskId || 'manager' : 'anh mở';
+      const cost = m.costKnown ? ` ${usd(m.costUsd)}` : '';
+      lines.push(`  ▶️ ${m.where ?? '?'} · ${who}${cost}${age(m.ageSec) ? ` · ${age(m.ageSec)}` : ''}`);
+    }
+  }
+  const done = members.length - working.length - waiting.length - crashed.length;
+  if (done > 0) lines.push('', `${done} phiên đã đóng (không tính vào cap).`);
+
+  for (const t of report.orphanTasks ?? []) {
+    lines.push(`⚠️ ${t.id ?? '?'} (${t.state ?? '?'}) không thấy pane nào`);
+  }
+  if (members.length === 0) lines.push('Không có agent nào đang chạy.');
+  if (unpriced.length > 0) {
+    lines.push('', `⚠️ Chưa có giá cho ${unpriced.join(', ')} — phần đó THIẾU khỏi tổng, không phải bằng 0.`);
+  }
+  return lines.join('\n');
+}
+
 export function renderDiff(taskId: string, diff: string | undefined): string {
   if (!diff || !diff.trim()) return `Không có diff kèm theo cho ${taskId}.`;
   return `Diff — ${taskId}\n${diff}`;
@@ -128,6 +212,7 @@ export function renderHelp(): string {
   return [
     'Lệnh dùng được:',
     '/status — task đang chạy',
+    '/fleet — mọi agent trên máy, kể cả pane anh tự mở',
     '/run <project> <issue> — giao việc',
     '/report <project> — báo cáo theo project',
     '/stop <task-id> — dừng một task',

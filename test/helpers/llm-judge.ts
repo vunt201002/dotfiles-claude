@@ -117,14 +117,13 @@ ${content}`);
 }
 
 /**
- * Evaluate a QA report against planted-bug ground truth.
- * Returns detection metrics for the planted bugs.
+ * The scoring prompt on its own, so a caller can send it through something
+ * other than the Anthropic SDK. `personal/oracle/` scores through the codex or
+ * claude CLI to measure without a metered key, and the wording has to be the
+ * same prompt or the two sets of numbers are not comparable.
  */
-export async function outcomeJudge(
-  groundTruth: any,
-  report: string,
-): Promise<OutcomeJudgeResult> {
-  return callJudge<OutcomeJudgeResult>(`You are evaluating a QA testing report against known ground truth bugs.
+export function outcomeJudgePrompt(groundTruth: any, report: string): string {
+  return `You are evaluating a QA testing report against known ground truth bugs.
 
 GROUND TRUTH (${groundTruth.total_bugs} planted bugs):
 ${JSON.stringify(groundTruth.bugs, null, 2)}
@@ -153,7 +152,18 @@ Rules:
 - "detected" and "missed" arrays must only contain IDs from the ground truth: ${groundTruth.bugs.map((b: any) => b.id).join(', ')}
 - detection_rate = length of detected array
 - evidence_quality (1-5): Do detected bugs have screenshots, repro steps, or specific element references?
-  5 = excellent evidence for every bug, 1 = no evidence at all`);
+  5 = excellent evidence for every bug, 1 = no evidence at all`;
+}
+
+/**
+ * Evaluate a QA report against planted-bug ground truth.
+ * Returns detection metrics for the planted bugs.
+ */
+export async function outcomeJudge(
+  groundTruth: any,
+  report: string,
+): Promise<OutcomeJudgeResult> {
+  return callJudge<OutcomeJudgeResult>(outcomeJudgePrompt(groundTruth, report));
 }
 
 /**

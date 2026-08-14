@@ -27,6 +27,8 @@ export interface ReportEvent {
   lane: string;
   attempt: number;
   cost_usd: number;
+  /** Runs folded into cost_usd that nobody priced. Above zero, it is a floor. */
+  cost_unmeasured_runs: number;
   ok: boolean;
   cause: string;
   gates: GateSummary[];
@@ -81,6 +83,7 @@ export function buildReportEvent(task: EventSourceTask, ok: boolean, status: str
     lane: task.envelope?.lane ?? 'unsized',
     attempt: task.attempt,
     cost_usd: task.cost_usd_actual,
+    cost_unmeasured_runs: task.cost_unmeasured_runs ?? 0,
     ok,
     cause: task.failure_reason || task.envelope?.why || '',
     gates: gateSummaries(task),
@@ -109,14 +112,25 @@ export interface EventSourceTask {
   issue: string;
   attempt: number;
   cost_usd_actual: number;
+  cost_unmeasured_runs?: number;
   failure_reason: string;
   verify_lines: string[];
   assumptions: string[];
   gates_run: string[];
+  gate_reports?: Array<{ gate: string; gate_family: string }>;
   findings: Array<{ gate: string; gate_family: string; text: string }>;
   envelope: { lane?: string; why?: string } | null;
 }
 
+/**
+ * A gate that ran and found nothing still has to say which family it belongs
+ * to, and only `gate_reports` knows — `gates_run` holds bare names.
+ *
+ * An unrecorded family resolves to `llm`, never `deterministic`. P8 unlocks
+ * autonomy on "caught from deterministic >= 20%", so a guess in the
+ * deterministic direction inflates the number that opens the gate, using a
+ * family nothing actually recorded. Guessing the other way only understates it.
+ */
 function gateSummaries(task: EventSourceTask): GateSummary[] {
   const caught: GateSummary[] = task.findings.map((f) => ({
     gate: f.gate,
@@ -125,9 +139,10 @@ function gateSummaries(task: EventSourceTask): GateSummary[] {
     caught: f.text,
   }));
   const named = new Set(caught.map((g) => g.gate));
+  const recordedFamily = new Map((task.gate_reports ?? []).map((r) => [r.gate, r.gate_family]));
   const passed: GateSummary[] = task.gates_run
     .filter((gate) => !named.has(gate))
-    .map((gate) => ({ gate, gate_family: 'deterministic', verdict: 'pass', caught: '' }));
+    .map((gate) => ({ gate, gate_family: recordedFamily.get(gate) ?? 'llm', verdict: 'pass', caught: '' }));
   return [...caught, ...passed];
 }
 

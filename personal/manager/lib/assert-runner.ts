@@ -202,7 +202,22 @@ export const RUNNER_ALLOWLIST: readonly string[] = [
   'vitest',
   'tsc',
   'eslint',
+  'deno',
+  'make',
 ];
+
+/**
+ * Discovery reads the same list the runner enforces.
+ *
+ * These were two hand-written lists that drifted in both directions: `deno` and
+ * `make` were discoverable but not runnable, so a project using them reported
+ * "no assert command found" while its command sat in CLAUDE.md; and `node`,
+ * `jest`, `vitest` were runnable but invisible to discovery. Neither gap fails
+ * loudly — the manager just decides a project has no oracle, which under §7.1
+ * rule 1 means it never enters an autonomous lane. A silent "no oracle" is the
+ * expensive kind of wrong here.
+ */
+const DISCOVERABLE_HEAD = new RegExp(`^(${RUNNER_ALLOWLIST.join('|')})\\b`);
 
 /**
  * Characters a real test command never needs, refused before anything runs.
@@ -224,6 +239,22 @@ const KILL_GRACE_MS = 2000;
 
 /** Never run these: they do not terminate, or they cost real money. */
 const UNSAFE_COMMAND = /(^|[\s:_-])(-?-?watch|dev|serve|start|install|eval|evals|publish|deploy|release)([\s:]|$)/i;
+
+/**
+ * A negated flag asks for the OPPOSITE of the thing this file refuses, so it
+ * must not be read as the thing itself. `npx --no-install vitest run` is the
+ * exact command that guarantees nothing is installed, and it was being turned
+ * away because `-install` sits behind a dash the boundary class accepts.
+ *
+ * Dropped before matching rather than patched into the pattern with lookbehind:
+ * the flag is not a weaker signal, it is the absence of one, and a reader can
+ * check this line without simulating a regex engine.
+ */
+const NEGATED_FLAG = /(^|\s)--?(?:no|skip|without|disable)-[\w-]+/gi;
+
+function withoutNegatedFlags(cmd: string): string {
+  return cmd.replace(NEGATED_FLAG, ' ');
+}
 
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, 'g');
 
@@ -323,7 +354,9 @@ export function commandRejection(cmd: string): string {
     return `"${argv[0]}" is not a test runner the manager may start. Allowed: ${RUNNER_ALLOWLIST.join(', ')}`;
   }
 
-  if (UNSAFE_COMMAND.test(cmd)) return 'command looks like a watch, dev, install, deploy, or paid-eval command';
+  if (UNSAFE_COMMAND.test(withoutNegatedFlags(cmd))) {
+    return 'command looks like a watch, dev, install, deploy, or paid-eval command';
+  }
   return '';
 }
 
@@ -377,7 +410,7 @@ export function discoverFromClaudeMd(scope: string): AssertCommand[] {
     for (const rawLine of fence[1].split('\n')) {
       const line = rawLine.replace(/\s+#.*$/, '').trim();
       if (!line || line.startsWith('#')) continue;
-      if (!/^(bun|npm|yarn|pnpm|npx|deno|make|cargo|go|python|pytest)\b/.test(line)) continue;
+      if (!DISCOVERABLE_HEAD.test(line)) continue;
       if (!/\b(test|tsc|typecheck|type-check|lint|check)\b/.test(line)) continue;
       if (commandRejection(line)) continue;
       if (seen.has(line)) continue;

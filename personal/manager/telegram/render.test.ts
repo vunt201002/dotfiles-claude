@@ -41,6 +41,32 @@ describe('renderReport', () => {
     expect(text).toContain('Cổng bắt: reviewer [llm] (thiếu test cho nhánh sale)');
     expect(text).not.toContain('tsc');
   });
+
+  // verifyDeterministicGates writes `unverified-self-report` into `caught` on a
+  // gate that PASSED, to mark the family as uncorroborated. Reading that field
+  // as "this gate caught something" told the operator tsc and lint had found
+  // bugs, on a run where both passed.
+  test('cổng pass bị hạ cấp không được kể là cổng bắt', () => {
+    const text = renderReport({
+      type: 'report',
+      taskId: 'k2',
+      gates: [
+        { gate: 'tsc', gate_family: 'llm', verdict: 'pass', caught: 'unverified-self-report' },
+        { gate: 'red-test', gate_family: 'llm', verdict: 'caught', caught: 'null deref [unverified-self-report]' },
+      ],
+    });
+    expect(text).toContain('Cổng bắt: red-test [llm] (null deref [unverified-self-report])');
+    expect(text).not.toContain('tsc');
+  });
+
+  test('cổng báo false-positive không được kể là cổng bắt', () => {
+    const text = renderReport({
+      type: 'report',
+      taskId: 'k3',
+      gates: [{ gate: 'reviewer', gate_family: 'llm', verdict: 'false-positive', caught: 'báo sai' }],
+    });
+    expect(text).not.toContain('Cổng bắt');
+  });
 });
 
 describe('renderQuestionBatch', () => {

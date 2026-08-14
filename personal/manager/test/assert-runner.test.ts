@@ -117,6 +117,24 @@ describe('what the runner refuses to run', () => {
     expect(commandRejection('bun run test:evals')).not.toBe('');
   });
 
+  test('a negated flag is the opposite of the banned thing, not the thing', () => {
+    expect(commandRejection('npx --no-install vitest run')).toBe('');
+    expect(commandRejection('npm test --no-watch')).toBe('');
+    expect(commandRejection('bun run check --skip-install')).toBe('');
+    expect(commandRejection('yarn test --without-deploy')).toBe('');
+  });
+
+  test('negating one flag does not smuggle a real one past', () => {
+    expect(commandRejection('npx --no-install vitest --watch')).toContain('watch');
+    expect(commandRejection('npm --no-audit install')).toContain('watch');
+  });
+
+  test('discovery and the runner agree on which binaries exist', () => {
+    for (const head of ['deno', 'make', 'node', 'vitest']) {
+      expect(RUNNER_ALLOWLIST, `${head} must be runnable`).toContain(head);
+    }
+  });
+
   test('an ordinary test command is allowed', () => {
     for (const cmd of [
       'bun run test',

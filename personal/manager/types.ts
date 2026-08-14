@@ -95,6 +95,12 @@ export interface GateOutcome {
   verdict: 'pass' | 'caught' | 'false-positive' | 'skipped' | 'error';
   caught: string;
   attempt: number;
+  /**
+   * Model family that produced an llm row. Absent on rows written before this
+   * was recorded, and the ensemble has to treat absent as unknown rather than
+   * as "the same as the other one".
+   */
+  family?: string;
 }
 
 /**
@@ -140,6 +146,18 @@ export interface TaskRecord {
   gate_reports: GateOutcome[];
   holds: HoldName[];
   cost_usd_actual: number;
+  /**
+   * Runs folded into this task whose cost nobody could price — a codex review
+   * on CLI quota, a model with no pricing row. `cost_usd_actual` is a floor
+   * while this is above zero, so no ceiling may read it as a total (§6.5).
+   */
+  cost_unmeasured_runs: number;
+  /**
+   * Unpriced runs a human has already been shown and waved through. Subtracted
+   * from the cap so approving actually grants headroom; never subtracted from
+   * `cost_unmeasured_runs`, which stays the true count everything else reads.
+   */
+  cost_unmeasured_ack: number;
   cost_ceiling_usd: number;
   human_touches: number;
   assumption_count: number;

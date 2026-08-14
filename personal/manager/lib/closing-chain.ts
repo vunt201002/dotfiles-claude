@@ -39,6 +39,7 @@ import type { AgentRole, Lane, TaskEnvelope } from '../types';
 import { runAssertGate, type AssertGateResult, type ExecFn } from './assert-runner';
 import { readDiff, type DiffResult } from './git';
 import { logGate, readEntries } from './gate-log-port';
+import { workOnly } from './gate-log';
 import {
   designJudgePrompt,
   impactReviewPrompt,
@@ -47,6 +48,7 @@ import {
   techReviewPrompt,
   type SpecCheckInput,
 } from './prompts';
+import { transportFailed } from './spawn';
 import { parseVerdict, type AgentVerdict, type GateReport } from './verdict';
 
 export type ChainGate = 'B8-assert' | 'B8-judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
@@ -100,11 +102,23 @@ export interface GateSpawnRequest {
   prompt: string;
   /** True for every gate here; report-only tools are not negotiable. */
   readOnly: boolean;
+  /**
+   * Added to the read-only set for gates that need more than reading — today
+   * only the browser gates, which cannot judge a page they cannot open.
+   */
+  extraTools?: string[];
 }
 
 export interface GateSpawnResult {
   output: string;
   costUsd: number;
+  /** False when nobody priced the run. The gate log then carries no cost at all. */
+  costKnown: boolean;
+  /** The transport's own word for how the run ended. See transportFailed(). */
+  exitReason: string;
+  /** What answered, recorded on the row so §7.3 stays checkable afterwards. */
+  model: string;
+  family: string;
 }
 
 export type GateSpawn = (req: GateSpawnRequest) => Promise<GateSpawnResult>;
@@ -118,6 +132,13 @@ export interface ChainGateRun {
   /** Present for B8-assert. */
   assert: AssertGateResult | null;
   costUsd: number;
+  /**
+   * The gate could not be applied at all — no transport, no tooling. Kept apart
+   * from a pass and from a fail: it is the oracle that broke, not the code, so
+   * it must not read as proof and must not spend a retry on the same empty
+   * answer.
+   */
+  unavailable?: boolean;
 }
 
 export interface ChainRun {
@@ -208,6 +229,10 @@ export interface HookWindow {
  * B8-assert row is that the manager produced it by running a command. Reading
  * them is what puts those steps of the chain into the ensemble instead of
  * leaving them as boxes in a diagram.
+ *
+ * `origin: gate-test` rows are skipped. A probe run aimed at the guard writes
+ * genuine rows for the same project, and a task whose window overlaps one would
+ * otherwise collect another run's evidence as its own.
  */
 export function collectLoggedGates(
   window: HookWindow,
@@ -215,7 +240,7 @@ export function collectLoggedGates(
   read: typeof readEntries = readEntries,
 ): GateReport[] {
   if (!window.since) return [];
-  return read(window.project)
+  return workOnly(read(window.project))
     .filter(
       (entry) =>
         gates.includes(entry.gate) &&
@@ -236,7 +261,26 @@ export function collectHookGates(window: HookWindow, read: typeof readEntries = 
   return collectLoggedGates(window, HOOK_GATES, read).filter((gate) => gate.gate_family === 'deterministic');
 }
 
-function write(ctx: ChainContext, report: GateReport, costUsd: number): void {
+interface GateCost {
+  usd: number;
+  known: boolean;
+  model?: string;
+  family?: string;
+}
+
+/** A gate that never reached a transport. Zero here is measured, not assumed. */
+const NOTHING_SPENT: GateCost = { usd: 0, known: true };
+
+/**
+ * An unpriced run writes NO cost field rather than a zero.
+ *
+ * A zero would read as a cheap run to anything that later sums or averages
+ * these rows; an absent field cannot be mistaken for a measurement. Nothing
+ * builds a ceiling from the gate log today — `collectLaneSamples` reads task
+ * records only — but the log is the durable record, and the row has to stay
+ * true to whoever reads it next.
+ */
+function write(ctx: ChainContext, report: GateReport, cost: GateCost): void {
   logGate({
     project: ctx.project,
     issue: ctx.issue,
@@ -245,8 +289,10 @@ function write(ctx: ChainContext, report: GateReport, costUsd: number): void {
     gate_family: report.gate_family,
     verdict: report.verdict,
     attempt: ctx.attempt,
-    cost_usd: costUsd,
+    cost_usd: cost.known ? cost.usd : undefined,
     caught: report.caught,
+    model: cost.model,
+    model_family: cost.family,
     review_depth: ctx.reviewDepth,
     human_intervened: false,
   });
@@ -281,17 +327,64 @@ export function reportFromVerdict(gate: ChainGate, verdict: AgentVerdict): GateR
   return { gate, gate_family: 'llm', verdict: 'pass', caught: '' };
 }
 
+/**
+ * A judge with no way to open the page is not a judge. Refusing here costs one
+ * `error` row; running anyway costs a verdict that reads like evidence and was
+ * produced without looking, which is worse than having no gate at all.
+ */
+function browserGateBlocked(gate: ChainGate): GateReport | null {
+  if (!BROWSER_GATES.includes(gate)) return null;
+  const tools = loadConfig().browserTools;
+  if (tools.length > 0) return null;
+  return {
+    gate,
+    gate_family: 'llm',
+    verdict: 'error',
+    caught:
+      'no browser transport configured (config.browserTools is empty), so this gate cannot see the page it is meant to judge',
+  };
+}
+
+/**
+ * The transport never carried the request — no codex binary, no pane. Held
+ * apart from every other error because the alternative reads as the model's
+ * fault: parseVerdict finds no JSON in "SKIP: codex binary not found" and
+ * reports "agent returned no parseable verdict block", which blames a model
+ * that was never asked. `unavailable` is what stops a missing binary being
+ * retried against the same absent transport.
+ */
+function transportRow(gate: ChainGate, exitReason: string, output: string): GateReport {
+  return {
+    gate,
+    gate_family: 'llm',
+    verdict: 'error',
+    caught: `${gate} never ran: the review transport failed with "${exitReason}" — ${output.trim().slice(0, 200)}`,
+  };
+}
+
 async function runLlmGate(ctx: ChainContext, gate: ChainGate, prompt: string): Promise<ChainGateRun> {
-  const result = await ctx.spawn({ gate, role: roleForGate(gate), prompt, readOnly: true });
+  const blocked = browserGateBlocked(gate);
+  if (blocked) {
+    write(ctx, blocked, NOTHING_SPENT);
+    return { gate, reports: [blocked], verdict: null, assert: null, costUsd: 0, unavailable: true };
+  }
+  const browserTools = BROWSER_GATES.includes(gate) ? loadConfig().browserTools : undefined;
+  const result = await ctx.spawn({ gate, role: roleForGate(gate), prompt, readOnly: true, extraTools: browserTools });
+  const cost: GateCost = { usd: result.costUsd, known: result.costKnown, model: result.model, family: result.family };
+  if (transportFailed(result.exitReason)) {
+    const report = transportRow(gate, result.exitReason, result.output);
+    write(ctx, report, cost);
+    return { gate, reports: [report], verdict: null, assert: null, costUsd: result.costUsd, unavailable: true };
+  }
   const verdict = parseVerdict(result.output);
-  const report = reportFromVerdict(gate, verdict);
-  write(ctx, report, result.costUsd);
+  const report = { ...reportFromVerdict(gate, verdict), family: result.family };
+  write(ctx, report, cost);
   return { gate, reports: [report], verdict, assert: null, costUsd: result.costUsd };
 }
 
 function skipped(ctx: ChainContext, gate: ChainGate, why: string): ChainGateRun {
   const report = skipRow(gate, why);
-  write(ctx, report, 0);
+  write(ctx, report, NOTHING_SPENT);
   return { gate, reports: [report], verdict: null, assert: null, costUsd: 0 };
 }
 
@@ -303,7 +396,7 @@ async function runVerifyGate(ctx: ChainContext, gate: ChainGate): Promise<ChainG
       exec: ctx.exec,
       timeoutMs: ctx.assertTimeoutMs,
     });
-    for (const report of result.reports) write(ctx, report, 0);
+    for (const report of result.reports) write(ctx, report, NOTHING_SPENT);
     return { gate, reports: result.reports, verdict: null, assert: result, costUsd: 0 };
   }
   if (!ctx.hasRealBrowser) {
@@ -326,13 +419,14 @@ function assemble(runs: ChainGateRun[], lines: string[]): ChainRun {
     }
   }
   const assertRun = runs.find((r) => r.assert !== null)?.assert ?? null;
+  const unavailable = runs.some((r) => r.unavailable);
   return {
     runs,
     reports: runs.flatMap((r) => r.reports),
     advisories,
     lines,
-    proven: assertRun ? assertRun.summary.proven : true,
-    oracleFault: assertRun ? assertRun.summary.oracle_fault : false,
+    proven: unavailable ? false : assertRun ? assertRun.summary.proven : true,
+    oracleFault: unavailable ? true : assertRun ? assertRun.summary.oracle_fault : false,
     assertPending: assertRun ? assertRun.plan.pending.map((c) => c.cmd) : [],
   };
 }
@@ -386,7 +480,7 @@ export async function runReviewChain(ctx: ChainContext): Promise<ChainRun> {
         verdict: 'error',
         caught: `no diff to review: ${diff.error}`,
       };
-      write(ctx, report, 0);
+      write(ctx, report, NOTHING_SPENT);
       runs.push({ gate, reports: [report], verdict: null, assert: null, costUsd: 0 });
     }
     return assemble(runs, lines);

@@ -2,15 +2,18 @@
  * Structured verdict returned by a spawned agent, plus the ensemble rule
  * (§7.3) that decides whether findings actually block.
  *
- * A single LLM gate never blocks. The three strongest gates (spec-check,
- * reviewer, design-judge) are all LLM gates and, with codex off this machine,
- * all Claude — independent in context but not in failure mode. So one LLM
- * gate raising an alarm is a WARN that goes to the human; two different LLM
- * gates naming the same finding, or any deterministic gate failing, blocks.
+ * A single LLM gate never blocks. So one LLM gate raising an alarm is a WARN
+ * that goes to the human; two different LLM gates naming the same finding, or
+ * any deterministic gate failing, blocks.
+ *
+ * The rule survived the 14/08 move of the review gates onto codex. The two
+ * judges are still Claude (they need a browser codex cannot drive), so a pair
+ * that cross-confirms can still be one family agreeing with itself, and one
+ * gate is still one opinion however good the model behind it is.
  */
 
 import { extractJsonBlock } from './envelope';
-import { readGateLog, type GateLogEntry } from './gate-log';
+import { readGateLog, originOf, type GateLogEntry } from './gate-log';
 import type { Finding } from '../types';
 
 export type VerdictKind = 'pass' | 'fail' | 'blocked';
@@ -20,6 +23,8 @@ export interface GateReport {
   gate_family: 'deterministic' | 'llm';
   verdict: 'pass' | 'caught' | 'false-positive' | 'skipped' | 'error';
   caught: string;
+  /** Model family that produced an llm row, when the caller knew it. */
+  family?: string;
 }
 
 export interface AgentVerdict {
@@ -151,6 +156,10 @@ function demote(gate: GateReport): GateReport {
  * Everything else drops to `llm` with the reason recorded, which means a single
  * such gate warns instead of blocking.
  *
+ * Only `origin: work` rows corroborate. A probe run aimed at the guard writes
+ * real deterministic rows for the same project, and letting those vouch for an
+ * agent's claim would reopen this hole from the other side.
+ *
  * `red-test` still has no witness outside the agent: nothing but the agent
  * knows which of a suite's tests is the one written before the fix, so a
  * claimed `red-test` always demotes. Closing that needs the failing output
@@ -171,7 +180,7 @@ export function verifyDeterministicGates(
   }
   const corroborated = new Set(
     entries
-      .filter((e) => e.gate_family === 'deterministic' && withinWindow(e.ts, window))
+      .filter((e) => e.gate_family === 'deterministic' && originOf(e) === 'work' && withinWindow(e.ts, window))
       .map((e) => e.gate),
   );
   return gates.map((gate) =>
@@ -191,6 +200,30 @@ export interface EnsembleDecision {
    * the first is how an unmeasured task gets reported as a clean one.
    */
   measured: boolean;
+  /**
+   * Gates that reported without producing a judgement. `measured` cannot see
+   * these — it counts ROWS, and a row saying "this gate never ran" satisfies it
+   * exactly as well as a row saying "I looked and it is fine".
+   */
+  broken: string[];
+  /** llm gates that actually returned a verdict. Zero means nothing was judged. */
+  answered: number;
+}
+
+/**
+ * What two agreeing gates are worth, which depends on whose agreement it is.
+ *
+ * An unrecorded family is reported as unrecorded. Collapsing it into "both the
+ * same" would state independence backwards from no evidence at all, and rows
+ * replayed from a task record written before families were logged arrive here
+ * with none.
+ */
+function describeAgreement(families: Set<string>, names: string): string {
+  if (families.has('unknown')) {
+    return `two llm gates agree, family not recorded for at least one — independence unverified (§7.3): ${names}`;
+  }
+  if (families.size >= 2) return `two llm gates agree across families: ${names}`;
+  return `two llm gates agree, both ${[...families][0]} — same family, so this is corroboration in name only (§7.3): ${names}`;
 }
 
 function normalizeFindingText(text: string): string {
@@ -205,42 +238,56 @@ function normalizeFindingText(text: string): string {
 export function applyEnsembleRule(gates: GateReport[]): EnsembleDecision {
   const findings: Finding[] = [];
   const deterministicFailures: GateReport[] = [];
-  const llmByFinding = new Map<string, Set<string>>();
+  const llmByFinding = new Map<string, Map<string, string>>();
+  const broken: string[] = [];
+  let answered = 0;
   const measured = gates.length > 0;
 
   for (const gate of gates) {
     const isAlarm = gate.verdict === 'caught' || gate.verdict === 'error';
+    if (gate.gate_family === 'llm' && gate.verdict !== 'error' && gate.verdict !== 'skipped') answered++;
     if (!isAlarm) continue;
     findings.push({ gate: gate.gate, gate_family: gate.gate_family, text: gate.caught || gate.verdict });
     if (gate.gate_family === 'deterministic') {
       deterministicFailures.push(gate);
       continue;
     }
+    if (gate.verdict === 'error') {
+      broken.push(gate.gate);
+      continue;
+    }
     const key = normalizeFindingText(gate.caught);
     if (!key) continue;
-    const set = llmByFinding.get(key) ?? new Set<string>();
-    set.add(gate.gate);
-    llmByFinding.set(key, set);
+    const byGate = llmByFinding.get(key) ?? new Map<string, string>();
+    byGate.set(gate.gate, gate.family ?? 'unknown');
+    llmByFinding.set(key, byGate);
   }
 
+  const base = { findings, measured, broken, answered };
   if (deterministicFailures.length > 0) {
     return {
       outcome: 'block',
       why: `deterministic gate failed: ${deterministicFailures.map((g) => g.gate).join(', ')}`,
-      findings,
-      measured,
+      ...base,
     };
   }
-  for (const [, gateNames] of llmByFinding) {
-    if (gateNames.size >= 2) {
-      return { outcome: 'block', why: `two llm gates agree: ${[...gateNames].join(' + ')}`, findings, measured };
-    }
+  for (const [, byGate] of llmByFinding) {
+    if (byGate.size < 2) continue;
+    const names = [...byGate.keys()].join(' + ');
+    const families = new Set(byGate.values());
+    const why = describeAgreement(families, names);
+    return { outcome: 'block', why, ...base };
   }
   if (findings.length > 0) {
-    return { outcome: 'warn', why: 'single llm gate raised a finding; reported, not blocked', findings, measured };
+    const alarms = findings.filter((f) => f.gate_family === 'llm').length;
+    return {
+      outcome: 'warn',
+      why: `${alarms} llm gate${alarms === 1 ? '' : 's'} raised a finding without cross-confirmation; reported, not blocked`,
+      ...base,
+    };
   }
   if (!measured) {
-    return { outcome: 'clear', why: 'no gate reported — this task was not checked, not proven clean', findings, measured };
+    return { outcome: 'clear', why: 'no gate reported — this task was not checked, not proven clean', ...base };
   }
-  return { outcome: 'clear', why: '', findings, measured };
+  return { outcome: 'clear', why: '', ...base };
 }

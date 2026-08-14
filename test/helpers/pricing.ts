@@ -37,7 +37,7 @@ export const PRICING: Record<string, ModelPricing> = {
 const WARNED = new Set<string>();
 
 export function estimateCostUsd(
-  tokens: { input: number; output: number; cached?: number },
+  tokens: { input: number; output: number; cached?: number; cacheWrite?: number },
   model: string | undefined
 ): number {
   if (!model) return 0;
@@ -54,8 +54,14 @@ export function estimateCostUsd(
   // is the cache-read count billed at 10% of the regular input rate. Do NOT subtract
   // cached from input — they don't overlap.
   const cachedDiscount = 0.1;
+  // Writing to the cache costs MORE than plain input (1.25x at the 5-minute
+  // TTL), so folding cacheWrite into input would understate every long
+  // session. Left optional: a caller that has no separate count passes none
+  // and gets exactly the old number.
+  const cacheWritePremium = 1.25;
   const inputCost = tokens.input * row.input_per_mtok / 1_000_000;
   const cachedCost = (tokens.cached ?? 0) * row.input_per_mtok * cachedDiscount / 1_000_000;
+  const cacheWriteCost = (tokens.cacheWrite ?? 0) * row.input_per_mtok * cacheWritePremium / 1_000_000;
   const outputCost = tokens.output * row.output_per_mtok / 1_000_000;
-  return +(inputCost + cachedCost + outputCost).toFixed(6);
+  return +(inputCost + cachedCost + cacheWriteCost + outputCost).toFixed(6);
 }
