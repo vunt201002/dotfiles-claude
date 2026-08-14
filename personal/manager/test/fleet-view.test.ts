@@ -169,11 +169,11 @@ describe('money the manager cannot price is reported as missing, not as zero', (
         cwd: MINE,
         pid: ALIVE,
         agentLifecycle: 'running',
-        transcriptPath: writeTranscript('unpriced', 'claude-opus-5'),
+        transcriptPath: writeTranscript('unpriced', 'claude-not-a-model'),
       },
     ]);
     const report = fleetReport({ home: HOME });
-    expect(report.unpricedModels).toEqual(['claude-opus-5']);
+    expect(report.unpricedModels).toEqual(['claude-not-a-model']);
     expect(report.members[0].costKnown).toBe(false);
     const text = renderFleet(report);
     expect(text).toContain('no price on file');

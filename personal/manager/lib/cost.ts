@@ -218,6 +218,12 @@ export interface TokenUsage {
   cache_read_input_tokens?: number;
   /** Billed above the plain input rate, so it is counted apart from both. */
   cache_creation_input_tokens?: number;
+  /**
+   * Per-TTL split of the line above, when the transcript carries it. The hour
+   * TTL is billed at 2x input against the 5-minute TTL's 1.25x, so a session
+   * on the hour TTL priced as if it were on the 5-minute one comes out low.
+   */
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
 }
 
 function round6(n: number): number {
@@ -244,13 +250,19 @@ export interface MeasuredCost {
 export function measuredCost(usage: TokenUsage, model: string): MeasuredCost {
   const known = Boolean(model) && Object.prototype.hasOwnProperty.call(PRICING, model);
   if (!known) return { usd: 0, known: false, model };
+  const split = usage.cache_creation;
+  const oneHour = split?.ephemeral_1h_input_tokens ?? 0;
+  const fiveMinute = split
+    ? split.ephemeral_5m_input_tokens ?? 0
+    : usage.cache_creation_input_tokens ?? 0;
   return {
     usd: estimateCostUsd(
       {
         input: usage.input_tokens ?? 0,
         output: usage.output_tokens ?? 0,
         cached: usage.cache_read_input_tokens ?? 0,
-        cacheWrite: usage.cache_creation_input_tokens ?? 0,
+        cacheWrite: fiveMinute,
+        cacheWrite1h: oneHour,
       },
       model,
     ),

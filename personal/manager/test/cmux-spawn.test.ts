@@ -282,18 +282,21 @@ describe('cost separates "free" from "nobody knows"', () => {
   // wrong for a ceiling: unpriced runs make the machine look like it spent
   // nothing all day, and the first thing anyone does with that number is raise
   // the limit.
+  // Deliberately a model that cannot ever exist. Naming a real unpriced model
+  // here made the test assert the table's gaps rather than the behaviour, so it
+  // broke the day that model got a price.
   test('an unpriced model reports unknown, not zero', () => {
-    const cost = measuredCost({ input_tokens: 500_000, output_tokens: 100_000 }, 'claude-opus-5');
+    const cost = measuredCost({ input_tokens: 500_000, output_tokens: 100_000 }, 'claude-not-a-model');
     expect(cost.known).toBe(false);
     expect(cost.usd).toBe(0);
-    expect(cost.model).toBe('claude-opus-5');
+    expect(cost.model).toBe('claude-not-a-model');
   });
 
   test('a priced model bills cache writes above plain input, not at the same rate', () => {
     const plain = measuredCost({ input_tokens: 1_000_000 }, 'claude-opus-4-7');
     const written = measuredCost({ cache_creation_input_tokens: 1_000_000 }, 'claude-opus-4-7');
     const read = measuredCost({ cache_read_input_tokens: 1_000_000 }, 'claude-opus-4-7');
-    expect(plain.usd).toBe(15);
+    expect(plain.usd).toBe(5);
     expect(written.usd).toBeGreaterThan(plain.usd);
     expect(read.usd).toBeLessThan(plain.usd);
   });

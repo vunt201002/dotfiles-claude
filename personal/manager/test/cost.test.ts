@@ -173,7 +173,7 @@ describe('runCost', () => {
 
   test('falls back to the shared pricing table when nothing was reported', () => {
     const cost = runCost(0, { input_tokens: 1_000_000, output_tokens: 0 }, 'opus');
-    expect(cost.usd).toBe(15);
+    expect(cost.usd).toBe(5);
     expect(cost.known).toBe(true);
   });
 
