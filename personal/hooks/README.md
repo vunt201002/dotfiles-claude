@@ -184,6 +184,26 @@ im lại). Hook im vì mọi thứ ổn và hook im vì hỏng nhìn giống h�
 3. Chỉnh 2 biến `env` theo repo (Joy chưa có test harness backend → `CLAUDE_STOP_CHECK` chỉ tsc).
 4. Cần `jq` trên PATH (mac: `brew install jq`; Windows Git Bash: có sẵn trong nhiều bản, không thì `winget install jqlang.jq`).
 
+## Thử hook bằng JSON giả? Đặt `GSTACK_GATE_LOG_ORIGIN=gate-test`
+
+Ba hook đều ghi một dòng vào sổ cổng (`~/.gstack/gate-log/<project>.jsonl`) mỗi lần chặn
+hoặc mỗi lần chạy. Chúng inherit env, nên **cách đóng dấu một lần probe là export biến trước
+khi pipe JSON vào**:
+
+```bash
+printf '%s' '{"tool_input":{"command":"git add -A"}}' \
+  | GSTACK_GATE_LOG_ORIGIN=gate-test bash personal/hooks/pre-tool-use-guard.sh
+```
+
+Quên là dòng probe vào sổ thành `work`, rồi chảy thẳng vào tỉ lệ `deterministic` của §7.3 và
+ngưỡng mở P8 — bằng dữ liệu do việc thử cổng sinh ra, không phải do việc làm thật. Đây không
+phải rủi ro giả định: lần đo đầu tiên phát hiện 10/14 dòng của sổ là fixture, và sổ trên máy
+thứ hai lặp lại đúng vậy trong ngày đầu. Giá trị sai chính tả thì hook **báo lỗi**, không âm
+thầm về `work`.
+
+Đọc lại: `bun bin/gate-log stats` (mặc định chỉ đếm `work`, in rõ đã loại mấy dòng) ·
+`--origin all` để xem hết · `recent` hiện dấu `<gate-test>`.
+
 ## Ghi chú
 
 - **Repo dotfiles này CÓ được gate, nhưng hẹp** (đổi từ 2026-08-04). Không chạy tsc — repo

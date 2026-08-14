@@ -58,6 +58,14 @@ log_caught() {
     --family deterministic --verdict caught --caught "$1" >/dev/null 2>&1 || true
 }
 
+# MỌI rule khớp, không chỉ cái đầu. Ghi một rule cho một lệnh khớp ba cái làm
+# precision theo từng RULE không khôi phục được từ sổ — chỉ còn precision theo
+# GATE, mà tune denylist thì cần biết RULE nào kêu oan. Ngăn cách bằng dấu phẩy;
+# rule của cả hai bậc đều không chứa dấu phẩy nên `rule=X` vẫn grep được.
+all_rules() {
+  printf '%s' "$1" | grep -Eo $3 "$2" | sort -u | tr '\n' ',' | sed 's/,$//'
+}
+
 # Giá trị nhạy cảm không bao giờ vào sổ: khớp SECRET_HINT thì chỉ ghi tên rule.
 redacted_detail() {
   local rule="$1" content="$2"
@@ -122,23 +130,25 @@ if [ -n "$cmd" ]; then
   runs_sql=""
   printf '%s' "$cmd" | grep -Eqi "$DB_CLIENT" && runs_sql=1
 
-  deny_hit=$(printf '%s' "$scan" | grep -Eo "$DENY_HARD" | head -1)
-  if [ -z "$deny_hit" ] && [ -n "$runs_sql" ]; then
-    deny_hit=$(printf '%s' "$cmd" | grep -Eoi "$SQL_HARD" | head -1)
+  deny_all=$(all_rules "$scan" "$DENY_HARD" "")
+  if [ -z "$deny_all" ] && [ -n "$runs_sql" ]; then
+    deny_all=$(all_rules "$cmd" "$SQL_HARD" "-i")
   fi
-  if [ -n "$deny_hit" ]; then
+  if [ -n "$deny_all" ]; then
+    deny_hit=${deny_all%%,*}
     echo "BLOCKED (pre-tool-use-guard): lệnh khớp danh sách chặn cứng: $cmd" >&2
     echo "Nếu thật sự cần, giải thích cho user và để USER tự chạy — không tự chạy lại biến thể khác." >&2
-    log_caught "$(redacted_detail "$deny_hit" "tier=deny cmd=$cmd")"
+    log_caught "$(redacted_detail "$deny_all" "tier=deny cmd=$cmd")"
     exit 2
   fi
 
-  ask_hit=$(printf '%s' "$scan" | grep -Eo "$ASK_CMD" | head -1)
-  if [ -z "$ask_hit" ] && [ -n "$runs_sql" ]; then
-    ask_hit=$(printf '%s' "$cmd" | grep -Eoi "$SQL_ASK" | head -1)
+  ask_all=$(all_rules "$scan" "$ASK_CMD" "")
+  if [ -z "$ask_all" ] && [ -n "$runs_sql" ]; then
+    ask_all=$(all_rules "$cmd" "$SQL_ASK" "-i")
   fi
-  if [ -n "$ask_hit" ]; then
-    log_caught "$(redacted_detail "$ask_hit" "tier=ask cmd=$cmd")"
+  if [ -n "$ask_all" ]; then
+    ask_hit=${ask_all%%,*}
+    log_caught "$(redacted_detail "$ask_all" "tier=ask cmd=$cmd")"
     ask_user "[guard] Lệnh này tuỳ ngữ cảnh mới đúng — khớp \"$ask_hit\". Xem kỹ rồi quyết: $cmd"
   fi
 fi
