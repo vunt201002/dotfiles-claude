@@ -51,9 +51,11 @@ Three levers, in order of importance:
 5. **Never invent content.** Nothing in the output may come from your own knowledge of the
    topic. If a passage is unreadable or the fetch failed, say so — do not fill the gap.
 6. **Read-only web + write only under the vault** (`$READ_VI_DIR`, = `personal/read-vi/`)
-   and the run's temp dir. Never touch repo code. Never write into
-   `personal/tech-digest/` (that vault belongs to `/tech-digest`; read it, don't write it).
-   Never commit — the user commits the vault when they choose.
+   and the run's temp dir. Inside the vault, a run writes **its own article folder
+   `<ngày>-<slug>/` and only the two files in it** — `dich.md` and `tom-tat.md`. Never
+   another run's folder, never a loose file at the vault root. Never touch repo code.
+   Never write into `personal/tech-digest/` (that vault belongs to `/tech-digest`; read it,
+   don't write it). Never commit — the user commits the vault when they choose.
 7. **One article per run.** Two articles = two runs.
 
 ---
@@ -68,7 +70,7 @@ Parse input after `/read-vi`:
 | *(pasted article body)* | **Translate run** on the pasted text |
 | `digest <N>` / `bài <N>` | Resolve item #N from the newest `/tech-digest` file, then translate run |
 | *(nothing)* | Ask which article. Do not guess from whatever is on screen. |
-| `list` | List saved translations in `$READ_VI_DIR`, newest first, then stop |
+| `list` | List the article folders in `$READ_VI_DIR`, newest first, then stop |
 | `anchor <file> [<đoạn>]` | Add a passage to `references/anchors.md`, then stop |
 | `ban "<cấu trúc>" -> "<viết lại>"` | Add a row to `vi-conventions.md §B1`, then stop |
 | `term <English> [= <Việt>]` | Add a ruling to `vi-conventions.md §A`, then stop |
@@ -373,7 +375,21 @@ Blocker; the same shape inside `VIẾT LẠI` prose may be a Medium.
 
 ## Step 7 — Save
 
-Copy the final Vietnamese file into the vault and prepend the header block. **Copy it —
+Every article gets **its own folder** in the vault, `<ngày>-<slug>/`, holding exactly two
+files with fixed short names:
+
+```
+personal/read-vi/
+  2026-08-13-a-tale-of-dynamic-programming/
+      dich.md      ← bản dịch — lời tác giả
+      tom-tat.md   ← bản tóm tắt — lời Claude
+```
+
+The folder carries the article's identity, so the filenames inside do not repeat the slug.
+
+### 7a. The translation → `<folder>/dich.md`
+
+Copy the final Vietnamese file into the folder and prepend the header block. **Copy it —
 do not retype it, do not "improve" a sentence on the way in** (HARD GATE 2).
 
 ```bash
@@ -382,13 +398,17 @@ TODAY=$(date +%Y-%m-%d)
 RAW="${TITLE_RAW:-untitled}"
 SLUG=$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]' | tr -s ' \t' '-' | tr -cd 'a-z0-9.-' | cut -c1-60)
 SLUG="${SLUG:-untitled}"
-OUT="$READ_VI_DIR/$TODAY-$SLUG-vi.md"
-[ -e "$OUT" ] && OUT="$READ_VI_DIR/$TODAY-$SLUG-$(date +%H%M)-vi.md"
-echo "OUT=$OUT"
+DIR="$READ_VI_DIR/$TODAY-$SLUG"
+[ -e "$DIR" ] && DIR="$READ_VI_DIR/$TODAY-$SLUG-$(date +%H%M)"
+mkdir -p "$DIR"
+echo "DIR=$DIR"
+echo "OUT=$DIR/dich.md"
+echo "SUM=$DIR/tom-tat.md"
 ```
 
 Compute the slug in bash, never in the prompt layer — a title from a fetched page must not
-be able to inject shell metacharacters. Same allowlist as `/my-worklog`.
+be able to inject shell metacharacters. Same allowlist as `/my-worklog`. Name collisions
+are resolved on the **folder**, not on the files inside it.
 
 Header block (extends the shape already used by the one hand-made translation in
 `personal/tech-digest/translations/`, plus the pass receipts):
@@ -397,6 +417,7 @@ Header block (extends the shape already used by the one hand-made translation in
 # <Title gốc> — <tác giả> (<chế độ> tiếng Việt)
 
 > Nguồn: <url> (đăng <ngày nếu biết>)
+> Tóm tắt: [tom-tat.md](tom-tat.md)
 > Chế độ: <DỊCH SÁT | VIẾT LẠI | HỖN HỢP> — <một dòng vì sao chọn chế độ này>
 > Xưng hô: <bạn | mình>
 > Pass 2 (editor mù nguồn): <k> vòng · điểm vòng cuối: nhịp câu _ · từ ngữ _ · xưng hô _ · mạch đoạn _ · thuật ngữ _
@@ -404,7 +425,93 @@ Header block (extends the shape already used by the one hand-made translation in
 > <Lưu từ digest <ngày>, bài số <N>.  — chỉ khi vào bằng `digest <N>`>
 ```
 
-Then print a short close to the user:
+### 7b. The summary → `<folder>/tom-tat.md`
+
+**You — the main session — write this, and you write it after 7a has saved the
+translation.** You are still holding the English article in context, which is exactly what
+this step needs; no agent has it.
+
+**HARD GATE 2 does not forbid this.** Gate 2 seals **the body of the translation** against
+main-session edits once pass 2 has written it. `tom-tat.md` is a different file and does
+not touch one word of `dich.md`, so writing it breaks no seal. Do not skip this step
+believing you are not allowed to write — you are not allowed to *restyle the translation*,
+which is a different thing. And note the ordering: this file is produced after every
+editor round is finished, so it cannot leak English into any round.
+
+**Summarize the English article, not the Vietnamese translation.** Vietnamese prose,
+technical terms stay English by the same `vi-conventions.md §A1` rulings the translation
+used — the two files should sound like they came from the same house.
+
+Header block, mandatory, all of it:
+
+```markdown
+# <Title gốc> — tóm tắt (<tác giả>)
+
+> Nguồn: <url> (đăng <ngày nếu biết>)
+> Bản dịch đầy đủ: [dich.md](dich.md)
+> Loại: **tóm tắt + giải thích, do Claude viết** — KHÔNG phải lời tác giả, không phải bản dịch.
+>   Chỗ nào cần nguyên văn thì đọc bản dịch, đừng trích file này.
+> Viết: <ngày>
+```
+
+The `Loại:` line is not optional and never shortened. The two files sit side by side in one
+folder forever; without that label, a reader months from now cannot tell whose sentences
+they are reading, and may quote Claude as if quoting the author.
+
+#### What the summary has to be
+
+An outline of section titles is worthless — `dich.md` already has those headings. This is a
+**summary that explains**. Five requirements, all of them load-bearing:
+
+| Requirement | What it means concretely |
+|---|---|
+| Follow the article's own structure | its sections, in its order, under its own numbering. Do not re-plan the piece into a tidier outline of your own. |
+| Explain the mechanism and the *why* | "`B` nhận một value function và trả về một value function, nên phương trình Bellman thành `v* = Bv*`" — **not** "bài giới thiệu Bellman operator". After each section the reader should be able to say what the thing *does*, not just that it was mentioned. |
+| Keep the specifics that carry weight | numbers, units, complexity bounds, version numbers, the exact hypothesis a claim needs ("γ < 1 và cost bị chặn đều"). Drop the decorative ones. A summary that keeps the theorem but loses its condition has lost the theorem. |
+| Name the author's best explanations | the metaphor, the worked example, the one analogy that made it click — say which passage it is and why it works. That is what makes an article recallable a month later, and it is the first thing a lazy summary throws away. |
+| Close with a `## Rút lại` section | the through-line of the whole piece (one arrow-chain or one short paragraph), then **2-4 numbered takeaways** worth carrying away. |
+
+**Length: roughly a quarter of the original.** Word count is not the real test; these two
+are:
+
+- Long enough to **revise the article from** — reading only `tom-tat.md` should bring the
+  argument back without opening `dich.md`.
+- Short enough that it does **not replace** `dich.md` — anyone who needs the author's exact
+  wording, a code block, a proof step, or a quotable sentence goes to the translation.
+
+**No fabrication — HARD GATE 5, unchanged.** Only what the fetched article says. If the
+article does not say it, the summary does not say it, however well you know the topic.
+Your own judgment **is** allowed and is part of what makes a summary useful ("đây là đoạn
+giải thích hay nhất bài", "chỗ này dễ đọc lướt qua", "chi tiết nhìn nhỏ nhưng là thứ làm
+nên mục 8") — but write it so it reads unmistakably as the summarizer's judgment, never as
+something the author said.
+
+Once it is written, run the smell check — this step lands at the end of a long run, which
+is exactly where a summary quietly degrades into an abstract:
+
+```bash
+echo "dich:    $(wc -w < "$DIR/dich.md") từ · $(grep -c '^#\{2,3\} ' "$DIR/dich.md") mục"
+echo "tom-tat: $(wc -w < "$DIR/tom-tat.md") từ · $(grep -c '^#\{2,3\} ' "$DIR/tom-tat.md") mục"
+grep -n '^## Rút lại' "$DIR/tom-tat.md" || echo "THIẾU mục Rút lại"
+```
+
+Measure against `dich.md`, not against the English — both are Vietnamese, so the word
+counts compare like for like (Vietnamese runs more space-separated syllables per idea than
+English, which makes any ratio against the source misleading). Read it as a band, not a
+target:
+
+- **Under ~1/6 of `dich.md` → it collapsed into an abstract. Rewrite it.** This is the
+  failure this check exists to catch.
+- Over ~2/3 → it is a second translation, not a summary.
+- Fewer sections than `dich.md` has → whole sections were dropped rather than summarized.
+- No `## Rút lại` → the most re-readable part is missing.
+
+Calibration anchor, a summary the user accepted: `2026-08-13-a-tale-of-dynamic-programming/`
+came in at 4.1K words against a 10.8K-word translation (≈0.38) with 17 sections against 16.
+
+### 7c. Close
+
+Print a short close to the user:
 
 ```
 READ-VI — <title>
@@ -413,7 +520,8 @@ Chế độ:  <mode> — <vì sao>
 Vòng:    <k>/3 · đóng vì <mọi dimension ≥9 và editor không sửa thực chất | hết cap>
 Điểm:    nhịp câu _ · từ ngữ _ · xưng hô _ · mạch đoạn _ · thuật ngữ _
 Nghĩa:   <n> finding · còn lại <m> <(liệt kê nếu >0)>
-Lưu:     personal/read-vi/<file>
+Lưu:     personal/read-vi/<ngày>-<slug>/
+         dich.md · tom-tat.md
 ────────────────────────────────
 Ghi vào conventions: <k> cấu trúc mới · <k> ruling thuật ngữ  (hoặc: không có gì mới)
 Câu nào đọc gợn thì chỉ vào, anh ghi thẳng vào bảng cấm.
@@ -457,10 +565,22 @@ for d in "$HOME/.claude/skills/read-vi" "$HOME/Project/github/dotfiles-claude/pe
 done
 [ -n "$SKILL_REAL" ] || { echo "FATAL: không tìm thấy references của read-vi. Chạy /sync-skills."; exit 1; }
 READ_VI_DIR="${READ_VI_DIR:-$(cd "$SKILL_REAL/../.." && pwd)/read-vi}"
-ls -t "$READ_VI_DIR"/*.md 2>/dev/null || echo "(chưa dịch bài nào)"
+LISTED=0
+for d in $(ls -dt "$READ_VI_DIR"/*/ 2>/dev/null); do
+  [ -f "$d/dich.md" ] || continue
+  LISTED=1
+  if [ -f "$d/tom-tat.md" ]; then TT="dịch + tóm tắt"; else TT="dịch (chưa có tóm tắt)"; fi
+  echo "--- $(basename "$d")  |  $TT"
+  grep -m1 '^# ' "$d/dich.md"
+  grep -m1 '^> Chế độ:' "$d/dich.md"
+done
+[ "$LISTED" = 1 ] || echo "(chưa dịch bài nào)"
 ```
 
-Show date · title · mode for each, newest first.
+One line per article, newest first: **date · title · mode**, then whether the folder has a
+`tom-tat.md` or only the translation. Older articles legitimately have no summary — say
+"chưa có tóm tắt", and do **not** offer to backfill one unless the user asks, since writing
+it would mean re-fetching the article.
 
 ### `anchor <file> [<đoạn>]`
 
@@ -489,7 +609,11 @@ when a dictionary permits it.
   brief is a shipped template you may not extend, and the receipt is checked afterwards.
   Three layers, because a polite "please don't look at the English" is the exact thing that
   degrades into being ignored.
-- **You never restyle after pass 2.** Header block and file copy only.
+- **You never restyle after pass 2.** Header block and file copy only. Writing
+  `tom-tat.md` (Step 7b) is not restyling — it is a sibling file and does not touch a word
+  of `dich.md`.
+- **Two files per article, in one dated folder.** `dich.md` + `tom-tat.md` under
+  `<ngày>-<slug>/`. The summary is written every run (Step 7b), not on request.
 - **Meaning findings travel as Vietnamese facts.** That is what keeps the fix loop blind.
 - **Classify out loud.** Say which mode and why, every run, before drafting.
 - **`VIẾT LẠI` should come out shorter.** If it did not, the rewrite did not happen.
@@ -497,8 +621,10 @@ when a dictionary permits it.
 - **No fabrication.** Failed fetch → say so. Unreadable passage → flag it. Never fill from
   your own knowledge of the topic.
 - **The conventions file grows every run** (Step 8), or you say explicitly that it did not.
-- **Read-only web + write only `personal/read-vi/` and the temp run dir.** Never write into
-  `personal/tech-digest/`. No repo edits, no commits.
+- **Read-only web + write only this run's own folder under `personal/read-vi/`, plus the
+  temp run dir.** One run = one `<ngày>-<slug>/` = two files. Never another run's folder,
+  never a loose `.md` at the vault root. Never write into `personal/tech-digest/`. No repo
+  edits, no commits.
 - **Integration with `/tech-digest`, from this side only.** `digest <N>` reads the newest
   digest file to resolve item N. `/tech-digest` itself is not modified and does not know
   about this skill; the user can chain them by hand (`/tech-digest` → pick a number →
@@ -538,6 +664,14 @@ when a dictionary permits it.
   the file is what makes next month's article start better. That is why Step 8 is numbered
   and why the editors propose while the main session writes — one writer, no near-duplicate
   rows, and the table stays worth reading.
+- **Two files, not one, because they have two different authors.** `dich.md` is the author
+  speaking through a translation; `tom-tat.md` is Claude speaking about the article.
+  Appending the summary to the end of the translation would fuse them into one document,
+  and a few months later nobody can tell which sentences belong to whom — the exact
+  confusion the `Loại:` label exists to prevent. There is a mechanical reason too:
+  `dich.md` is sealed by HARD GATE 2 the moment pass 2 finishes, and appending to it is
+  breaking that seal. A sibling file in the same folder keeps the seal intact and keeps the
+  provenance readable.
 - **Anchors exist because rules have a ceiling.** A banned-construction table catches what
   already has a name. It cannot teach rhythm. Two or three paragraphs that read well do
   that in one shot, which is why the file ships with provisional starters and a step for

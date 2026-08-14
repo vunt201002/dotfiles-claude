@@ -36,10 +36,15 @@ does not reach. Say so and stop; do not write to the log by hand.
 ## 2. Show what the gate caught recently
 
 ```bash
-bun "$GL" recent --project "$PROJECT" --verdict caught --limit 10
+bun "$GL" recent --project "$PROJECT" --verdict caught --origin work --limit 10
 ```
 
 Lines are numbered newest first. Already-marked lines show `(was caught)`.
+
+`--origin work` keeps probe lines out of the picker. A line tagged `<gate-test>` came
+from something deliberately firing the gate to measure it, so it is a true positive by
+construction and never the thing the user means. Drop the flag only when the user is
+explicitly auditing a probe run.
 
 If the user already pointed at one block ("the one that just blocked my test
 command"), the top line is almost always it — say which one you read as the target
@@ -88,3 +93,7 @@ only evidence that will survive the week.
   Line numbers belong to one listing, not to the log.
 - **A block the user disagrees with but that WAS a real hit** is not a false
   positive. Marking it inflates precision and hides the next real miss. Leave it.
+- **A `<gate-test>` line is not a false positive either.** The gate answered
+  correctly on something built to trip it. Marking it would drag precision down for
+  a hit that never happened during real work, which is the mirror image of the
+  mistake above. `stats` already leaves those lines out of the number.

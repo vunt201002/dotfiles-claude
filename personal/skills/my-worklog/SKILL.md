@@ -176,7 +176,7 @@ BRANCH_KEY="${BRANCH_KEY:-unknown}"
 STATE_ROOT="${GSTACK_STATE_ROOT:-$HOME/.gstack}"
 CHECKPOINT_DIR="$STATE_ROOT/projects/$SLUG/checkpoints"
 
-fm() { awk 'NR==1 && $0=="---" {f=1; next} f && $0=="---" {exit} f' "$1" | grep -m1 "^$2:" | sed "s/^$2:[[:space:]]*//; s/^\"//; s/\"$//"; }
+fm() { awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f' "$1" | grep -m1 "^$2:" | sed "s/^$2:[[:space:]]*//; s/^\"//; s/\"$//"; }
 
 PREV=""
 while IFS= read -r f; do

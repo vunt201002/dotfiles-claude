@@ -54,6 +54,18 @@ Bổ sung (chốt khi dịch bài về cách học bằng LLM): `hallucination` 
 `simulation` · `animation` · `knowledge base` · `plan mode` · `PoC` · `dashboard` ·
 `challenge` · `puzzle` · `fab` · `quartz` — đều giữ tiếng Anh.
 
+Bổ sung (chốt khi dịch bài toán/thuật toán — dynamic programming): `state` · `action` ·
+`policy` · `transition` · `cost` · `value function` · `fixed point` · `contraction` ·
+`metric space` · `discount factor` · `terminal state` · `finite horizon` · `automata` ·
+`state machine` · `dynamics` · `oracle` · `warm start` · `tolerance` · `topological sort` ·
+`DAG` · `well-defined` · `embarrassingly parallel` · `Markov chain` · `Markov Decision
+Process` (`MDP`) · `Semiring` · `Monad` — đều giữ tiếng Anh. Hai chỗ đáng lưu ý:
+`embarrassingly parallel` và `well-defined` là **cụm** chứ không phải từ đơn, nên rất dễ
+bị dịch cho "thuần Việt" — đừng. Ngược lại, tên **tính chất toán** thì dùng tiếng Việt vì
+dân toán Việt nói vậy thật: `tính đơn điệu` · `tính liên tục` · `chuẩn đều` · `thứ tự bộ
+phận` · `phi chu trình` · `quy nạp` · `truy hồi` · `hằng số Lipschitz` · `supremum` (giữ
+Latin). Tên định lý giữ tên riêng, dịch phần còn lại: `định lý điểm bất động Banach`.
+
 **Tên một control trên UI:** danh từ chỉ loại viết tiếng Việt, tên riêng giữ tiếng Anh —
 `nút Think`, `slider`, `tab Settings`. Đừng dịch tên control (`nút Nghĩ` là sai).
 
@@ -121,7 +133,7 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 | 1 | Việc sử dụng cache giúp cải thiện hiệu năng | Cache giúp chạy nhanh hơn | gerund làm chủ ngữ: *Using cache improves performance* |
 | 2 | Điều này cho phép chúng ta có thể… | Nhờ vậy mình… | *This allows us to…* (+ `có thể` thừa, đã có `cho phép`) |
 | 3 | được thực hiện bởi hệ thống | hệ thống làm | bị động + *by*: *is performed by the system* |
-| 4 | Nó cung cấp cho bạn khả năng… · cho <ai> khả năng <làm gì> | Bạn có thể… · để <ai> <làm gì> được | *It provides you with the ability to…* · *gives X the ability to* |
+| 4 | Nó cung cấp cho bạn khả năng… · cho <ai> khả năng <làm gì> · người chơi khác **có khả năng** thực hiện action | Bạn có thể… · để <ai> <làm gì> được · người chơi khác cũng **thực hiện được** action | *It provides you with the ability to…* · *gives X the ability to* · *who are able to take actions* — mọi biến thể đều nhét `khả năng` thành danh từ; tiếng Việt gắn khả năng vào chính động từ (`làm được`, `thấy được`) |
 | 5 | có thể được sử dụng để | dùng để | *can be used to* |
 | 6 | một cách hiệu quả | hiệu quả | *-ly*: tiếng Việt tính từ đã làm được việc của trạng từ |
 | 7 | trong trường hợp mà | khi | *in the case that / in cases where* |
@@ -153,23 +165,38 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 | 33 | Kỹ Thuật Tối Ưu Hiệu Năng Ứng Dụng (tiêu đề) | Tối ưu hiệu năng: mấy cách | Title Case + chồng danh từ kiểu tiêu đề Anh |
 | 34 | **Đầu tiên,** … **Thứ hai,** … **Cuối cùng,** … (nhưng không có list nào) | bỏ, trừ khi thật sự đang liệt kê | *First… Second… Finally…* rải đều mọi đoạn |
 | 35 | Đoạn văn dài — 40 từ, ba mệnh đề phụ — nối bằng dấu gạch ngang `—` | tách câu, dùng dấu phẩy / hai chấm / ngoặc đơn | tiếng Việt không dùng em-dash như tiếng Anh (khớp `design-eye §E1 #3`) |
-| 36 | **tính** khả dụng của hệ thống rất cao | hệ thống ít khi chết | `tính + adj` từ danh từ trừu tượng Anh; giữ khi nó **là** thuật ngữ (`tính nhất quán` = consistency) |
+| 36 | **tính** khả dụng của hệ thống rất cao · một công thức **mang tính** xây dựng | hệ thống ít khi chết · một công thức để dựng ra nó | `tính + adj` / `mang tính + adj` từ danh từ trừu tượng Anh (*a constructive formula*); giữ khi nó **là** thuật ngữ (`tính nhất quán` = consistency, `tính đơn điệu` = monotonicity) |
 | 37 | Ngày 3rd tháng July, 2026 | 3/7/2026 | format ngày giữ nguyên kiểu Anh |
 | 38 | Server gửi một Request tới Endpoint | server gửi request tới endpoint | viết hoa danh từ chung giữa câu, dính từ tiêu đề/nhấn mạnh tiếng Anh |
 | 39 | **Đây là những gì** cần chờ đợi: · **Đây là những thứ** nên tính trước: | Dự kiến thế này: · Mấy thứ nên tính trước: | *Here's what to expect / Here's what to plan for* — dummy `Đây là` + mệnh đề quan hệ `những gì`; tiếng Việt vào thẳng, hai chấm đã đủ |
 | 40 | Càng gần biển, gió càng rõ hơn **ở** Mission | … càng rõ hơn **so với** Mission | *more noticeable than at X* — bỏ mất `so với` làm câu vỡ nghĩa thành "rõ tại Mission" |
 | 41 | phục vụ hết **dải** đó · phủ hết **phổ** nhu cầu | lo được hết ngần ấy việc · đủ kiểu | *serve that whole range/spectrum* — `dải`/`phổ` cho phạm vi trừu tượng là dịch mặt chữ |
 | 42 | cảm giác phải **là** model đang nghĩ lâu hơn | cảm giác phải **giống như** model đang nghĩ lâu hơn | *it should feel like X* — tiếng Việt cần `giống như` / `như thể`, `là` nghe hụt |
-| 43 | **Chỉ có một thứ** đáng lưu ý là X | Thứ đáng lưu ý **duy nhất** là X | *The one thing to watch out for is X* |
+| 43 | **Chỉ có một thứ** đáng lưu ý là X · **Một điều nên rõ ràng:** X | Thứ đáng lưu ý **duy nhất** là X · Có một điểm cần rõ: X | *The one thing to watch out for is X* · *One thing should be clear: X* — chủ ngữ `một thứ/một điều` + vị ngữ rỗng |
 | 44 | … rối loạn ăn uống. **Thêm** hàng hoá giới hạn tuổi, hoạt động nguy hiểm. | gộp thẳng vào vế liệt kê của câu trước | *Plus X, Y, Z.* — tiếng Anh cho phép câu cụt kiểu này, tiếng Việt thì không |
 | 45 | Gió **thiên về** làm bạn chậm lại **hơn là** làm ướt | Gió làm bạn chậm lại **nhiều hơn là** làm ướt | *tends to X rather than Y* / *is more likely to X than Y* — `thiên về` là calque cứng |
 | 46 | **Một** đánh giá nội bộ chạy trên… | Đánh giá nội bộ chạy trên… | mạo từ *a/an* dịch thành `một` thừa (họ hàng #11, nhưng #11 là số nhiều `-s`) |
 | 47 | Mình **đã** làm hẳn một cái · Bài **đã** nói ở trên | Mình làm hẳn một cái · Bài nói ở trên | thì quá khứ tiếng Anh dịch thành `đã` ở mọi động từ; tiếng Việt chỉ cần `đã` khi có mốc thời gian thật sự tương phản. Chiều quá khứ của #13 (*will* → `sẽ`) |
-| 48 | **Thứ nhận về là** một animation đẹp · **Cái bạn có được là**… | Làm xong là có animation đẹp | *What you get is X* / *The result was X* — chủ ngữ danh từ rỗng `Thứ/Cái + V + là` đẩy lên đầu; tiếng Việt trả chủ ngữ về người/vật thật, hoặc bỏ hẳn chủ ngữ. Họ hàng #39 |
+| 48 | **Thứ nhận về là** một animation đẹp · **Cái bạn có được là**… · **Thứ ta quan tâm nhất ở** định lý này **là**… | Làm xong là có animation đẹp · Ở định lý này, chỗ đáng giá nhất là… | *What you get is X* / *The result was X* / *What we care about most in X is…* — chủ ngữ danh từ rỗng `Thứ/Cái + V + là` đẩy lên đầu; tiếng Việt trả chủ ngữ về người/vật thật, hoặc bỏ hẳn chủ ngữ. Họ hàng #39 |
 | 49 | *(bài đã chốt xưng hô `mình`)* **Mình** nhận về animation chính xác 100% · **Mình** nhìn theo xe goòng và thấy nó đổi dạng | Làm xong là có animation… · Nhìn theo xe goòng **là thấy được** nó đổi dạng | *you get X* / *you can watch X and see it change* — `you` phiếm chỉ bị hút vào xưng hô đã chốt, biến lời hứa chung thành **báo cáo cá nhân của tác giả** và nuốt luôn sắc thái *can*. Chữa bằng câu không chủ ngữ + gắn khả năng vào động từ (`thấy được`, `là thấy`), tuyệt đối không lôi `bạn` vào. Mặt trái của §B2(b): xưng hô **đúng** nhưng dùng **sai vai** |
 | 50 | phân tích mấy bottleneck mới của AI, mấy thứ có thể làm chậm việc dựng data center, mình nhận ra… | …mấy bottleneck mới của AI, **tức** mấy thứ có thể làm chậm việc dựng data center. Rồi mình nhận ra… | appositive kẹp giữa chủ ngữ và vị ngữ; tiếng Việt không đọc trôi qua hai dấu phẩy rồi mới tới động từ. Tách câu, hoặc chèn `tức` |
 | 51 | Design sát hơn. · Kết quả tốt hơn. *(đứng một mình)* | **Nhìn** sát thực tế hơn. · **Chạy ra** kết quả tốt hơn. | *The design is much closer.* — câu danh từ + tính từ; tiếng Anh có `is` đỡ, tiếng Việt cần một động từ thật (`nhìn`, `trông`, `chạy`, `đọc`) mới thành câu |
 | 52 | **Bắt trả lời** câu hỏi về bước trước thì kiến thức bám lâu hơn | **Tự trả lời** câu hỏi về bước trước thì kiến thức bám lâu hơn | *Trying to answer questions about a previous step helps you retain it* — gerund tiếng Anh cho phép trống chủ thể; tiếng Việt phải gọi tên ai làm. **Bẫy:** gọi tên SAI người còn tệ hơn để trống — điền `người chơi` vào chỗ gốc nói chính người đọc là sai attribution, không phải sửa văn phong |
+
+| 53 | **Điểm bán hàng** của nó là tính thẳng ra được optimal policy | **Cái ăn tiền** của nó là… | *Its selling point is X* — dịch mặt chữ một idiom thương mại vào văn kỹ thuật |
+| 54 | Chuyển từ mô tả này sang decision process khá **thẳng** · thuật toán này **đến thẳng từ** việc cài đặt định lý | khá **dễ** · **chính là bản cài đặt trực tiếp của** định lý | *straightforward* · *comes directly from* — `thẳng` chỉ đúng cho nghĩa vật lý (đường thẳng) và `tính thẳng ra` (compute directly), không cho *straightforward* |
+| 55 | nhìn loại bài toán này **dưới ánh sáng của** bộ hình thức vừa dựng | nhìn lại loại bài toán này **bằng** bộ hình thức vừa dựng | *in the light of X* |
+| 56 | **Tất cả những gì phải làm là** hiểu phương trình như một luật cập nhật | **Chỉ cần** hiểu phương trình như một luật cập nhật | *All you have to do is X* — họ hàng #39, dummy `Đây là` đổi thành dummy `Tất cả những gì` |
+| 57 | trung bình **còn xa mới là** lựa chọn duy nhất | trung bình **còn lâu mới là** lựa chọn duy nhất | *far from the only one* — `xa` là khoảng cách vật lý; tiếng Việt dùng `còn lâu` cho khoảng cách mức độ |
+| 58 | ta **nướng** luôn nó vào thuật toán | ta **nhét** luôn nó vào thuật toán | *bake it into the algorithm* — idiom bếp núc tiếng Anh, tiếng Việt không có |
+| 59 | **Vì** tôi không muốn sa vào tiểu tiết, phần chứng minh được đẩy xuống phụ lục | Tôi không muốn sa vào tiểu tiết, **nên** đẩy phần chứng minh xuống phụ lục | *Since X, Y* — tiếng Anh đặt lý do trước, tiếng Việt đặt sau bằng `nên`. **Bẫy nặng:** viết kiểu này rất dễ đẻ ra một chữ `Vì` treo lơ lửng không có mệnh đề chính đi kèm |
+| 60 | **Điều này chặn** tổng cost **bởi** một chuỗi hình học | Nhờ vậy tổng cost **bị chặn bởi** một chuỗi hình học | *This bounds X by Y* — động từ chủ động ghép với `bởi` là sai ngữ pháp Việt; chỉ `bị chặn bởi` / `cho bởi` mới là thành ngữ toán hợp lệ |
+| 61 | **Xem** một thứ tự tô-pô cho ví dụ trước **ở dưới**. | **Ở dưới là** một thứ tự tô-pô cho ví dụ trước. | *See X below* — trạng ngữ vị trí bị bỏ rơi ở cuối câu; tiếng Việt đưa lên đầu |
+| 62 | **Dựa loáng thoáng trên** sơ đồ trong X | **Phỏng theo (khá lỏng)** sơ đồ trong X | *Loosely based on X* — dịch từng chữ một cụm cố định |
+| 63 | nghỉ ngơi suốt **phần đời còn lại của vĩnh cửu** | nghỉ ngơi suốt **quãng vĩnh cửu còn lại** | *the rest of eternity* — khung `phần … còn lại của + danh từ trừu tượng` |
+| 64 | **Trong trường hợp này,** graph nền là phi chu trình. (mở câu, làm connector) | **Khi đó,** graph nền là phi chu trình. · **Ở dạng này,** … · gộp thẳng vào mệnh đề trước | *In this case, …* — họ hàng #7, nhưng #7 là mệnh đề quan hệ (`trong trường hợp mà`) còn dòng này là connector mở câu, rải đều cả bài |
+| 65 | policy iteration cũng **nhận** nhiều biến thể | policy iteration cũng **có** nhiều biến thể | *admits many variants* — động từ toán *admit* dịch mặt chữ. Cùng họ: *X admits a solution* → `X có nghiệm`, không phải `X nhận một nghiệm` |
+| 66 | bảo đảm **tồn tại và duy nhất** một optimal value function | bảo đảm **có đúng một** optimal value function | *guarantees existence and uniqueness of X* — hai danh từ trừu tượng ghép làm tân ngữ; tiếng Việt trả về một vị ngữ thật. Giữ nguyên `tồn tại và duy nhất` khi nó là **tên định lý** |
 
 ### §B2. Hai lỗi cấu trúc (không phải chuỗi ký tự — phải đọc mới thấy)
 
