@@ -6,6 +6,7 @@ export type ParsedCommand =
   | { kind: 'stop'; taskId: string }
   | { kind: 'stopall' }
   | { kind: 'cost'; window: 'today' | 'all' }
+  | { kind: 'fleet' }
   | { kind: 'text'; text: string }
   | { kind: 'unknown'; name: string }
   | { kind: 'invalid'; name: string; reason: string };
@@ -17,7 +18,7 @@ export function isIdent(value: string): boolean {
   return IDENT_SHAPE.test(value) && !value.includes('..');
 }
 
-export const COMMAND_SURFACE = ['/status', '/run <project> <issue>', '/report <project>', '/stop <task-id>', '/stopall', '/cost'] as const;
+export const COMMAND_SURFACE = ['/status', '/fleet', '/run <project> <issue>', '/report <project>', '/stop <task-id>', '/stopall', '/cost'] as const;
 
 /** Matches `1: câu trả lời`, `2. ...`, `3) ...` against the numbered question batch. */
 export function parseNumberedAnswer(text: string): { index: number; body: string } | undefined {
@@ -47,6 +48,8 @@ export function parseCommand(raw: string): ParsedCommand {
       return args.length === 0 ? { kind: 'status' } : { kind: 'invalid', name, reason: 'Cú pháp: /status' };
     case '/stopall':
       return { kind: 'stopall' };
+    case '/fleet':
+      return args.length === 0 ? { kind: 'fleet' } : { kind: 'invalid', name, reason: 'Cú pháp: /fleet' };
     case '/cost': {
       if (args.length > 1) return { kind: 'invalid', name, reason: 'Cú pháp: /cost hoặc /cost all' };
       if (args.length === 1 && args[0]!.toLowerCase() !== 'all') {

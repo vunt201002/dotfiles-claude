@@ -11,6 +11,7 @@
  *   GET  /task/:id/diff                                -> text/plain
  *   POST /stopall                                      -> {stopped}
  *   GET  /cost?window=today|all                        -> {usd, byLane, byProject}
+ *   GET  /fleet                                        -> FleetReport
  *   POST /prompt            {text, source}             -> {reply}
  *   GET  /events            SSE                        -> report | question | approval
  *
@@ -25,6 +26,7 @@ import { createSseEndpoint } from '../../browse/src/sse-helpers';
 import { loadConfig } from './config';
 import { brainstorm } from './lib/brainstorm';
 import { costBreakdown } from './lib/cost';
+import { fleetReport } from './lib/fleet-view';
 import { readDiff } from './lib/git';
 import { subscribe, type ManagerEvent } from './lib/events';
 import { Orchestrator } from './lib/orchestrator';
@@ -33,6 +35,19 @@ import { listTasks, loadTask } from './lib/store';
 import type { TaskSource } from './types';
 
 const SOURCES: readonly TaskSource[] = ['cli', 'api', 'telegram'];
+
+/**
+ * Bun.serve defaults to 10 seconds, which is shorter than the work behind two
+ * of these routes. `POST /prompt` answers a brainstorm inline — a real model
+ * call — and the first live run died on exactly that: the daemon logged
+ * "request timed out after 10 seconds" while the phone waited.
+ *
+ * 255 is Bun's ceiling for this option, not a tuned number. It buys room; it
+ * does not make a minutes-long call safe inside one request. The real fix is
+ * for /prompt to hand back a handle and push the answer like /task does, which
+ * is a change to the bot's contract and not one to make while it is running.
+ */
+const SERVE_IDLE_TIMEOUT_SEC = 255;
 
 /**
  * `source` travels on every state-changing route, not just POST /task.
@@ -129,6 +144,10 @@ export function buildFetchHandler(deps: HandlerDeps): (req: Request) => Promise<
       return json({ stopped });
     }
 
+    if (req.method === 'GET' && pathname === '/fleet') {
+      return json(fleetReport());
+    }
+
     if (req.method === 'GET' && pathname === '/cost') {
       const window = url.searchParams.get('window') === 'all' ? 'all' : 'today';
       return json(costBreakdown(listTasks(), window));
@@ -209,6 +228,7 @@ export function startServer(orchestrator: Orchestrator, portOverride?: number): 
   const server = Bun.serve({
     hostname: cfg.host,
     port: portOverride ?? cfg.port,
+    idleTimeout: SERVE_IDLE_TIMEOUT_SEC,
     fetch: buildFetchHandler({ orchestrator, token }),
   });
   ensureManagerDirs();

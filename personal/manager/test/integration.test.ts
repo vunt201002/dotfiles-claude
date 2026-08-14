@@ -16,7 +16,7 @@ import { Orchestrator } from '../lib/orchestrator';
 import type { ExecFn, ExecResult } from '../lib/assert-runner';
 import { approveCommands, isCommandApproved } from '../lib/assert-approvals';
 import type { DiffResult } from '../lib/git';
-import { assertApprovalsFile, ensureManagerDirs, projectsFile } from '../lib/paths';
+import { assertApprovalsFile, ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths';
 import { reconcile } from '../lib/reconcile';
 import type { SpawnPort, SpawnRequest } from '../lib/spawn';
 import { listTasks, loadTask, saveTaskAndIndex, writeState } from '../lib/store';
@@ -152,6 +152,7 @@ function makePort(
         exitReason: 'success',
         turnsUsed: 3,
         costUsd,
+        costKnown: true,
         model: req.modelAlias,
         sessionId: `sess-${calls.length}`,
         durationMs: 5,
@@ -194,6 +195,7 @@ beforeEach(() => {
   writeState(emptyState());
   fs.rmSync(assertApprovalsFile(), { force: true });
   writeRegistry();
+  fs.writeFileSync(managerConfigFile(), JSON.stringify({ browserTools: ['mcp__test-browser__navigate'] }));
   resetConfigCache();
   __clearWaiters();
   __resetEvents();
@@ -1283,5 +1285,122 @@ describe('report events carry the fields the phone renders', () => {
     const report = seen.find((e) => e.type === 'report');
     expect(report?.ok).toBe(false);
     expect(String(report?.cause)).toContain('b2-root-cause-unproven');
+  });
+});
+
+// 14/08 review finding. With codex uninstalled, all three review gates took the
+// transport path, their texts differed so nothing cross-confirmed, the outcome
+// was `warn`, and the task landed REPORTED with ok:true and a green tick on the
+// phone. A task whose review never ran, reported as a reviewed one.
+describe('a review that did not run is not a review that found nothing', () => {
+  function deadReviewPort(exitReason: string, output: string): SpawnPort {
+    return {
+      async run() {
+        return {
+          output, exitReason, turnsUsed: 0, costUsd: 0, costKnown: false,
+          model: 'codex', sessionId: '', durationMs: 1,
+        };
+      },
+    };
+  }
+
+  async function runWithDeadReview(exitReason: string, output: string) {
+    const { port } = makePort(happyReply);
+    const manager = new Orchestrator({
+      spawnPort: port,
+      reviewPort: deadReviewPort(exitReason, output),
+      blindSample: () => false,
+      exec: execStub(() => ({})).exec,
+      diff: stubDiff,
+    });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    return loadTask(taskId)!;
+  }
+
+  test('an uninstalled codex parks for a human instead of reporting green', async () => {
+    const task = await runWithDeadReview('codex_not_installed', 'SKIP: codex binary not found');
+    expect(task.state, 'a task nobody reviewed was reported as reviewed').toBe('APPROVAL');
+    expect(task.pending_action).toBe('fix the oracle, then re-verify');
+    expect(task.report_lines.join(' ')).toContain('spec-check');
+    expect(task.report_lines.join(' ')).toContain('no review gate returned a judgement');
+  });
+
+  test('a logged-out codex parks too, rather than blaming the model', async () => {
+    const task = await runWithDeadReview('codex_no_answer', 'codex exited 1 without producing an agent message.');
+    expect(task.state).toBe('APPROVAL');
+    expect(task.report_lines.join(' ')).toContain('returned a judgement');
+  });
+
+  test('a working review still closes the task', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state, 'the park must not fire on a healthy review').toBe('REPORTED');
+  });
+});
+
+// checkTaskCeiling had zero production callers: preflightBudget reimplemented
+// the comparison inline, so `partial` — the flag saying the spend it compared
+// was missing an unpriced run — was computed by a function nothing called.
+describe('unpriced runs are bounded by something, since the dollar ceiling cannot see them', () => {
+  test('a task past the unmeasured-run cap parks instead of running another gate', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const seeded = loadTask(taskId)!;
+    seeded.state = 'REVIEW';
+    seeded.cost_unmeasured_runs = 99;
+    await saveTaskAndIndex(seeded);
+
+    const resumed = newOrchestrator(makePort(happyReply).port);
+    await resumed.start(taskId);
+    await resumed.settle(taskId);
+
+    const after = loadTask(taskId)!;
+    expect(after.state).toBe('APPROVAL');
+    expect(after.pending_action).toBe('raise the budget');
+  });
+
+  test('a task within the cap is not parked by it', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+  });
+});
+
+// Found by probing the fix above rather than by review: the unpriced-run cap
+// had no escape. Approving raised the DOLLAR ceiling, which the cap does not
+// read, so the very next preflight saw the same count and parked again —
+// forever. That is the exact loop the budget path's own comment describes.
+describe('approving an unpriced-run park actually gets the task moving', () => {
+  test('a second approval is not required for the same runs', async () => {
+    const { port } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const seeded = loadTask(taskId)!;
+    seeded.state = 'REVIEW';
+    seeded.cost_unmeasured_runs = 99;
+    await saveTaskAndIndex(seeded);
+
+    const resumed = newOrchestrator(makePort(happyReply).port);
+    await resumed.start(taskId);
+    await resumed.settle(taskId);
+    expect(loadTask(taskId)?.state).toBe('APPROVAL');
+
+    await resumed.approve(taskId, true);
+    await resumed.settle(taskId);
+
+    const after = loadTask(taskId)!;
+    expect(after.state, 'approving parked the task straight back where it was').not.toBe('APPROVAL');
+    expect(after.cost_unmeasured_ack).toBe(99);
+    expect(after.cost_unmeasured_runs, 'the true count must survive being acknowledged').toBe(99);
   });
 });

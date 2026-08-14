@@ -136,6 +136,8 @@ export function newTaskRecord(input: CreateTaskInput): TaskRecord {
     gate_reports: [],
     holds: [],
     cost_usd_actual: 0,
+    cost_unmeasured_runs: 0,
+    cost_unmeasured_ack: 0,
     cost_ceiling_usd: input.ceilingUsd,
     human_touches: 0,
     assumption_count: 0,

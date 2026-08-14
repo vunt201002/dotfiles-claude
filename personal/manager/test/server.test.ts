@@ -56,6 +56,7 @@ const port: SpawnPort = {
       exitReason: 'success',
       turnsUsed: 1,
       costUsd: 0.05,
+      costKnown: true,
       model: req.modelAlias,
       sessionId: 'sess',
       durationMs: 1,

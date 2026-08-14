@@ -15,6 +15,39 @@ import type { AgentRole, Lane, TaskSource } from './types';
 
 export type ReviewProvider = 'opus-fresh' | 'codex';
 
+/** Two gates of the same family are one opinion wearing two labels (§7.3). */
+export type ModelFamily = 'anthropic' | 'openai' | 'unknown';
+
+export const REVIEW_PROVIDER_FAMILY: Record<ReviewProvider, ModelFamily> = {
+  'opus-fresh': 'anthropic',
+  codex: 'openai',
+};
+
+const MODEL_FAMILY_PREFIXES: Array<[string, ModelFamily]> = [
+  ['claude', 'anthropic'],
+  ['gpt', 'openai'],
+  ['o1', 'openai'],
+  ['o3', 'openai'],
+  ['codex', 'openai'],
+];
+
+/**
+ * A model nobody has classified comes back `unknown`, not guessed.
+ *
+ * "Anything that is not Claude is OpenAI" would label a Gemini route openai and
+ * print that as if it had been checked. The independence claim is only worth
+ * the classification behind it, so an unrecognised model refuses to support one.
+ */
+export function familyOfModel(idOrAlias: string): ModelFamily {
+  const id = resolveModelId(idOrAlias).toLowerCase();
+  return MODEL_FAMILY_PREFIXES.find(([prefix]) => id.startsWith(prefix))?.[1] ?? 'unknown';
+}
+
+/** sdk = Agent SDK child · cli = `claude -p` · cmux = a pane you can watch. */
+export type SpawnRunner = 'sdk' | 'cli' | 'cmux';
+
+export const SPAWN_RUNNERS: readonly SpawnRunner[] = ['sdk', 'cli', 'cmux'];
+
 export interface ModelRoute {
   /** Model id handed to the spawn runner. */
   model: string;
@@ -33,6 +66,15 @@ export interface ManagerConfig {
   dayCeilingUsd: number;
   /** Number of same-lane samples required before the p90 ceiling takes over. */
   p90MinSamples: number;
+  /**
+   * How many unpriced runs one task may accumulate before it parks.
+   *
+   * A codex review spends CLI quota, which no dollar ceiling can see, so §6.5's
+   * ceiling stops bounding those runs entirely. Counting them is the only bound
+   * left. It bounds RUNS, not money — say that out loud rather than let the
+   * number read as a spend limit.
+   */
+  maxUnmeasuredRunsPerTask: number;
   /** Retry cap. Only a B8 verify failure consumes an attempt (§5). */
   maxAttempts: number;
   /**
@@ -50,6 +92,61 @@ export interface ManagerConfig {
    * failure instead of a stuck task.
    */
   assertTimeoutMs: number;
+  /**
+   * Tools a judge needs to actually look at the page (§7.4). Empty by default,
+   * and empty means the browser gates refuse to run rather than run blind.
+   *
+   * It has to be configuration because there is no transport a spawned agent
+   * can assume: `claude-in-chrome` is supplied by the host to an interactive
+   * session, not by a config file, so an SDK child does not inherit it. Until a
+   * real transport is named here, `B8-judge` and `design-judge` report `error`.
+   * The alternative — hand a judge the browser token, let it produce a verdict
+   * having never opened the page, and log that verdict as evidence — is the
+   * failure this whole book exists to make impossible.
+   */
+  browserTools: string[];
+  /**
+   * Where an agent actually runs. `MANAGER_SPAWN_RUNNER` overrides it for one
+   * process, which is how a single daemon gets tried on cmux without changing
+   * what every other entry point does.
+   */
+  spawnRunner: SpawnRunner;
+  /**
+   * Roles that get their own cmux pane. Everything else falls back to the SDK
+   * port even when the cmux runner is selected.
+   *
+   * Only the executor is here by default. A pane is for work a human might
+   * want to watch or take over; a report-only gate is neither, and five extra
+   * panes per task would bury the one that matters.
+   */
+  cmuxRoles: AgentRole[];
+  /**
+   * A cmux pane runs a real `claude` against the operator's own settings, so
+   * an unanswered permission prompt hangs an unattended task forever. Skipping
+   * them is only allowed when `pre-tool-use-guard.sh` is wired — the port
+   * checks, and refuses to launch rather than trusting the flag alone.
+   */
+  cmuxSkipPermissions: boolean;
+  cmuxClaudeBin: string;
+  cmuxClaudeArgs: string[];
+  /** How long a pane has to register a session and start its first turn. */
+  cmuxStartupMs: number;
+  cmuxRunTimeoutMs: number;
+  /** How long an agent may sit at needsInput before the task is handed back. */
+  cmuxNeedsInputGraceMs: number;
+  /**
+   * How long a task waits for a free agent slot. Bounded because the cap
+   * counts the operator's own panes, and those do not free themselves.
+   */
+  cmuxSlotWaitMs: number;
+  /** A failed pane always stays open; this only governs the successful ones. */
+  cmuxCloseOnSuccess: boolean;
+  /**
+   * Gitignored paths symlinked from the main checkout into each task worktree.
+   * A fresh worktree has tracked files only, so without this the first command
+   * a task runs fails on a missing dependency.
+   */
+  worktreeLinks: string[];
   reviewProvider: ReviewProvider;
   models: Record<AgentRole | 'manager', ModelRoute>;
   /** Sonnet is the default executor; a third bug-lon attempt escalates. */
@@ -98,11 +195,24 @@ export const DEFAULT_CONFIG: ManagerConfig = {
   bootstrapTaskCeilingUsd: 5,
   dayCeilingUsd: 40,
   p90MinSamples: 20,
+  maxUnmeasuredRunsPerTask: 12,
   maxAttempts: 3,
   lockWaitTimeoutMs: 15 * 60_000,
   lockWaitTimeoutOverrideMs: {},
   assertTimeoutMs: 10 * 60_000,
-  reviewProvider: 'opus-fresh',
+  browserTools: [],
+  spawnRunner: 'sdk',
+  cmuxRoles: ['main', 'subagent'],
+  cmuxSkipPermissions: true,
+  cmuxClaudeBin: 'claude',
+  cmuxClaudeArgs: [],
+  cmuxStartupMs: 3 * 60_000,
+  cmuxRunTimeoutMs: 45 * 60_000,
+  cmuxNeedsInputGraceMs: 2 * 60_000,
+  cmuxSlotWaitMs: 30 * 60_000,
+  cmuxCloseOnSuccess: false,
+  worktreeLinks: ['node_modules', '.env', '.env.local'],
+  reviewProvider: 'codex',
   models: {
     manager: { model: 'fable', fallback: 'opus' },
     main: { model: 'opus', fallback: '' },
@@ -172,6 +282,90 @@ export function modelForRole(
   return route.model;
 }
 
+/**
+ * An unrecognised provider lands on the DEFAULT one, not on a hardcoded name.
+ *
+ * The runtime override file is hand-edited, and a typo there used to fall back
+ * to `opus-fresh` — the same family as the agent being graded, which is exactly
+ * the collapse §7.3 forbids, arrived at silently. Falling back to the shipped
+ * default keeps a typo from quietly undoing the independence.
+ */
+export function resolveReviewProvider(cfg: ManagerConfig = loadConfig()): ReviewProvider {
+  return Object.prototype.hasOwnProperty.call(REVIEW_PROVIDER_FAMILY, cfg.reviewProvider)
+    ? cfg.reviewProvider
+    : DEFAULT_CONFIG.reviewProvider;
+}
+
+export interface ReviewIndependence {
+  provider: ReviewProvider;
+  reviewFamily: ModelFamily;
+  /** Judges run on the spawn port, so they share the agent's transport. */
+  judgeFamily: ModelFamily;
+  /** Every family the executor can run as, escalation included. */
+  agentFamilies: ModelFamily[];
+  reviewIndependent: boolean;
+  judgeIndependent: boolean;
+  /** True only when EVERY llm gate differs in family from the agent. */
+  fullyIndependent: boolean;
+  /** Names every half, and what is wrong when one collapses. */
+  line: string;
+}
+
+/**
+ * Every model the executor can actually run as on some attempt.
+ *
+ * `modelForRole` swaps `subagent` to its fallback on a last bug-lon attempt, so
+ * reading `route.model` alone would clear a pairing that goes same-family on
+ * attempt 3 — the attempt that matters most.
+ */
+function agentModels(cfg: ManagerConfig): string[] {
+  const route = cfg.models.subagent;
+  const models = [route.model];
+  if (cfg.escalateSubagentOnLastAttempt && route.fallback) models.push(route.fallback);
+  return models;
+}
+
+/**
+ * §7.3 BLOCKER 4 as something a caller can read: the gates are independent in
+ * CONTEXT already, and this is the other half — whether they are independent in
+ * FAILURE MODE. Mirrors describeBackends() in the oracle's llm-gates.ts, so the
+ * measured path and the real path answer the same question the same way.
+ *
+ * Two honesty limits are stated rather than hidden. The judges are counted,
+ * because they are llm gates too and they run on the agent's own transport. And
+ * the review family is ASSERTED from the provider table, never observed: the
+ * codex port shells `codex exec` against the operator's own `~/.codex/` config
+ * and whatever model that picks is what actually reviews.
+ */
+export function reviewIndependence(cfg: ManagerConfig = loadConfig()): ReviewIndependence {
+  const provider = resolveReviewProvider(cfg);
+  const reviewFamily = REVIEW_PROVIDER_FAMILY[provider];
+  const models = agentModels(cfg);
+  const agentFamilies = [...new Set(models.map(familyOfModel))];
+  const judgeFamily = familyOfModel(cfg.models.judge.model);
+
+  const differs = (family: ModelFamily): boolean =>
+    family !== 'unknown' && !agentFamilies.includes('unknown') && !agentFamilies.includes(family);
+  const reviewIndependent = differs(reviewFamily);
+  const judgeIndependent = differs(judgeFamily);
+
+  const faults: string[] = [];
+  if (!reviewIndependent) faults.push(`review shares the agent's family (${reviewFamily})`);
+  if (!judgeIndependent) faults.push(`judges share the agent's family (${judgeFamily})`);
+  const where = `review=${provider}[${reviewFamily}, asserted] judge=${cfg.models.judge.model}[${judgeFamily}] agent=${models.join('|')}[${agentFamilies.join('|')}]`;
+
+  return {
+    provider,
+    reviewFamily,
+    judgeFamily,
+    agentFamilies,
+    reviewIndependent,
+    judgeIndependent,
+    fullyIndependent: reviewIndependent && judgeIndependent,
+    line: faults.length === 0 ? where : `${where} — ${faults.join('; ')}, not an independent check (§7.3)`,
+  };
+}
+
 function readOverrides(): Partial<ManagerConfig> {
   try {
     const raw = fs.readFileSync(managerConfigFile(), 'utf-8');
@@ -189,10 +383,37 @@ function numberFromEnv(name: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-let cached: ManagerConfig | null = null;
+/**
+ * Identity of the override file as it is on disk right now. Atomic writes swap
+ * the inode, plain writes move mtime or size, so all three together change on
+ * any edit that matters. Unreadable and absent both collapse to the same key,
+ * which is correct: creating the file later changes it and forces a reload.
+ */
+function overrideStamp(): string {
+  try {
+    const s = fs.statSync(managerConfigFile());
+    return `${s.mtimeMs}:${s.size}:${s.ino}`;
+  } catch {
+    return '';
+  }
+}
 
+let cached: ManagerConfig | null = null;
+let cachedStamp = '';
+
+/**
+ * Cached, but only against the file it was built from.
+ *
+ * The daemon runs for days. Holding the first read forever meant an operator
+ * who edited `~/.gstack/manager/config.json` to pull a provider out of the
+ * loop kept the old one running until someone remembered to restart — the
+ * safety decision was made, acknowledged, and silently not in effect. A config
+ * that cannot be changed on a running daemon is not a control surface.
+ */
 export function loadConfig(): ManagerConfig {
-  if (cached) return cached;
+  const stamp = overrideStamp();
+  if (cached && stamp === cachedStamp) return cached;
+  cachedStamp = stamp;
   const overrides = readOverrides();
   const merged: ManagerConfig = {
     ...DEFAULT_CONFIG,
@@ -224,4 +445,5 @@ export function loadConfig(): ManagerConfig {
 
 export function resetConfigCache(): void {
   cached = null;
+  cachedStamp = '';
 }

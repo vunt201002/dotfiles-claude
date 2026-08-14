@@ -384,10 +384,18 @@ describe('bot <-> manager giả', () => {
       'tin được gửi lại sau khi Telegram lên',
       15000,
     );
-    await waitFor(() => {
-      const raw = fs.readFileSync(config.paths.outboxFile, 'utf8');
-      return !raw.includes('joy/t88');
-    }, 'outbox sạch sau khi gửi xong');
+    await waitFor(
+      () => {
+        const raw = fs.readFileSync(config.paths.outboxFile, 'utf8');
+        return !raw.includes('joy/t88');
+      },
+      'outbox sạch sau khi gửi xong',
+      // Cùng hạn với bước gửi lại, không phải default 4s: dọn outbox là một lần
+      // ghi RIÊNG, xếp sau lần gửi thành công và vẫn nằm trên thang backoff
+      // (quan sát được: 2s rồi 4s). Hạn 4s làm test này rung, mà một oracle rung
+      // thì `proven` mất nghĩa và mọi con số P8 đọc từ đó đều nhiễm.
+      15000,
+    );
   }, 20000);
 
   test('bot restart không xử lý lại update cũ', async () => {

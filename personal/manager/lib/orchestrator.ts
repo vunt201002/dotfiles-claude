@@ -15,7 +15,16 @@
  */
 
 import * as path from 'path';
-import { loadConfig, modelForRole, READ_ONLY_DISALLOWED, READ_ONLY_TOOLS } from '../config';
+import {
+  familyOfModel,
+  loadConfig,
+  type ManagerConfig,
+  modelForRole,
+  READ_ONLY_DISALLOWED,
+  READ_ONLY_TOOLS,
+  resolveReviewProvider,
+  REVIEW_PROVIDER_FAMILY,
+} from '../config';
 import type { AgentRole, AssertRunRecord, TaskRecord, TaskSource, TaskState } from '../types';
 import { ACTIVE_STATES, isTerminal } from '../types';
 import { logGate, shouldBlindSample } from './gate-log-port';
@@ -33,7 +42,7 @@ import {
   type ChainRun,
 } from './closing-chain';
 import { approveCommands } from './assert-approvals';
-import { checkDayCeiling, collectLaneSamples, laneCeiling } from './cost';
+import { checkDayCeiling, checkTaskCeiling, collectLaneSamples, laneCeiling, unmeasuredRuns } from './cost';
 import { buildApprovalEvent, buildReportEvent, emit } from './events';
 import type { AssertRun } from './assert-runner';
 import { resolveProjectScope } from './paths';
@@ -226,8 +235,10 @@ export class Orchestrator {
     for (const line of parsed.overrides) next.report_lines.push(`router override: ${line}`);
     const decision = laneCeiling(collectLaneSamples(), parsed.envelope.lane);
     next.cost_ceiling_usd = decision.ceiling_usd;
+    const rejected =
+      decision.rejected_partial > 0 ? `, ${decision.rejected_partial} rejected as partially measured` : '';
     next.report_lines.push(
-      `ceiling $${decision.ceiling_usd.toFixed(2)} (${decision.source}, ${decision.sample_count} samples)`,
+      `ceiling $${decision.ceiling_usd.toFixed(2)} (${decision.source}, ${decision.sample_count} samples${rejected})`,
     );
     const sized = applyTransition(next, 'SIZED', { reason: 'envelope accepted' });
     await saveTaskAndIndex(sized);
@@ -377,10 +388,20 @@ export class Orchestrator {
     }
 
     if (browser.length > 0) {
+      let judgeFault: string[] = [];
       current = await this.withBrowserToken(current, hasRealBrowser, async (held) => {
         const judged = await runVerifyChain(this.chainContext(held, envelope, hasRealBrowser), browser);
+        judgeFault = judged.runs.filter((run) => run.unavailable).map((run) => run.gate);
         return this.absorbChain(loadTask(held.id) ?? held, judged, 'verify');
       });
+      if (judgeFault.length > 0) {
+        await this.parkForApproval(
+          current,
+          APPROVAL_ORACLE,
+          `${judgeFault.join(', ')} could not run, so nothing looked at the page this lane exists to check`,
+        );
+        return false;
+      }
     }
 
     const review = applyTransition(current, 'REVIEW', { reason: 'B8 verify passed' });
@@ -445,6 +466,7 @@ export class Orchestrator {
       await this.terminate(current, 'BLOCKED', `review blocked: ${ensemble.why}`);
       return false;
     }
+    if (await this.parkIfReviewDidNotRun(current, chain, ensemble)) return false;
     if (ensemble.outcome === 'warn') current.report_lines.push(`WARN: ${ensemble.why}`);
     if (!ensemble.measured) current.report_lines.push(`UNMEASURED: ${ensemble.why}`);
 
@@ -489,6 +511,13 @@ export class Orchestrator {
       // next preflight and ask again, forever.
       task.cost_ceiling_usd += loadConfig().bootstrapTaskCeilingUsd;
       task.report_lines.push(`budget raised to $${task.cost_ceiling_usd.toFixed(2)} by a human`);
+      // The unpriced-run cap needs the same escape and cannot borrow the
+      // ceiling's: no dollar figure covers a run nobody priced, so without this
+      // the count stays over the cap and parks again on the next preflight.
+      if (unmeasuredRuns(task) > (task.cost_unmeasured_ack ?? 0)) {
+        task.cost_unmeasured_ack = unmeasuredRuns(task);
+        task.report_lines.push(`${task.cost_unmeasured_ack} unpriced runs acknowledged by a human`);
+      }
     }
     const resumeTo: TaskState = task.resume_state === '' ? 'RUNNING' : task.resume_state;
     task.resume_state = '';
@@ -557,7 +586,14 @@ export class Orchestrator {
   // Internals
   // -------------------------------------------------------------------------
 
-  private async spawn(task: TaskRecord, role: AgentRole, prompt: string, port: SpawnPort, readOnly = false) {
+  private async spawn(
+    task: TaskRecord,
+    role: AgentRole,
+    prompt: string,
+    port: SpawnPort,
+    readOnly = false,
+    extraTools: string[] = [],
+  ) {
     const cfg = loadConfig();
     const modelAlias = modelForRole(role, { lane: task.envelope?.lane, attempt: task.attempt, cfg });
     const req: SpawnRequest = {
@@ -572,7 +608,7 @@ export class Orchestrator {
       lane: task.envelope?.lane,
       attempt: task.attempt,
       signal: signalForTask(task.id),
-      allowedTools: readOnly ? [...READ_ONLY_TOOLS] : undefined,
+      allowedTools: readOnly ? [...READ_ONLY_TOOLS, ...extraTools] : undefined,
       disallowedTools: readOnly ? [...READ_ONLY_DISALLOWED] : undefined,
     };
     const startedAt = new Date().toISOString();
@@ -588,6 +624,7 @@ export class Orchestrator {
       ended_at: new Date().toISOString(),
     });
     current.cost_usd_actual = round6(current.cost_usd_actual + result.costUsd);
+    if (!result.costKnown) current.cost_unmeasured_runs = unmeasuredRuns(current) + 1;
     saveTask(current);
     return result;
   }
@@ -614,6 +651,34 @@ export class Orchestrator {
   }
 
   /**
+   * The review lane's oracle fault, which it did not have.
+   *
+   * VERIFYING already parks when its oracle could not run. REVIEW had no such
+   * check: with codex uninstalled every gate took the transport path, the texts
+   * differed so nothing cross-confirmed, the outcome was `warn`, and the task
+   * landed REPORTED with `ok: true` and a green tick on the phone — a task whose
+   * review never happened, reported as a reviewed one.
+   *
+   * `ensemble.measured` cannot stand in for this. It counts ROWS, and a row
+   * saying "this gate never ran" counts exactly as well as a real verdict.
+   */
+  private async parkIfReviewDidNotRun(
+    task: TaskRecord,
+    chain: ChainRun,
+    ensemble: { broken: string[]; answered: number },
+  ): Promise<boolean> {
+    const unavailable = chain.runs.filter((run) => run.unavailable).map((run) => run.gate);
+    if (unavailable.length === 0 && ensemble.broken.length === 0) return false;
+    const gates = [...new Set([...unavailable, ...ensemble.broken])];
+    const detail =
+      ensemble.answered === 0
+        ? `no review gate returned a judgement (${gates.join(', ')}); nothing reviewed this diff`
+        : `${gates.join(', ')} did not return a judgement, so the review is incomplete`;
+    await this.parkForApproval(task, APPROVAL_ORACLE, detail);
+    return true;
+  }
+
+  /**
    * Everything a chain gate is allowed to know, assembled here rather than by
    * handing the chain a task record. spec-check is the reason (see
    * SpecCheckInput): the record carries the builder's own account of its work
@@ -634,8 +699,15 @@ export class Orchestrator {
       diff: this.diff,
       spawn: async (req) => {
         const port = req.role === 'judge' ? this.spawnPort : this.reviewPort;
-        const result = await this.spawn(task, req.role, req.prompt, port, req.readOnly);
-        return { output: result.output, costUsd: result.costUsd };
+        const result = await this.spawn(task, req.role, req.prompt, port, req.readOnly, req.extraTools ?? []);
+        return {
+          output: result.output,
+          costUsd: result.costUsd,
+          costKnown: result.costKnown,
+          exitReason: result.exitReason,
+          model: result.model,
+          family: gateFamily(req.role, result.model),
+        };
       },
     };
   }
@@ -775,7 +847,13 @@ export class Orchestrator {
   private collectGateReports(task: TaskRecord, latest: GateReport[]): GateReport[] {
     const historical: GateReport[] = task.gate_reports
       .filter((row) => row.attempt === task.attempt)
-      .map((row) => ({ gate: row.gate, gate_family: row.gate_family, verdict: row.verdict, caught: row.caught }));
+      .map((row) => ({
+        gate: row.gate,
+        gate_family: row.gate_family,
+        verdict: row.verdict,
+        caught: row.caught,
+        family: row.family,
+      }));
     const window = {
       project: task.project,
       since: task.attempt_started_at || task.created_at,
@@ -795,14 +873,29 @@ export class Orchestrator {
   }
 
   /** Ceiling check runs BEFORE a spawn: a breach found after the fact is money already gone. */
-  private preflightBudget(task: TaskRecord): { ok: boolean; reason: string } {
-    if (task.cost_ceiling_usd > 0 && task.cost_usd_actual >= task.cost_ceiling_usd) {
+  /**
+   * The one place §6.5's ceilings are enforced.
+   *
+   * It calls checkTaskCeiling rather than re-deriving the comparison. The two
+   * used to be separate, and the copy here was the only one that ran — so
+   * `CeilingVerdict.partial`, the flag that says the spend it compared was
+   * missing an unpriced run, was computed by a function with no callers.
+   *
+   * `partial` gets a bound of its own because the dollar ceiling cannot give it
+   * one: codex spends CLI quota, so those runs are invisible to every figure
+   * here however large they grow.
+   */
+  private preflightBudget(task: TaskRecord, cfg: ManagerConfig = loadConfig()): { ok: boolean; reason: string } {
+    const ceiling = checkTaskCeiling(task);
+    if (!ceiling.ok) return { ok: false, reason: ceiling.reason };
+    const unacknowledged = unmeasuredRuns(task) - (task.cost_unmeasured_ack ?? 0);
+    if (ceiling.partial && unacknowledged >= cfg.maxUnmeasuredRunsPerTask) {
       return {
         ok: false,
-        reason: `task spend $${task.cost_usd_actual.toFixed(2)} reached ceiling $${task.cost_ceiling_usd.toFixed(2)}`,
+        reason: `${unacknowledged} runs on this task were never priced (cap ${cfg.maxUnmeasuredRunsPerTask}); the spend ceiling cannot see what they cost`,
       };
     }
-    const day = checkDayCeiling(listTasks());
+    const day = checkDayCeiling(listTasks(), cfg);
     if (!day.ok) return { ok: false, reason: day.reason };
     return { ok: true, reason: '' };
   }
@@ -882,6 +975,20 @@ export class Orchestrator {
       human_intervened: false,
     });
   }
+}
+
+/**
+ * Which family answered a gate.
+ *
+ * A judge runs on the spawn port, so its family is READ from the model the
+ * runner reported. The review port's is ASSERTED from the provider table —
+ * `codex exec` picks its model from the operator's own `~/.codex/` config and
+ * never tells us which, so claiming otherwise would be a fabricated
+ * observation.
+ */
+export function gateFamily(role: AgentRole, model: string): string {
+  if (role === 'judge') return familyOfModel(model);
+  return REVIEW_PROVIDER_FAMILY[resolveReviewProvider(loadConfig())];
 }
 
 /**

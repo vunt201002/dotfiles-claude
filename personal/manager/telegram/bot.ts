@@ -16,6 +16,7 @@ import {
   approvalKeyboard,
   renderApproval,
   renderCost,
+  renderFleetReport,
   renderDiff,
   renderHelp,
   renderProjectReport,
@@ -303,6 +304,11 @@ export class Bot {
       case 'cost': {
         const report = await this.manager.cost(parsed.window);
         this.enqueueMessage(chatId, 'reply', renderCost(parsed.window, report ?? {}));
+        return;
+      }
+      case 'fleet': {
+        const report = await this.manager.fleet();
+        this.enqueueMessage(chatId, 'reply', renderFleetReport(report ?? {}));
         return;
       }
       case 'text':

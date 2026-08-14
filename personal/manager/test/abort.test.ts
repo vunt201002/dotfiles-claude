@@ -26,6 +26,7 @@ function idleReply(): SpawnPort {
         exitReason: 'success',
         turnsUsed: 1,
         costUsd: 0,
+        costKnown: true,
         model: 'sonnet',
         sessionId: '',
         durationMs: 1,

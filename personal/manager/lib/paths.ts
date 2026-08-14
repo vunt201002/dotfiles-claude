@@ -177,6 +177,52 @@ export function rememberAssertCommands(project: string, commands: Array<string |
   return true;
 }
 
+/**
+ * A project name becomes a gate-log filename and a write-scope key, so it is
+ * held to the same shape the gate log slugs to. Rejecting a name here beats
+ * accepting one that silently lands in a different file than the user reads.
+ */
+const PROJECT_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
+export interface RegisterResult {
+  ok: boolean;
+  reason: string;
+  path: string;
+}
+
+/**
+ * The on-ramp. Without it the only way into the registry was hand-writing JSON
+ * at a path the user has to know, which is why the file did not exist on a
+ * machine where every other piece was built and tested.
+ *
+ * Re-registering a name keeps its approved assert commands when the path is
+ * unchanged, and drops them when it is not: those commands were approved
+ * against one checkout, and carrying them to a different directory would move
+ * a human's approval somewhere the human never looked.
+ */
+export function registerProject(project: string, dir: string): RegisterResult {
+  const name = String(project ?? '').trim().toLowerCase();
+  if (!PROJECT_NAME.test(name)) {
+    return { ok: false, path: '', reason: `"${project}" is not a usable project name (a-z, 0-9, . _ - and must start alphanumeric)` };
+  }
+  const abs = path.resolve(String(dir ?? '').trim());
+  if (!fs.existsSync(abs)) return { ok: false, path: abs, reason: `${abs} does not exist` };
+  if (!fs.statSync(abs).isDirectory()) return { ok: false, path: abs, reason: `${abs} is not a directory` };
+
+  const registry = loadProjectRegistry();
+  const existing = registry[name];
+  const existingPath = typeof existing === 'string' ? existing : existing?.path;
+  const keepAssert =
+    existing && typeof existing === 'object' && existingPath && path.resolve(existingPath) === abs
+      ? existing.assert
+      : undefined;
+
+  registry[name] = keepAssert ? { path: abs, assert: keepAssert } : { path: abs };
+  ensureManagerDirs();
+  atomicWriteJson(projectsFile(), registry);
+  return { ok: true, path: abs, reason: '' };
+}
+
 export interface ScopeResolution {
   scope: string | null;
   reason: string;

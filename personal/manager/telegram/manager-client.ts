@@ -20,6 +20,35 @@ export class ManagerRequestError extends Error {
   }
 }
 
+/**
+ * Declared structurally here, like TaskRecord below, rather than imported from
+ * the manager. The bot is a client of the HTTP contract; importing the
+ * manager's own types would make a rename inside the daemon a compile error in
+ * a process that only ever sees JSON.
+ */
+export interface FleetMemberView {
+  health?: string;
+  where?: string;
+  subtitle?: string;
+  taskId?: string;
+  managerOwned?: boolean;
+  costUsd?: number;
+  costKnown?: boolean;
+  idleSec?: number;
+  ageSec?: number;
+}
+
+export interface FleetReport {
+  members?: FleetMemberView[];
+  busy?: number;
+  cap?: number;
+  waiting?: FleetMemberView[];
+  crashed?: FleetMemberView[];
+  totalCostUsd?: number;
+  unpricedModels?: string[];
+  orphanTasks?: Array<{ id?: string; project?: string; state?: string }>;
+}
+
 export interface TaskRecord {
   id?: string;
   state?: string;
@@ -34,6 +63,7 @@ export interface TaskRecord {
   max_attempts?: number;
   review_depth?: string;
   cost_usd_actual?: number;
+  cost_unmeasured_runs?: number;
   human_touches?: number;
   holds?: string[];
   diff?: string;
@@ -55,6 +85,7 @@ export interface ReportEvent {
   lane?: string;
   attempt?: number;
   cost_usd?: number;
+  cost_unmeasured_runs?: number;
   ok?: boolean;
   cause?: string;
   gates?: Array<{ gate?: string; gate_family?: string; caught?: string; verdict?: string }>;
@@ -156,6 +187,10 @@ export class ManagerClient {
 
   listTasks(): Promise<TaskRecord[]> {
     return this.request('GET', '/tasks');
+  }
+
+  fleet(): Promise<FleetReport> {
+    return this.request('GET', '/fleet');
   }
 
   getTask(taskId: string): Promise<TaskRecord> {
