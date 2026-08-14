@@ -11,20 +11,33 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { callJudge, outcomeJudge } from '../../../test/helpers/llm-judge';
+import { outcomeJudgePrompt } from '../../../test/helpers/llm-judge';
 import type { FixtureCase } from './cases';
 import type { GateOutcome } from './gates';
+import { resolveBackends, type Backend } from './llm-backends';
 
-const GATE_MODEL = 'claude-sonnet-4-6';
-
+/**
+ * Still opt-in, still off by default — the cost just moved. It is no longer a
+ * metered API key but the machine's own CLI quota, which is finite in a way a
+ * reader of this file should not have to discover by running it.
+ */
 export function llmGatesEnabled(): { enabled: boolean; reason: string } {
   if (process.env.ORACLE_LLM !== '1') {
-    return { enabled: false, reason: 'ORACLE_LLM=1 is not set — the paid gates are off by default' };
+    return { enabled: false, reason: 'ORACLE_LLM=1 is not set — the LLM gates are off by default' };
   }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return { enabled: false, reason: 'ANTHROPIC_API_KEY is not set' };
-  }
+  const { gate, judge } = resolveBackends();
+  const gateAv = gate.available();
+  if (!gateAv.ok) return { enabled: false, reason: `gate backend "${gate.name}" unusable: ${gateAv.reason}` };
+  const judgeAv = judge.available();
+  if (!judgeAv.ok) return { enabled: false, reason: `judge backend "${judge.name}" unusable: ${judgeAv.reason}` };
   return { enabled: true, reason: '' };
+}
+
+/** Named in the report: a run whose halves share a family is a weaker number. */
+export function backendLabel(): string {
+  const { gate, judge } = resolveBackends();
+  const independent = gate.family !== judge.family;
+  return `gate=${gate.name}[${gate.family}] judge=${judge.name}[${judge.family}]${independent ? '' : ' — SAME FAMILY, not an independent check (§7.3)'}`;
 }
 
 function readVariant(c: FixtureCase, variant: 'buggy' | 'fixed'): string {
@@ -43,8 +56,8 @@ function renderReport(r: FindingsReport): string {
     .join('\n');
 }
 
-async function specCheckReport(c: FixtureCase, code: string): Promise<string> {
-  const out = await callJudge<FindingsReport>(
+async function specCheckReport(c: FixtureCase, code: string, gate: Backend): Promise<string> {
+  const out = await gate.callJson<FindingsReport>(
     `You are a fresh reviewer. You did not write this change and you have not seen the reasoning behind it. You get two things: the spec that was agreed, and the change that was produced.
 
 Answer one question: does this change build what was agreed? Name what is missing, what is extra, and what was silently changed.
@@ -60,14 +73,12 @@ ${code}
 
 Respond with ONLY valid JSON:
 {"findings": [{"title": "one line", "why_it_matters": "one line", "evidence": "the specific line or symbol"}]}
-Return an empty findings array if the change matches the spec.`,
-    GATE_MODEL,
-  );
+Return an empty findings array if the change matches the spec.`);
   return renderReport(out);
 }
 
-async function reviewerReport(c: FixtureCase, code: string): Promise<string> {
-  const out = await callJudge<FindingsReport>(
+async function reviewerReport(c: FixtureCase, code: string, gate: Backend): Promise<string> {
+  const out = await gate.callJson<FindingsReport>(
     `You are reviewing a change before it lands. You get the code and nothing else — no spec, no author notes. Report defects that would hurt in production: correctness, data loss, concurrency, boundary behaviour, and checks that cannot fail.
 
 CODE (${c.entryName}):
@@ -78,13 +89,11 @@ ${code}
 
 Respond with ONLY valid JSON:
 {"findings": [{"title": "one line", "why_it_matters": "one line", "evidence": "the specific line or symbol"}]}
-Return an empty findings array if you would approve this as is.`,
-    GATE_MODEL,
-  );
+Return an empty findings array if you would approve this as is.`);
   return renderReport(out);
 }
 
-async function scoreOne(c: FixtureCase, report: string) {
+async function scoreOne(c: FixtureCase, report: string, judge: Backend) {
   const groundTruth = {
     total_bugs: 1,
     bugs: [{
@@ -95,14 +104,15 @@ async function scoreOne(c: FixtureCase, report: string) {
       detection_hint: c.bug.detection_hint,
     }],
   };
-  return outcomeJudge(groundTruth, report);
+  return judge.callJson<{ detected: string[]; reasoning: string }>(outcomeJudgePrompt(groundTruth, report));
 }
 
 async function runLlmGate(
   gate: 'spec-check' | 'reviewer',
   cases: FixtureCase[],
-  produce: (c: FixtureCase, code: string) => Promise<string>,
+  produce: (c: FixtureCase, code: string, gate: Backend) => Promise<string>,
 ): Promise<GateOutcome> {
+  const { gate: gateBackend, judge: judgeBackend } = resolveBackends();
   const out: GateOutcome = {
     gate,
     family: 'llm',
@@ -115,8 +125,8 @@ async function runLlmGate(
 
   for (const c of cases) {
     try {
-      const report = await produce(c, readVariant(c, 'buggy'));
-      const scored = await scoreOne(c, report);
+      const report = await produce(c, readVariant(c, 'buggy'), gateBackend);
+      const scored = await scoreOne(c, report, judgeBackend);
       out.cells[c.bug.id] = scored.detected.includes(c.bug.id)
         ? { verdict: 'caught', detail: scored.reasoning.slice(0, 240) }
         : { verdict: 'missed', detail: scored.reasoning.slice(0, 240) };
@@ -127,8 +137,8 @@ async function runLlmGate(
 
     out.fp_denominator++;
     try {
-      const report = await produce(c, readVariant(c, 'fixed'));
-      const scored = await scoreOne(c, report);
+      const report = await produce(c, readVariant(c, 'fixed'), gateBackend);
+      const scored = await scoreOne(c, report, judgeBackend);
       if (scored.detected.includes(c.bug.id)) {
         out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: scored.reasoning.slice(0, 240) });
       }
