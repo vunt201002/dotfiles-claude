@@ -4,9 +4,10 @@
 > Tóm tắt: [tom-tat.md](tom-tat.md)
 > Chế độ: VIẾT LẠI (3 đảo DỊCH SÁT: 2 khối trích dẫn, list 5 bài toán) — essay quan điểm, không có bước làm, không param, không code; dịch lệch một từ thì mất ý chứ người đọc không làm sai.
 > Xưng hô: mình
-> Pass 2 (editor mù nguồn): 3 vòng · điểm vòng cuối: nhịp câu 9 · từ ngữ 8 · xưng hô 10 · mạch đoạn 9 · thuật ngữ 10
-> Pass 3 (soát nghĩa): 4 finding · đã sửa 3 · còn lại 1 — câu mở bằng "Cộng dồn lại" ở đoạn về (3)(4): gốc gộp phần tăng tốc do thuật toán với phần do hardware rồi mới ra 450 tỉ, bản dịch để cụm đó đứng trơ nên dễ đọc thành cộng dồn theo mốc 1991-2015, và dễ quy 450 tỉ về riêng thuật toán.
-> Chưa đóng: hết cap 3 vòng. Điểm trên là chấm bản của vòng 2; bản đang lưu là output vòng 3, chưa ai chấm.
+> Pass 2 (editor mù nguồn): 4 vòng — 3 vòng văn phong, cộng 1 vòng sửa nghĩa có mục tiêu
+> Pass 3 (soát nghĩa): 4 finding · đã sửa 4 · còn lại: không còn.
+> Điểm bản ĐANG LƯU (vòng 4 chấm, trước khi biết phạm vi bị khoá): nhịp câu 9 · từ ngữ 9 · xưng hô 10 · mạch đoạn 9 · thuật ngữ 10
+> Vẫn không tính là đóng: vòng 4 chỉ được phép sửa một cụm từ, nên `Sửa thực chất: KHÔNG` của nó không phải phán quyết tự do. Điểm thì tự do — chấm xong mới biết phạm vi.
 > Số, URL, tên riêng: đã đối chiếu với bản gốc (5/5 URL, 99.9% · 100% · 450 tỉ · 1991 · 2015, list 5 bài toán, 2 khối trích dẫn). Không có khối code.
 
 # NP-overrated
@@ -42,7 +43,7 @@ Vài bài toán NP-hard nổi tiếng:
 
 Với (1) và (2), cái worst-case đó không xảy ra, thế thôi. Ý mình là cài package hay type check chậm thì có chậm thật. Nhưng ít nhất trong đời đi làm của mình, chưa lần nào thấy nó phình lên cỡ thiên hà.
 
-(3) với (4) thì đúng ra là bài toán tối ưu. Ai cũng biết mấy bài đó xử được bằng heuristic, nhưng không nhất thiết phải hi sinh nghiệm tối ưu. Ngoài đời [có sẵn](https://www.gurobi.com/) [công cụ](https://github.com/scipopt/scip) [làm được](https://developers.google.com/optimization/introduction) chuyện đó: tìm ra nghiệm chứng minh được là tối ưu, trong thời gian chấp nhận được. Không có phép màu nào cả. Không có máy tính lượng tử nào cả. Chỉ là nghĩ kỹ hơn rồi tìm ra thuật toán tốt hơn. Người ta làm đúng vậy thật. Mấy chục năm qua, thuật toán tăng tốc còn nhanh hơn cả hardware. Cộng dồn lại, [bài paper này](https://scispace.com/pdf/best-subset-selection-via-a-modern-optimization-lens-353jtit2ms.pdf) dẫn ra con số nhanh lên 450 tỉ lần, tính từ 1991 tới 2015.
+(3) với (4) thì đúng ra là bài toán tối ưu. Ai cũng biết mấy bài đó xử được bằng heuristic, nhưng không nhất thiết phải hi sinh nghiệm tối ưu. Ngoài đời [có sẵn](https://www.gurobi.com/) [công cụ](https://github.com/scipopt/scip) [làm được](https://developers.google.com/optimization/introduction) chuyện đó: tìm ra nghiệm chứng minh được là tối ưu, trong thời gian chấp nhận được. Không có phép màu nào cả. Không có máy tính lượng tử nào cả. Chỉ là nghĩ kỹ hơn rồi tìm ra thuật toán tốt hơn. Người ta làm đúng vậy thật. Mấy chục năm qua, thuật toán tăng tốc còn nhanh hơn cả hardware. Gộp cả hai phần lại, [bài paper này](https://scispace.com/pdf/best-subset-selection-via-a-modern-optimization-lens-353jtit2ms.pdf) dẫn ra con số nhanh lên 450 tỉ lần, tính từ 1991 tới 2015.
 
 Cuối cùng là (5), tức bài toán tiêu biểu của cả họ NP-hard. Người ta vẫn đều đặn giải nó ở quy mô lớn. Amazon giải [một tỉ bài toán SMT mỗi ngày](https://www.amazon.science/blog/a-billion-smt-queries-a-day). SMT là bản còn khó hơn của SAT. Thuật toán SAT giờ giỏi tới mức SAT bị coi là phần dễ.
 
