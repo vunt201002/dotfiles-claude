@@ -90,13 +90,15 @@ if [ "$_EXPLAIN_LEVEL" != "default" ] && [ "$_EXPLAIN_LEVEL" != "terse" ]; then 
 echo "EXPLAIN_LEVEL: $_EXPLAIN_LEVEL"
 _QUESTION_TUNING=$(~/.claude/skills/gstack/bin/gstack-config get question_tuning 2>/dev/null || echo "false")
 echo "QUESTION_TUNING: $_QUESTION_TUNING"
+_UPDATE_CHECK=$(~/.claude/skills/gstack/bin/gstack-config get update_check 2>/dev/null || echo "true")
+echo "UPDATE_CHECK: $_UPDATE_CHECK"
 mkdir -p ~/.gstack/analytics
 if [ "$_TEL" != "off" ]; then
 echo '{"skill":"ios-qa","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(_repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null | tr -cd 'a-zA-Z0-9._-'); echo "${_repo:-unknown}")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
 fi
 for _PF in $(find ~/.gstack/analytics -maxdepth 1 -name '.pending-*' 2>/dev/null); do
   if [ -f "$_PF" ]; then
-    if [ "$_TEL" != "off" ] && [ -x "~/.claude/skills/gstack/bin/gstack-telemetry-log" ]; then
+    if [ "$_TEL" != "off" ] && [ -x "$HOME/.claude/skills/gstack/bin/gstack-telemetry-log" ]; then
       ~/.claude/skills/gstack/bin/gstack-telemetry-log --event-type skill_run --skill _pending_finalize --outcome unknown --session-id "$_SESSION_ID" 2>/dev/null || true
     fi
     rm -f "$_PF" 2>/dev/null || true
@@ -156,11 +158,13 @@ In plan mode, allowed because they inform the plan: `$B`, `$D`, `codex exec`/`co
 
 ## Skill Invocation During Plan Mode
 
-If the user invokes a skill in plan mode, the skill takes precedence over generic plan mode behavior. **Treat the skill file as executable instructions, not reference.** Follow it step by step starting from Step 0; the first AskUserQuestion is the workflow entering plan mode, not a violation of it. AskUserQuestion (any variant — `mcp__*__AskUserQuestion` or native; see "AskUserQuestion Format → Tool resolution") satisfies plan mode's end-of-turn requirement. If AskUserQuestion is unavailable or a call fails, follow the AskUserQuestion Format failure fallback: `headless` → BLOCKED; `interactive` → the prose fallback (also satisfies end-of-turn). At a STOP point, stop immediately. Do not continue the workflow or call ExitPlanMode there. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" execute. Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.
+If the user invokes a skill in plan mode, the skill takes precedence over generic plan mode behavior. **Treat the skill file as executable instructions, not reference.** Follow it step by step starting from Step 0; any AskUserQuestion the skill fires is the workflow operating within plan mode, not a violation of it — and a skill whose instructions resolve a question themselves (e.g. a plan-mode auto-select) may legitimately not ask it. AskUserQuestion (any variant — `mcp__*__AskUserQuestion` or native; see "AskUserQuestion Format → Tool resolution") satisfies plan mode's end-of-turn requirement. If AskUserQuestion is unavailable or a call fails, follow the AskUserQuestion Format failure fallback: `headless` → BLOCKED; `interactive` → the prose fallback (also satisfies end-of-turn). At a STOP point, stop immediately. Do not continue the workflow or call ExitPlanMode there. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" execute. Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.
 
 If `PROACTIVE` is `"false"`, do not auto-invoke or proactively suggest skills. If a skill seems useful, ask: "I think /skillname might help here — want me to run it?"
 
 If `SKILL_PREFIX` is `"true"`, suggest/invoke `/gstack-*` names. Disk paths stay `~/.claude/skills/gstack/[skill-name]/SKILL.md`.
+
+If `UPDATE_CHECK` is `"false"`, skip the next two lines — the update-check binary emits nothing in that mode, so there is no `UPGRADE_AVAILABLE` / `JUST_UPGRADED` output to act on.
 
 If output shows `UPGRADE_AVAILABLE <old> <new>`: read `~/.claude/skills/gstack/gstack-upgrade/SKILL.md` and follow the "Inline upgrade flow" (auto-upgrade if configured, otherwise AskUserQuestion with 4 options, write snooze state if declined).
 
@@ -474,8 +478,8 @@ if [ -f "$HOME/.gstack-artifacts-remote.txt" ]; then
 else
   _BRAIN_REMOTE_FILE="$HOME/.gstack-brain-remote.txt"
 fi
-_BRAIN_SYNC_BIN="~/.claude/skills/gstack/bin/gstack-brain-sync"
-_BRAIN_CONFIG_BIN="~/.claude/skills/gstack/bin/gstack-config"
+_BRAIN_SYNC_BIN="$HOME/.claude/skills/gstack/bin/gstack-brain-sync"
+_BRAIN_CONFIG_BIN="$HOME/.claude/skills/gstack/bin/gstack-config"
 
 # /sync-gbrain context-load: teach the agent to use gbrain when it's available.
 # Per-worktree pin: post-spike redesign uses kubectl-style `.gbrain-source` in the
@@ -584,8 +588,8 @@ If A/B and `~/.gstack/.git` is missing, ask whether to run `gstack-artifacts-ini
 At skill END before telemetry:
 
 ```bash
-"~/.claude/skills/gstack/bin/gstack-brain-sync" --discover-new 2>/dev/null || true
-"~/.claude/skills/gstack/bin/gstack-brain-sync" --once 2>/dev/null || true
+"$HOME/.claude/skills/gstack/bin/gstack-brain-sync" --discover-new 2>/dev/null || true
+"$HOME/.claude/skills/gstack/bin/gstack-brain-sync" --once 2>/dev/null || true
 ```
 
 
@@ -713,7 +717,7 @@ If you are looping on the same diagnostic, same file, or failed fix variants, ST
 
 ## Question Tuning (skip entirely if `QUESTION_TUNING: false`)
 
-Before each AskUserQuestion, choose `question_id` from `scripts/question-registry.ts` or `{skill}-{slug}`, then run `~/.claude/skills/gstack/bin/gstack-question-preference --check "<id>"`. `AUTO_DECIDE` means choose the recommended option and say "Auto-decided [summary] → [option] (your preference). Change with /plan-tune." `ASK_NORMALLY` means ask.
+Before each AskUserQuestion, choose `question_id` from `scripts/question-registry.ts` or `{skill}-{slug}`, then run `printf '%s' "<question summary>" | ~/.claude/skills/gstack/bin/gstack-question-preference --check "<id>" --summary-stdin` (piped summary feeds the one-way keyword net, #2024). `AUTO_DECIDE` means choose the recommended option and say "Auto-decided [summary] → [option] (your preference). Change with /plan-tune." `ASK_NORMALLY` means ask.
 
 **Embed the question_id as a marker in the question text** so hooks can identify it deterministically (plan-tune cathedral T14 / D18 progressive markers). Append `<gstack-qid:{question_id}>` somewhere in the rendered question (the leading line or trailing line is fine; the marker doesn't render visibly to the user when wrapped in HTML-style angle brackets, but the hook strips it). Without the marker the PreToolUse enforcement hook treats the AUQ as observed-only and never auto-decides — so always include it when the question matches a registered `question_id`.
 
@@ -796,11 +800,15 @@ fi
 if [ "$_TEL" != "off" ] && [ -x ~/.claude/skills/gstack/bin/gstack-telemetry-log ]; then
   ~/.claude/skills/gstack/bin/gstack-telemetry-log \
     --skill "SKILL_NAME" --duration "$_TEL_DUR" --outcome "OUTCOME" \
-    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" 2>/dev/null &
+    --used-browse "USED_BROWSE" --session-id "$_SESSION_ID" \
+    --error-message "ERROR_MESSAGE" --failed-step "FAILED_STEP" 2>/dev/null &
 fi
 ```
 
 Replace `SKILL_NAME`, `OUTCOME`, and `USED_BROWSE` before running.
+Replace `ERROR_MESSAGE` with a short description of the error (if outcome is error,
+otherwise use empty string ""), and `FAILED_STEP` with the step name or number where
+the failure occurred (if outcome is error, otherwise use empty string "").
 
 ## Plan Status Footer
 
@@ -869,17 +877,33 @@ fi
 ## Phase 1: Read source, plan codegen
 
 1. Walk the app source (passed as `--source <dir>`) and identify all `@Observable`
-   classes. Note any property marked with the `@Snapshotable` wrapper — those
-   are the snapshot-eligible fields.
-2. Run `swift run --package-path $GSTACK_HOME/ios-qa/scripts/gen-accessors-tool gen-accessors --input <source-dir>`.
-   First invocation builds the swift-syntax dependency tree (cold: 2-5 min).
-   Subsequent runs are content-hash-cached and finish in ~50ms.
-3. Show the user the accessor list and ask whether to install the DebugBridge
+   classes. Note any property immediately preceded by the generator marker
+   comment `// @Snapshotable` — those are the snapshot-eligible fields. The
+   marker is a comment so it composes with the `@Observable` macro. Each
+   marked field must belong to a file-scope observable class and be a writable
+   instance `var` with an explicit type and an internal or public setter.
+   Snapshot types are JSON-native scalars (`String`, `Bool`, integer widths,
+   `Float`, `Double`, `CGFloat`), arrays, String-keyed dictionaries, and their
+   Optional compositions. Keys must be unique across observable classes.
+   Codegen stops with a source diagnostic instead of emitting a broken or
+   lossy harness when any of these constraints is violated.
+2. Show the user the accessor list and ask whether to install the DebugBridge
    SPM dependency into their `Package.swift` (one AskUserQuestion).
 
 ## Phase 2: Bootstrap the device bridge
 
-1. Add the `DebugBridge` SPM dependency to the app's `Package.swift`. The package
+1. Generate the canonical local bridge package, typed accessors, and installed
+   version marker with one deterministic command:
+   ```bash
+   ~/.claude/skills/gstack/bin/gstack-ios-qa-regen \
+     --app-source "<source-dir>" \
+     --bridge-dir "<source-dir>/DebugBridge"
+   ```
+   The regenerator also removes the explicit obsolete flat-file set created by
+   older ios-sync versions, preventing a stale second harness from remaining
+   in the app target.
+2. Add the generated `DebugBridge` local SPM dependency to the app's
+   `Package.swift`. The package
    ships three Debug-config-only library products:
    - `DebugBridgeCore` (Swift, cross-platform) — StateServer + bridge protocols.
    - `DebugBridgeTouch` (Objective-C, iOS-only) — KIF-derived in-process touch
@@ -889,27 +913,35 @@ fi
    The app target depends on `DebugBridgeUI` with `.when(configuration: .debug)`
    (transitively pulls in Core + Touch). Release builds refuse to link these
    targets.
-2. Wire the bridges from the `@main` App init, gated on `#if DEBUG`:
+3. Wire the bridges from the `@main` App init, gated on `#if DEBUG`:
    ```swift
    #if DEBUG
    import DebugBridgeCore
-   StateServer.shared.start()
    #if canImport(UIKit)
    import DebugBridgeUI
+   // Install resolvers before StateServer opens its listener.
    DebugBridgeUIWiring.installAll()
    #endif
+   // Replace AppState/AppStateAccessor with the type discovered in Phase 1.
+   DebugBridgeManager.shared.start(
+       appState: appState,
+       register: AppStateAccessor.register
+   )
    #endif
    ```
-3. Build + deploy to the device with `xcodebuild -scheme <SchemeName>
+4. Build + deploy to the device with `xcodebuild -scheme <SchemeName>
    -destination 'platform=iOS,id=<UDID>' build install`.
-4. Launch via `devicectl device process launch --device <UDID> --console <bundle-id>`.
+5. Launch via `devicectl device process launch --device <UDID> --console <bundle-id>`.
    Capture the boot token printed to `os_log` on first run.
-5. Spawn the Mac-side daemon (on-demand) — `gstack-ios-qa-daemon`. Daemon
+6. Spawn the Mac-side daemon (on-demand) — `gstack-ios-qa-daemon`. Daemon
    acquires an exclusive flock on `~/.gstack/ios-qa-daemon.pid`. If another
    daemon is alive, the second invocation discovers its port and connects.
-6. Daemon immediately calls `POST /auth/rotate` on the iOS StateServer with a
+7. Daemon immediately calls `POST /auth/rotate` on the iOS StateServer with a
    fresh in-memory-only token. The boot token becomes useless ~5s later.
    Anything scraping `os_log` past this point sees a dead credential.
+   If a fresh daemon finds the app running after another daemon consumed that
+   one-use token, it verifies the bundle owner, relaunches the target once,
+   waits for the new token, verifies ownership again, and then rotates.
 
 ## Phase 3: Vision-driven agent loop
 
@@ -917,7 +949,7 @@ Each iteration:
 
 1. `GET /screenshot` (via daemon) → save PNG.
 2. `GET /elements` → accessibility tree.
-3. `GET /state/snapshot` (only `@Snapshotable` fields) → current state.
+3. `GET /state/snapshot` (only `// @Snapshotable` fields) → current state.
 4. Decide next action based on what's on the screen vs the test goal.
 5. `POST /session/acquire` to grab the device lock.
 6. Execute `POST /tap`, `/swipe`, `/type`, or `POST /state/<key>` write.
@@ -981,7 +1013,7 @@ live.
 | `curl: connection refused` to daemon | daemon crashed | Re-run `/ios-qa`; spawn-race lock will fail closed |
 | `403 identity_not_allowed` from `/auth/mint` | identity missing from allowlist | Run `gstack-ios-qa-mint --remote <identity>` on the Mac |
 | `409 schema_mismatch` on `/state/restore` | snapshot from older app build | Discard the snapshot; re-capture |
-| `503 device_disconnected` from proxy | USB tunnel dropped | Reconnect device; daemon auto-reconnects within 30s |
+| `503 device_disconnected` from proxy | USB route dropped or app relaunched | Daemon invalidates the stale tunnel and retries one fresh bootstrap; reconnect/unlock the iPhone if it persists |
 | `429 rate_limited` from `/auth/mint` | >10 mints/min from one identity | Wait 60s; check audit log for anomalies |
 | `413 body_too_large` on `/state/restore` | snapshot >1MB | Increase `--max-body` or trim snapshot |
 

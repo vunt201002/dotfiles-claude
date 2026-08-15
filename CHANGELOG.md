@@ -1,5 +1,442 @@
 # Changelog
 
+## [1.64.0.0] - 2026-08-14
+
+**Ninety fixes in one wave. Every guard that said it was protecting you now actually does.**
+
+This release is a fix wave built from a full audit of the tracker: every open
+PR and every open issue, verified against main before anything landed. The
+pattern that kept showing up was guards that failed open. The freeze and
+careful hooks emitted a payload shape Claude Code ignores, so deny meant
+allow. The redact pre-push hook had six separate paths that let a credential
+through. The test suite exited green after running 4% of itself. All of that
+is fixed, with a regression test or a static tripwire pinning each one shut.
+
+The wave absorbs the best community fix for each defect, credited by name:
+82 contributors are named in this release, several of whom independently
+fixed the same bug within days of each other. That duplication is the
+tracker telling us how many people hit the same wall.
+
+### The numbers that matter
+
+Source: `git log 1.63.0.0..HEAD` on this branch, plus the audit workflow
+records referenced in the PR.
+
+| Metric | Before | After |
+|---|---|---|
+| Free-suite files that actually run | ~16 of 434 (truncated, exit 0) | all 434, honest exit code |
+| Guard hooks that can block (freeze/careful/team-init) | 0 of 3 | 3 of 3, fail closed |
+| Native AskUserQuestion answers recorded | 14% | 100%, suffix-aware |
+| /codex runs per macOS session before breaking | 1 | unlimited (mktemp fixed) |
+| Issues closed by this release | — | 52 |
+| Community PRs absorbed with credit | — | ~50 |
+
+The suite number is the one to sit with. A delayed process.exit(0) in one
+test file killed the whole run mid-flight with a green exit code — so every
+other guarantee in CI was resting on a suite that could not fail. It can
+fail now, a fault-injection test proves the failure propagates, and the
+sharded runner treats a summary-less shard as failed.
+
+### What this means for you
+
+Skill enforcement (/freeze, /careful, team required-mode) actually blocks.
+The redact guard scans big diffs instead of blocking them unscanned, and
+quoted arguments can't hide an rm -rf from /careful. Auto-upgrade un-wedges
+itself on installs with local patches. Memory ingest refuses to claim
+success while importing nothing. Windows installs stop bricking .gstack
+when your hostname matches your username, stop flashing console windows,
+and the plan-tune hooks finally record your answers. Design image
+generation works again. Update gstack and the wave is yours.
+
+### Itemized changes
+
+#### Fixed — enforcement guards
+- /freeze deny and /careful ask decisions nest under hookSpecificOutput so
+  Claude Code honors them; team-init required mode blocks with exit 2 even
+  on schema drift. Contributed by @jawadakram20, @Masashi-Ono0611.
+- /careful parses the tool payload with a real JSON parser (quoted
+  arguments no longer truncate the command), asks on IFS/base64
+  obfuscation, fails closed on unreadable input, and multi-line commands
+  cannot ride the safe-exception whitelist. Contributed by @wtamminga.
+- The investigate scope lock resolves check-freeze via $HOME (the
+  CLAUDE_SKILL_DIR path never resolved at hook time). Reported with a fix
+  by @maxpetrusenkoagent.
+- Specialist review agents run with run_in_background: false — required
+  since Claude Code 2.1.198 made background the default.
+
+#### Fixed — credentials and redaction
+- Pre-push scanning: line-aligned chunked scans for big diffs
+  (@luckywenapere), real push-base resolution instead of whole-repo blame
+  (@stormeoio), byte-exact stdin for chained hooks (@francis-eye),
+  --no-ext-diff/--no-textconv, hunk-aware header parsing, fail-closed ref
+  parsing (bypasses reported by @lubosxyz), GOCSPX + Telegram token
+  patterns (@francis-eye), UUID fixture false-positive suppression.
+- pair-agent walks you through ngrok auth in YOUR terminal — the token
+  never enters the transcript.
+- The extension denies token/port reads to content scripts and foreign
+  extensions, reimplemented for the v1.63 pinned-origin token model.
+  Contributed by @punksterlabs.
+- diff 9.0.0 (GHSA-73rr-hh4g-fpgx, @genisis0x); OpenAI key file written
+  0600-at-create (@bunlongheng); injection-denylist and phone-pattern
+  false positives calibrated (@Masashi-Ono0611, @JonasFocus, @abkrim).
+
+#### Fixed — test-suite integrity
+- All eight delayed process.exit teardown bombs removed; static no-suicide
+  tripwire; fault-injection proof of exit-code propagation; the sharded
+  runner fails shards that exit 0 without bun's summary. Contributed by
+  @sneakygriff with repairs from @time-attack; also fixed by @whd4.
+- design/test/ joins the free suite and the sharded runner (it never ran
+  anywhere before).
+- The orphaned sidebar chat-queue suites are gone; live sidebar tests stay.
+- Fork PRs skip eval jobs deterministically instead of red/green by Docker
+  cache luck. Contributed by @andrey-esipov.
+
+#### Fixed — silent data loss
+- memory-ingest imports gitignored staging (@gawievanblerk), reconciles
+  imported-vs-staged counts and refuses to advance state on shortfall
+  (@Charles-Grant), with a version-adaptive flag fallback.
+- lib/ ships beside bin/ on every host install — learnings, decisions and
+  telemetry scripts work outside Claude Code. Contributed by @fedster99;
+  supabase/config.sh copy by @jizusun.
+- Native AskUserQuestion answers parse correctly (object-map shape), the
+  (Recommended) suffix compares equal, and extraction failures no longer
+  poison followed_recommendation. Based on the working patch by @yijisoo;
+  suffix fix by @chuchu2781.
+- The autoplan task aggregator returns real tasks (jq scope bug swallowed
+  by 2>/dev/null). Contributed by @kkroo.
+- Auto-upgrade pulls with --autostash over locally-patched installs and
+  logs the real failure reason.
+- gstack-slug resolves the project root by marker walk-up (@ajeenkya),
+  canonicalizes slash branches (@ShuratCode), and keeps cached identity
+  sticky so adding a remote never renames your project.
+- Design image generation: the gpt-image-2 tool pairing that 400'd every
+  call is fixed (@Pablosinyores), with honest timeout reporting (@vryahn).
+
+#### Fixed — Windows
+- icacls grants by SID — hostname==username no longer bricks ~/.gstack
+  (@asizux2; independently fixed by @Icandi40, @chiragborse1, @IntegriGit,
+  @voltapix26).
+- windowsHide forwarded through every spawn shim (@jerrynicholsai;
+  subsets by @jwilk-hrep, @rroojrooj, @WimvandenHeijkant); watchdog uses
+  signal-0 liveness with a reachable circuit breaker (@SYKhayyat); terminal
+  agents tie their lifetime to the owner PID (@csarigoz).
+- All three plan-tune hooks spawn their bins through a shared
+  Windows-aware helper (@rafassousa); setup registers the SessionStart
+  hook with a bash prefix (@NikhileshNanduri); BROWSE_BIN gets its .exe
+  (@rroojrooj); the polyfill exposes an exited promise (@punksterlabs)
+  and the CJK terminal issues are gone (double-send fixed by
+  @mindsurf0176, full-width font cells by @tomfluff).
+- New Windows regression tests run on windows-latest CI, not just as
+  static checks on macOS.
+
+#### Fixed — /codex
+- mktemp templates keep the X-run trailing — /codex works past the first
+  run on macOS (@ShuratCode and @noron12234; also @cathrynlavery).
+- codex review receives explicit diff args instead of silently reviewing
+  the dirty tree (@fangearhq-boop), wrapped in timeouts so truncation
+  stops reading as no-findings (@aegixx).
+- Review mode runs sandboxed read-only; the P0/P1/P2 gate fails closed on
+  empty, untagged, or non-zero output; model-entitlement 400s get
+  actionable guidance.
+
+#### Fixed — everything else
+- Artifacts Sync and telemetry-finalize un-deadened in 49 skills (quoted
+  tilde never expands — @jawadakram20). update_check:false now silences
+  the preamble prose too (@jc0d35). Codex hosts read AGENTS.md, not
+  CLAUDE.md (@exGeni). setup --help prints help (@saen-ai). Model overlays
+  for the current Claude generation (@chrisquorum). Plus ~20 more small
+  fixes credited in the git log: deploy-config URL parsing, artifacts-init
+  protocol handling, keychain auth detection, catalog description
+  truncation, tracked-file test counts, update-check crash sentinel,
+  Ubuntu 26.04 detection, CRLF-stable generation, telemetry error fields,
+  server-lock diagnostics, shell-quoted paths, benchmark arg validation,
+  and more.
+
+#### For contributors
+- The enumerate-first repair protocol used here (defuse, enumerate, repair
+  before removing) is documented in the PR; the audit records live in the
+  session workflow journals. Four follow-up waves are captured in TODOS.md
+  with full context.
+
+## [1.63.0.0] - 2026-08-13
+
+**Everything gstack sends off your machine now leaves a receipt you can read.**
+**And the eval harness stopped grading itself a passing grade.**
+
+This release ports the parts of the GStack 2 fork that earned their way back into
+main. The headline is a hash-chained egress ledger: every place gstack itself
+sends data off your machine now writes a local, tamper-evident receipt first, and
+`gstack-egress list` / `verify` show you exactly what left and prove the chain is
+intact. Two new command-line tools ship with it: `gstack-egress` (the auditor's
+view) and `gstack-context-bill` (a token bill-of-materials for any skills tree, so
+you can see what a gstack install costs your context window before you invoke
+anything). The test harness got three real fixes, one of them a bug that had been
+quietly lying to every contributor for months.
+
+### The numbers that matter
+
+Source: the assembled branch (`git log 1.62.0.0..HEAD`), the free suite
+(`bun test`), and the discovery-surface gate (`test/catalog-budget.test.ts`).
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| gstack-owned off-machine sinks with a receipt | 0 | every enumerated sink | tripwire-enforced, zero exceptions |
+| Eval "no regressions" lines that were self-comparisons | every one | 0 | the harness compared runs against their own in-progress accumulator |
+| Paid gate runner isolation | one process, one hung file kills the tier | one process per file, group-SIGKILL on stall | + never-started accounting |
+| Discovery catalog budget | unenforced | 1,105 token-equivalents measured, 1,150 ceiling | ratchet-protocol on every skill add |
+| Browser `/health` endpoint | served the root auth token to any localhost caller in headed mode | serves no token in any mode | token bootstrap moved to a pinned-origin POST |
+
+The eval-store line is the one that matters most for anyone hacking on gstack:
+`findPreviousRun` picked the newest same-tier file as the baseline, and the
+in-progress `_partial` accumulator always won that sort, so the auto-comparison
+compared a run against itself and printed "no regressions" no matter what. That is
+fixed, with regression tests, and the fix was confirmed against the bug on the
+prior release before landing.
+
+### What this means for you
+
+If you care what gstack does with your data, you can now audit it: run
+`gstack-egress list` after any session and see every off-machine send, or
+`gstack-egress verify` to confirm nothing was rewritten. If you contribute to
+gstack, your eval comparisons mean something again, the paid gate can't be taken
+down by one wedged test, and `gstack-context-bill` tells you what your skill
+changes cost before you ship them. Nothing new phones home; the ledger is local
+and the receipts record what gstack *attempts* to send, so accidents are auditable.
+
+Ported from the GStack 2 fork by Sina Matian (time-attack/gstack); the eval-store
+bug fix and the port shortlist were selected and hardened for upstream.
+
+### Itemized changes
+
+#### Added
+- `gstack-egress` — read the hash-chained egress receipt ledger: `list` (what
+  gstack attempted to send off-machine), `verify` (recompute the chain, exit 3 on
+  tamper), `grants` (the standing consent settings and how to revoke each).
+- `gstack-context-bill` — offline token bill-of-materials for a skills tree:
+  always-on discovery cost vs per-invocation cost, `--diff` between two trees,
+  `--budget`, and `--exact` (opt-in, measures against the real tokenizer).
+- Hash-chained egress receipts (`lib/egress-receipt.ts`): fail-closed
+  receipt-before-send for sensitive sinks (brain-sync, memory-ingest, gbrain-sync,
+  telemetry, tunnels), fail-open with a warning for user-facing sinks (the design
+  binary's model calls, update-check, dashboards). A tripwire test enforces that
+  every off-machine sink in the tree is wired, with zero silent exceptions.
+- Sharded paid-gate runner (`test:gate:sharded` / `test:periodic:sharded`): one
+  process per test file, an external wall-clock timeout that group-SIGKILLs a
+  wedged file's whole process tree, and four-way per-shard status so a crash can't
+  masquerade as a pass.
+- `gstack-context-bill` and the egress tools install through the standard `./setup`
+  path like every other gstack binary.
+
+#### Changed
+- The browser `/health` endpoint no longer carries the root auth token in any
+  mode. The sidebar extension bootstraps its token through a new
+  `POST /extension-token` that requires the pinned extension origin and a loopback
+  Host; the tunnel listener never exposes it. Upgrading resets the sidebar's
+  panel-local state once, explained in-product.
+- Hermetic PTY test children can register the repo's shipped skills, so
+  slash-command gate tests actually exercise the skill under test instead of
+  silently measuring nothing.
+- Discovery-surface cost is now gated: `test/catalog-budget.test.ts` pins the
+  aggregate skill name+description budget with a self-service ratchet protocol.
+
+#### Fixed
+- The eval harness auto-comparison compared every run against its own in-progress
+  accumulator and reported "no regressions" unconditionally. Fixed with regression
+  tests; comparisons now find the latest *completed* same-tier run.
+- The browser `/health` token leak (a headed-mode carve-out that handed the root
+  token to any localhost caller).
+
+#### For contributors
+- Shared modules replace duplicated logic: one paid-test-set definition consumed by
+  both the free-suite filter and the paid runner, one skill-census helper with three
+  explicit counts (physical files, authored skills, registry entries) consumed by
+  the seeder, context-bill, and the catalog gate.
+- `CLAUDE.md`'s compiled-binaries note corrected: the `browse/dist` binaries have
+  been untracked since v0.11.16.0, so they no longer appear in `git status`.
+- External-service E2E tests (Codex, Gemini, benchmark providers) are declared
+  periodic-tier with the canonical whole-file guard, so the merge-blocking gate
+  never waits on a third-party CLI. The Codex runner passes
+  `--skip-git-repo-check` (now required in non-git working dirs) and the Gemini
+  runner classifies an unusable CLI (removed flags, retired auth paths) as a
+  skip instead of a false failure.
+- The PTY test runner parses AskUserQuestion prompts that reflow onto a single
+  logical line and strips DEC cursor-visibility residue, pinned by
+  `test/pty-askuserquestion-single-line.test.ts` — the failure class that
+  previously ate a gate test's whole time budget.
+- New follow-ups filed in `TODOS.md`: egress ledger rotation (chain-genesis
+  records), a launch-nonce token bootstrap, and eval-watch shard-awareness.
+
+## [1.62.0.0] - 2026-08-12
+
+## **Plan reviews stop asking what to review when you're in plan mode.**
+## **The gate that guards normal sessions now knows when the answer is obvious.**
+
+Invoke /plan-eng-review or /plan-design-review while drafting a plan and the review just starts. No more "What should I review? A/B/C" when the only sensible answer is the plan on your screen. The skill announces its pick in one line ("Scope gate: plan mode — auto-selected B (reviewing your plan)") so you can redirect it, then goes straight to work. Name a target explicitly ("review PLAN.md") and the question is skipped in any mode. Outside plan mode with nothing named, the gate asks exactly as before, and it is still a hard stop.
+
+The bypass is engineered against abuse, not just convenience. Only the host's own plan-mode signal can arm it: plan-shaped text inside pasted documents, tool results, or fetched pages does not count, so injected content can't nominate its own review target. When several plan candidates exist, the host-referenced plan file wins; ambiguity means the skill asks. /autoplan stops surfacing the gate too — its loaded review skills now skip it, since the plan under review is already the target.
+
+### The numbers that matter
+
+Source: this branch's live PTY eval runs on 2026-08-11 (logs in ~/.gstack-dev/eval-runs/) and byte measurements from the generated skill files.
+
+| What | Before | After |
+|------|--------|-------|
+| Questions before a plan-mode review starts | 1 | 0 |
+| Seeded plan-mode smokes (announcement rendered, no gate question) | n/a | 2/2 pass |
+| Outside-plan-mode regression runs (gate still asks, bypass never misfires) | n/a | 4/4 pass |
+| Finding-floor runs with the gate excluded from the count | trivially satisfiable | 2/2 pass, gate renders don't count |
+| Stochastic smokes wrongly blocking the CI gate lane | 4 | 0 |
+
+That last row is a repair: four plan-mode/finding-floor smokes were demoted to the weekly tier months ago, but the demotion never took effect — the test files still gated on the blocking lane. They no longer block the gate lane; they run via `bun run test:periodic` (weekly-cron wiring for PTY tests is tracked in TODOS). A new free invariant test makes the declared-vs-actual tier drift impossible to reintroduce silently.
+
+### What this means for you
+
+The plan → review → ship loop loses its most pointless click. Draft a plan, say "/plan-eng-review", and the review starts against your plan immediately — interruptible, announced, and reversible by just naming a different target. Run /gstack-upgrade to get it.
+
+### Itemized changes
+
+### Added
+- **Plan-mode auto-select in the scope gate** (`plan-eng-review`, `plan-design-review`): in plan mode the review targets the active plan automatically, with a one-line announcement; explicitly named targets win in any mode; a fresh plan-mode session with nothing drafted still asks. The mode signal is host-anchored — pasted or fetched content claiming plan mode does not arm the bypass.
+- **Render-shape PTY detectors** for the scope gate question and the auto-select announcement (`test/helpers/claude-pty-runner.ts`), with narration-negative and verbatim-quote fixtures so paid smokes can assert gate behavior across a whole run instead of a lossy 2KB tail; observation runs can also track arbitrary consumption tokens (`trackTokens`).
+- **Tier-alignment invariant test** (`test/e2e-tier-alignment.test.ts`): every self-gated paid test file named in a touchfiles dep list must match its declared tier; unmapped, mixed-tier, and undeclared-key files are reported instead of silently skipped.
+- **Exceptions drift-guard**: the two hand-duplicated gate templates must stay identical modulo their two variant slots, and must carry the exact announcement and question strings the PTY detectors pin.
+
+### Changed
+- `/autoplan`'s section skip list now includes the scope gate — loaded review skills no longer surface a hard-stop question that autoplan's auto-decide contract would immediately answer.
+- The plan-mode preamble wording no longer implies a skill's first action must be a question ("any AskUserQuestion the skill fires is the workflow operating within plan mode" — a skill may legitimately resolve a question itself).
+- The finding-floor harness no longer counts a scope-gate render toward its question floor (positional anchoring, judge-fallback exclusion) — the floor now genuinely measures finding-driven questions.
+
+### Fixed
+- Four stochastic plan-mode/finding-floor smokes declared `periodic` were still self-gating on the blocking `gate` tier — they no longer run in (or block) the gate lane, and the invariant test above prevents declared-vs-actual tier drift from recurring. Weekly-cron wiring for PTY-driven periodic tests is tracked in TODOS.
+- CI eval containers now register `plan-eng-review` and `plan-design-review` as discoverable skills (registration loops, dangling-target checks, and frontmatter verification all extended) — previously only two skills were registered.
+- The no-op regression suite covers all three plan-review skills outside plan mode, asserts the gate question actually rendered (unconditionally), and proves a pasted named target is consumed via cumulative-buffer token tracking.
+- `/ship`'s credential pre-push guard now installs correctly from git worktrees after consent — the custom-hooks-path detection compared against the worktree's own git dir instead of the shared common dir, so every Conductor worktree read as "custom hooks path" and skipped the install.
+
+### For contributors
+- Skeleton/ratio ceilings ratcheted with attribution comments (plan-eng 68k/1.10, plan-design 89k, investigate 1.10) for the exceptions block + shared preamble reword.
+- `PlanSkillObservation.outcome` now includes `wrote_findings_before_asking` (was returned at runtime but missing from the union); high-water flags are built once and spread at every return path.
+- TODOS.md: filed the `{{SCOPE_GATE}}` shared-resolver extraction as the follow-up to the drift-guarded duplication.
+
+## [1.61.0.0] - 2026-07-09
+
+## **Nine guard bugs fixed in one wave.**
+## **Every fix ships with a tripwire that proves the guard actually guards.**
+
+This release closes out the silent-failure class across gstack: guards and tools that reported success while doing nothing. Question cards render again on current Claude Code builds. /careful catches chained, substituted, and capital-flag deletes it used to wave through. The design CLI fails loudly on bad flags instead of billing you for a guess. Shared team brains (thin clients) get brain-aware planning instead of silent suppression. Four of the fixes came from community PRs, absorbed with authorship intact and hardened on top.
+
+### The six numbers that matter
+
+Source: this branch's diff against v1.58.5.0. Every new test was first run against the unfixed code and confirmed failing, then confirmed passing after the fix.
+
+| What | Before | After |
+|------|--------|-------|
+| AskUserQuestion on Claude Code 2.1.89+ | "Tool result missing due to internal error" | card renders |
+| `rm -R /`, `rm -rf $(cmd)/node_modules` via /careful | silent allow | ask |
+| `design variants --count abc` | 0 variants, exit 0 | exit 1 with usage hint |
+| Thin-client team brains | broken-config, brain blocks suppressed | usable, sync stages skip with reason |
+| /office-hours SESSION_COUNT | ~2x inflated | exact |
+| New tripwire test cases | n/a | 72 |
+
+The first row is the one to feel. The question-card primitive every interactive skill depends on was orphaned on current Claude Code builds: the preference hook emitted `permissionDecision:'defer'`, whose semantics became "pause for external resumption" in CC v2.1.89. The fix is a two-branch pass-through (exact-empty stdout, or additionalContext-only output for plan-tune memory nuggets), plus a corrected protocol reference doc so the mistake cannot be re-learned from our own docs.
+
+### What this means for you
+
+Interactive skills ask you questions again on current Claude Code. Safety guards fail closed: chained deletes, command substitution, capital `-R`, and destructive credential phrasings ("reset my secrets") all reach a human now. If your team runs a shared remote brain, `/sync-gbrain` and brain-aware planning work on thin clients out of the box. Run `/gstack-upgrade` to get all of it. The hook fix arrives with the file update, no settings change needed.
+
+### Itemized changes
+
+#### Fixed
+
+- **AskUserQuestion orphaned on Claude Code 2.1.89+ (#2035, #2006).** `question-preference-hook` pass-through is now exit 0 with exactly empty stdout (or additionalContext-only output for plan-tune memory nuggets), never `permissionDecision:'defer'`. `defer()` renamed `passThrough()`; the protocol contract in `docs/spikes/claude-code-hook-mutation.md` corrected in the same commit; 13 assertions rewritten across 3 test files; the tripwire asserts exact-empty stdout so a garbage write cannot slip past an optional-chained parse. Existing installs pick the fix up via `/gstack-upgrade` (the registered hook shim execs the TypeScript live).
+- **/careful chained-rm bypass (#2039).** Contributed by @jbetala7 (PR #2040): the safe-exception shortcut no longer judges a chained command by its last (safe) target. Hardened on top of the anchored full-command whitelist: the flag cluster accepts capital `-R` (the BSD/macOS recursive flag — `rm -R /` warned nowhere before; `rm -Rf node_modules` alone still allows) and safe-target tokens exclude `(` and backtick, so command substitution ending in a whitelisted suffix (`rm -rf $(./wipe-all)/node_modules`) cannot ride the whitelist.
+- **/context-restore loading a sibling worktree's checkpoint (#2052).** Contributed by @jbetala7: restore prefers the current branch's own checkpoint over newer sibling-worktree saves (scans 200 newest, partitions by branch frontmatter), and keeps the Conductor handoff fallback when the branch has no checkpoint.
+- **/sync-gbrain drift re-register on gbrain 0.42+ (#1985).** Contributed by @jbetala7: the drift remove passes `--confirm-destructive`. Hardened on top: the remove routes through the #1734 data-loss guards (refuses loudly while an autopilot runs), propagates `--keep-storage`, realpath-normalizes drift detection (a symlink alias of the same directory is a match, not drift, the probable cause of the reporter's unmoved-repo drift), and logs old vs new path whenever drift fires.
+- **Developer-profile double counting (#2067).** Contributed by @mvann: `mode:"resources"` bookkeeping rows no longer inflate SESSION_COUNT, TIER, or the builder-to-founder nudge; 8 regression tests pin the tier boundaries from both sides.
+- **One-way-door credential net: plurals + runtime wiring (#2024).** The credential nouns now match plurals ("reset my secrets" / "rotate the credentials" classify one-way), and the keyword net is wired into the runtime for the first time: `gstack-question-preference --check <id> --summary-stdin` pipes the question text (stdin, never argv, so quotes and newlines survive), and the enforcement hook falls back to the classifier for unregistered ids, so an ad-hoc destructive question with a stored never-ask preference can no longer auto-decide.
+- **design CLI silent NaN flags (#2032).** `--count`, `--retry`, and `--timeout` share one loud contract via `design/src/flag-utils.ts`: non-integer input errors with exit 1 ("3.7" is rejected, not truncated), above-max clamps with a stderr warning, and the variants ceiling derives from the style list instead of a magic 7. Previously `--retry abc` made generate a silent no-op and `--timeout abc` killed the serve board at boot.
+- **Thin-client brains misclassified as broken (#2051).** New `thin-client` engine state, read from gbrain's own `remote_mcp` config marker before any probe. Usable at every suppression gate (`--is-ok`, gen-skill-docs detection, `gstack-config gbrain-refresh`) while the local sync stages skip with an accurate reason (code indexing runs on the brain server; memory syncs via the remote brain's artifacts pull). The detect JSON reports `gbrain_thin_client: {probed: false}`: config verified, reachability checked at use time where gbrain calls degrade gracefully. detectMcpMode also recognizes gbrain servers registered under variant names or matched by the config's `mcp_url`.
+
+#### Closed as already fixed, with receipts
+
+- #1965 (GBRAIN_PREPARE pooler breakage): `lib/gbrain-exec.ts:86` never sets it; pinned by `test/build-gbrain-env.test.ts:121-142`.
+- #1950 (Windows git-bash learnings silently dropped): `bin/gstack-learnings-log:10-15` cygpath fix + stderr surfacing; pinned by `test/bin-windows-bun-import-paths.test.ts`.
+- #1964 (slow engines misclassified): `probeTimeoutMs()` honors `GSTACK_GBRAIN_PROBE_TIMEOUT_MS`; timeout classifies usable; pinned by `test/gbrain-local-status.test.ts`.
+
+#### For contributors
+
+- 11 bisect commits; 4 community PRs absorbed with authorship preserved. Contributed by @jbetala7 (#2040, #2054, #2031) and @mvann (#1991). Thank you both.
+- 72 new test cases across 9 files, each verified failing against the unfixed code before the fix landed.
+- Three follow-ups filed in TODOS.md: wire `design/test/` into CI (all 8 existing files are invisible to every runner today, plus a documented pre-existing timing flake), /context-save worktree-identity hardening (the #2052 residual), and conditional gbrain reindex-in-place gated on the new drift log.
+
+## [1.60.2.0] - 2026-08-07
+
+## **Three free-suite tests fail-proofed against machine drift.**
+## **Plus a filed P1: the suite's exit code can lie, and now we know why.**
+
+A full-suite health check turned up three tests that failed on dev machines while CI stayed green, all test-side drift rather than product bugs. The eval:list CLI test now spawns from a neutral directory, so slug detection cannot route reads away from the fixture store it seeds (the old cwd made it fail on any machine with the dev symlink). The benchmark CLI's remediation-hint check is case-insensitive, matching the reworded Gemini guidance ("Export GEMINI_API_KEY..."). The session-runner observability floor now expects the 5 wrapped I/O sites that actually exist since the shell-free spawn removed the prompt-file unlink.
+
+### The numbers that matter
+
+Source: this branch's investigation logs (~/.gstack-dev/logs/free-suite-*.log) and per-file reruns.
+
+| Check | Before | After |
+|-------|--------|-------|
+| eval-list-cli on dev machines | 1 fail (reads empty project dir) | 2/2 pass, deterministic everywhere |
+| benchmark-cli remediation hint | 1 fail (case-brittle regex) | 15/15 pass |
+| observability check 11 floor | expects >= 6 markers, counts 5 | floor matches the 5 real sites |
+
+One deeper finding got filed instead of rushed: at least five browse test files force-exit the shared bun process with `setTimeout(() => process.exit(0), 500)`, which can exit 0 before the summary prints and mask real failures. That is now a P1 in TODOS.md with receipts, because removing the exits without fixing the handle leaks they paper over would trade silent failure for hangs.
+
+### What this means for you
+
+`bun test` gives the same verdict on your laptop as in CI for these three tests, and the exit-code trust problem is documented with a concrete fix path instead of lurking.
+
+### Itemized changes
+
+#### Fixed
+
+- `test/eval-list-cli.test.ts`: spawn from neutral cwd + absolute script path so `getProjectEvalDir()` slug probes fail deterministically and the seeded legacy store is read.
+- `test/benchmark-cli.test.ts`: remediation-hint pattern made case-insensitive for the updated Gemini NOT-READY message.
+- `test/helpers/observability.test.ts`: check 11 floor 6 → 5 with the surviving wrapped-I/O sites named.
+
+#### For contributors
+
+- TODOS.md: new P1 (free-suite exit code masked by in-process force-exits, with repro + receipts) filed under Test infrastructure.
+
+## [1.60.1.0] - 2026-07-09
+
+## **The /autoplan dual-voice eval is back on the board, catching real regressions.**
+## **Eval timeouts now return evidence instead of hanging the suite.**
+
+The dual-voice eval proves both halves of /autoplan's Phase 1, the Claude review subagent and the Codex outside voice, actually fire. It now registers its skills the way real installs do (project-level `.claude/skills/`), so it exercises the same slash-command path users hit. Claude Code 2.x resolves slash commands strictly from registered skills, and the eval's old sandbox layout predates that. The eval harness also gained a hard guarantee: when a spawned session hits its timeout, the runner returns everything it collected instead of waiting on orphaned child processes.
+
+### The numbers that matter
+
+Source: investigation transcripts and timings in `~/.gstack/projects/garrytan-gstack/e2e-runs/2026-07-10-*` plus the new regression test (reproducible: `bun test test/session-runner-timeout.test.ts`).
+
+| Metric | Before | After |
+|--------|--------|-------|
+| /autoplan session in the eval sandbox | 0 turns, "Unknown command" | 43+ tool calls, both voices fire |
+| Runner return after a 3s timeout with an orphaned child | hung past the 30s test cap | 8.1s |
+| Timed-out 600s eval run wall time | 1431s (blocked on orphan pipes) | returns at timeout + 5s grace |
+
+The orphan fix matters beyond one eval: any timed-out `claude -p` child that leaves a subprocess holding stdout kept the whole suite waiting. Streamed transcript lines now survive the cancel, so assertions run against real evidence even on timeout.
+
+### What this means for you
+
+`bun run test:evals` timeouts fail fast with a transcript instead of silently eating 10+ extra minutes per hung test. And if /autoplan's dual-voice wiring ever breaks, the eval will say so instead of failing for its own reasons.
+
+### Itemized changes
+
+#### Fixed
+
+- `test/skill-e2e-autoplan-dual-voice.test.ts`: sandbox installs /autoplan and its review skills at project level (`.claude/skills/`), matching real slash-command resolution on Claude Code 2.x; the transcript filter reads raw stream-json shapes (the old `entry.type === 'tool_use'` filter matched nothing, so assertions only ever saw the final result text); hang protection accepts the Phase 1 review dispatch as progress evidence (full Phase 1 completion takes 15+ minutes of subagent work and belongs to the skill, not the eval); budget raised to 10 min / 40 turns.
+- `test/helpers/session-runner.ts`: on spawn timeout, cancel the stdout reader and race the stderr drain against child exit plus a 5s grace window, so orphaned grandchildren cannot hold `runSkillTest` past bun's per-test timeout. Regression-locked by `test/session-runner-timeout.test.ts` (fails in 30s without the fix, passes in 8s with it).
+
+#### For contributors
+
+- TODOS.md: filed the periodic-CI coverage decision: `evals-periodic.yml` runs 9 of ~66 e2e files, so ~57 run only when local diff-selection happens to pick them, which is how this eval rotted unnoticed.
+
 ## [1.58.5.0] - 2026-06-21
 
 ## **A fresh install now lands on a concrete first move, not a dead end.**

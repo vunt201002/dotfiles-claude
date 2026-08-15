@@ -134,12 +134,12 @@ lookup_default() {
     redact_repo_visibility) echo "" ;; # empty → fall through to gh/glab detection
     redact_prepush_hook) echo "false" ;;
     # Brain-aware planning (v1.48 / T5+T10+T16). Defaults documented inline:
-    #   brain_trust_policy@<hash>  — unset on fresh install; setup-gbrain
+    #   brain_trust_policy@<endpoint-id>  — unset on fresh install; setup-gbrain
     #                                writes 'personal' for local engines,
     #                                asks the user for remote-ambiguous.
     #   salience_allowlist          — empty falls through to
     #                                SALIENCE_DEFAULT_ALLOWLIST (D9).
-    #   user_slug_at_<hash>         — empty triggers resolve-user-slug
+    #   user_slug_at_<endpoint-id>  — empty triggers resolve-user-slug
     #                                fallback chain (D4 A3) on first call.
     brain_trust_policy*) echo "unset" ;;
     salience_allowlist) echo "" ;;
@@ -257,17 +257,28 @@ resolve_user_slug() {
   printf '%s' "$_slug"
 }
 
+read_config_value() {
+  local key="$1"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 0
+  fi
+  grep -E "^${key}:" "$CONFIG_FILE" 2>/dev/null \
+    | tail -1 \
+    | sed -E "s/^${key}:[[:space:]]*//; s/[[:space:]]+$//"
+}
+
 case "${1:-}" in
   get)
     KEY="${2:?Usage: gstack-config get <key>}"
-    # Validate key (alphanumeric + underscore + optional @<hash> suffix for
-    # endpoint-namespaced keys introduced by the brain-aware planning layer)
-    if ! printf '%s' "$KEY" | grep -qE '^[a-zA-Z0-9_]+(@[a-f0-9]+)?$'; then
-      echo "Error: key must contain only alphanumeric characters, underscores, and an optional @<hex-hash> suffix" >&2
+    # Validate key (alphanumeric + underscore + optional @<endpoint-id> suffix for
+    # endpoint-namespaced keys introduced by the brain-aware planning layer).
+    # Endpoint ids are sha8/sha16 hex for remote MCP URLs, or the literal
+    # "local" for stdio/PGLite engines (see endpoint_hash).
+    if ! printf '%s' "$KEY" | LC_ALL=C grep -qE '^[a-zA-Z0-9_]+(@[a-zA-Z0-9]+)?$'; then
+      echo "Error: key must contain only alphanumeric characters, underscores, and an optional @<endpoint-id> suffix" >&2
       exit 1
     fi
-    # Use literal match for keys containing @ (sha hashes), regex otherwise
-    VALUE=$(grep -F "${KEY}:" "$CONFIG_FILE" 2>/dev/null | grep -E "^${KEY%@*}(@[a-f0-9]+)?:" | grep -F "${KEY}:" | tail -1 | awk '{print $2}' | tr -d '[:space:]' || true)
+    VALUE=$(read_config_value "$KEY" || true)
     if [ -z "$VALUE" ]; then
       VALUE=$(lookup_default "$KEY")
     fi
@@ -276,9 +287,10 @@ case "${1:-}" in
   set)
     KEY="${2:?Usage: gstack-config set <key> <value>}"
     VALUE="${3:?Usage: gstack-config set <key> <value>}"
-    # Validate key (alphanumeric + underscore + optional @<hash> suffix)
-    if ! printf '%s' "$KEY" | grep -qE '^[a-zA-Z0-9_]+(@[a-f0-9]+)?$'; then
-      echo "Error: key must contain only alphanumeric characters, underscores, and an optional @<hex-hash> suffix" >&2
+    # Validate key (alphanumeric + underscore + optional @<endpoint-id> suffix).
+    # Accepts hex hashes and the literal "local" from endpoint_hash.
+    if ! printf '%s' "$KEY" | LC_ALL=C grep -qE '^[a-zA-Z0-9_]+(@[a-zA-Z0-9]+)?$'; then
+      echo "Error: key must contain only alphanumeric characters, underscores, and an optional @<endpoint-id> suffix" >&2
       exit 1
     fi
     # Validate brain_trust_policy value domain (D4 / D11)
@@ -323,14 +335,15 @@ case "${1:-}" in
     if [ ! -f "$CONFIG_FILE" ]; then
       printf '%s' "$CONFIG_HEADER" > "$CONFIG_FILE"
     fi
-    # Escape sed special chars in value and drop embedded newlines
-    ESC_VALUE="$(printf '%s' "$VALUE" | head -1 | sed 's/[&/\]/\\&/g')"
+    # Drop embedded newlines, then escape sed replacement metacharacters.
+    SAFE_VALUE="$(printf '%s' "$VALUE" | head -1)"
+    ESC_VALUE="$(printf '%s' "$SAFE_VALUE" | sed 's/[&/\]/\\&/g')"
     if grep -qE "^${KEY}:" "$CONFIG_FILE" 2>/dev/null; then
       # Portable in-place edit (BSD sed uses -i '', GNU sed uses -i without arg)
       _tmpfile="$(mktemp "${CONFIG_FILE}.XXXXXX")"
       sed "/^${KEY}:/s/.*/${KEY}: ${ESC_VALUE}/" "$CONFIG_FILE" > "$_tmpfile" && mv "$_tmpfile" "$CONFIG_FILE"
     else
-      echo "${KEY}: ${VALUE}" >> "$CONFIG_FILE"
+      echo "${KEY}: ${SAFE_VALUE}" >> "$CONFIG_FILE"
     fi
     # Auto-relink skills when prefix setting changes (skip during setup to avoid recursive call)
     if [ "$KEY" = "skill_prefix" ] && [ -z "${GSTACK_SETUP_RUNNING:-}" ]; then
@@ -348,7 +361,7 @@ case "${1:-}" in
                skill_prefix checkpoint_mode checkpoint_push explain_level \
                codex_reviews gstack_contributor skip_eng_review workspace_root \
                artifacts_sync_mode artifacts_sync_mode_prompted plan_tune_hooks; do
-      VALUE=$(grep -E "^${KEY}:" "$CONFIG_FILE" 2>/dev/null | tail -1 | awk '{print $2}' | tr -d '[:space:]' || true)
+      VALUE=$(read_config_value "$KEY" || true)
       SOURCE="default"
       if [ -n "$VALUE" ]; then
         SOURCE="set"
@@ -411,9 +424,11 @@ case "${1:-}" in
     fi
 
     case "$STATUS" in
-      ok|timeout)
-        # "timeout" = slow-but-healthy engine (#1964) — same treatment as
-        # "ok", matching gstack-gbrain-detect --is-ok and gen-skill-docs.
+      ok|timeout|thin-client)
+        # "timeout" = slow-but-healthy engine (#1964); "thin-client" =
+        # remote-HTTP MCP brain, no local engine by design (#2051) — same
+        # treatment as "ok", matching gstack-gbrain-detect --is-ok and
+        # gen-skill-docs.
         echo "Detected gbrain v$VERSION (local-status: $STATUS)."
         # Render brain-aware blocks INTO the global install so EVERY project's
         # Claude sessions get them (other projects read SKILL.md + sections from
