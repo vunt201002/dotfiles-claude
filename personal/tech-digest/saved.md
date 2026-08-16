@@ -15,7 +15,7 @@
 > `      <url>`
 
 <!-- SAVED-LIST (skill đọc & ghi phần dưới dòng này; mục mới chèn ngay dưới marker, rồi đánh số lại từ 1) -->
-- [ ] 1. "Give Claude ways to verify its own work end to end" (Boris Cherny) — x.com · lưu 2026-08-14 (digest 2026-08-14)
+- [x] 1. "Give Claude ways to verify its own work end to end" (Boris Cherny) — x.com · lưu 2026-08-14 (digest 2026-08-14)
       → Chính người tạo Claude Code nói cách dùng đúng: bật auto mode cho permission, để code review + security review chạy mặc định, dùng giao diện quản nhiều agent cùng lúc (Agent view CLI, Desktop, iOS). Verify quan trọng hơn prompt.
       https://x.com/bcherny/status/2077929390806073807
 - [ ] 2. DeepSeek Harness developer preview — deepseek.com · lưu 2026-08-14 (digest 2026-08-14)
