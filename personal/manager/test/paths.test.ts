@@ -6,7 +6,7 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-paths-'));
 process.env.MANAGER_HOME = HOME;
 
 import { describe, test, expect, afterAll } from 'bun:test';
-import { gstackHome, managerDir } from '../lib/paths';
+import { collisionSafeSlug, gstackHome, managerDir, slug } from '../lib/paths';
 import { gateLogDir } from '../lib/gate-log';
 import { resolvePaths } from '../telegram/config';
 
@@ -61,5 +61,31 @@ describe('the bot and the daemon resolve to one directory', () => {
       if (shared === undefined) delete process.env.GSTACK_HOME;
       else process.env.GSTACK_HOME = shared;
     }
+  });
+});
+
+describe('collision-safe identifiers', () => {
+  test('short identifiers keep their existing spelling byte for byte', () => {
+    const taskId = '  Joy / T-105 / 01  ';
+    expect(collisionSafeSlug(taskId)).toBe(slug(taskId));
+    expect(collisionSafeSlug(taskId)).toBe('joy-t-105-01');
+  });
+
+  test('long identifiers include a full-input hash inside the existing cap', () => {
+    const shared = `project-${'issue-'.repeat(13)}x`;
+    expect(`${shared}01`.length).toBe(89);
+    expect(`${shared}02`.length).toBe(89);
+    const first = collisionSafeSlug(`${shared}01`);
+    const second = collisionSafeSlug(`${shared}02`);
+    expect(first).not.toBe(second);
+    expect(first.length).toBeLessThanOrEqual(64);
+    expect(second.length).toBeLessThanOrEqual(64);
+    expect(first).toMatch(/^[a-z0-9._-]+$/);
+    expect(second).toMatch(/^[a-z0-9._-]+$/);
+  });
+
+  test('the same identifier resolves identically across calls', () => {
+    const taskId = `project-${'issue-'.repeat(13)}x01`;
+    expect(collisionSafeSlug(taskId)).toBe(collisionSafeSlug(taskId));
   });
 });

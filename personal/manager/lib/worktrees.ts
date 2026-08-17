@@ -29,7 +29,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { cappedDiff, readDiff, type DiffResult } from './git';
-import { atomicWriteJson, managerDir, readJson, slug } from './paths';
+import { atomicWriteJson, collisionSafeSlug, managerDir, readJson, slug } from './paths';
 
 export interface WorktreeRecord {
   taskId: string;
@@ -174,7 +174,7 @@ export function ensureTaskWorktree(
     return { ok: false, reason: `cannot resolve ${opts.baseRef ?? 'HEAD'} in ${repoAbs}: ${head.stderr}`, record: null, reused: false };
   }
 
-  const name = slug(taskId) || 'task';
+  const name = collisionSafeSlug(taskId) || 'task';
   const dir = path.join(worktreesRoot(), slug(project) || 'project', name);
   const branch = `manager/${name}`;
 

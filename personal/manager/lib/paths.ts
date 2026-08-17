@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'node:crypto';
 import { gateLogDir } from './gate-log';
 
 /**
@@ -91,14 +92,36 @@ export function ensureManagerDirs(): void {
   fs.mkdirSync(gateLogDir(), { recursive: true });
 }
 
-/** Filesystem-safe task id fragment. Windows rejects most punctuation. */
-export function slug(value: string): string {
+const SLUG_CAP = 64;
+const SLUG_HASH_LEN = 12;
+
+function normalizeForPath(value: string): string {
   return value
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64);
+    .replace(/^-+|-+$/g, '');
+}
+
+/** Filesystem-safe task id fragment. Windows rejects most punctuation. */
+export function slug(value: string): string {
+  return normalizeForPath(value).slice(0, SLUG_CAP);
+}
+
+/**
+ * Same as `slug` for anything that fits, but a long value keeps a hash of its
+ * WHOLE self instead of losing its tail.
+ *
+ * Task ids end in the attempt counter that is their only disambiguator, and
+ * real ids here run past the cap — so plain truncation gave four different
+ * tasks one directory and one branch, and each new task was handed the
+ * previous one's checkout.
+ */
+export function collisionSafeSlug(value: string): string {
+  const normalized = normalizeForPath(value);
+  if (normalized.length <= SLUG_CAP) return normalized;
+  const head = normalized.slice(0, SLUG_CAP - SLUG_HASH_LEN - 1);
+  return `${head}-${createHash('sha256').update(value).digest('hex').slice(0, SLUG_HASH_LEN)}`;
 }
 
 /**

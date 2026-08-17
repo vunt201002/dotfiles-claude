@@ -83,6 +83,23 @@ describe('a task gets its own checkout', () => {
     expect(fs.existsSync(path.join(b.record!.dir, 'only-a.txt'))).toBe(false);
   });
 
+  test('long task ids differing only near the tail get different directories and branches', () => {
+    const dir = repo('long-task-ids');
+    const shared = `project-${'issue-'.repeat(13)}x`;
+    expect(`${shared}01`.length).toBe(89);
+    expect(`${shared}02`.length).toBe(89);
+    const a = ensureTaskWorktree(`${shared}01`, 'project', dir);
+    const b = ensureTaskWorktree(`${shared}02`, 'project', dir);
+    expect(a.ok, a.reason).toBe(true);
+    expect(b.ok, b.reason).toBe(true);
+    expect(a.record!.dir).not.toBe(b.record!.dir);
+    expect(a.record!.branch).not.toBe(b.record!.branch);
+    expect(path.basename(a.record!.dir).length).toBeLessThanOrEqual(64);
+    expect(path.basename(b.record!.dir).length).toBeLessThanOrEqual(64);
+    expect(a.record!.branch).toMatch(/^manager\/[a-z0-9._-]+$/);
+    expect(b.record!.branch).toMatch(/^manager\/[a-z0-9._-]+$/);
+  });
+
   // Nested under the repo, every task's scope would contain every other task's
   // checkout, and the scope guard would wave a write from A into B straight
   // through.
