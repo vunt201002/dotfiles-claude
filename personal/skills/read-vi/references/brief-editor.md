@@ -62,9 +62,10 @@ chỉ sửa đúng chúng.
 ## Trình tự làm
 
 1. Đọc file draft **hết một lượt** trước khi sửa chữ nào.
-2. **Chấm bản bạn vừa nhận** theo `vi-conventions.md §C2` — 5 dimension, 0-10:
-   `nhịp câu` · `từ ngữ` · `xưng hô` · `mạch đoạn` · `thuật ngữ`. Đây là điểm cho bản
-   **bạn nhận được**, do người khác viết. Ghi lại, sẽ đưa vào report.
+2. **Chấm bản bạn vừa nhận** theo `vi-conventions.md §C2` — 4 dimension, 0-10:
+   `nhịp câu` · `xưng hô` · `mạch đoạn` · `thuật ngữ`. Đây là điểm cho bản **bạn nhận
+   được**, do người khác viết. Ghi lại, sẽ đưa vào report. `từ ngữ` do máy đếm hit §B1;
+   số đếm được thì không để người chấm bằng cảm tính.
 3. Chạy tầng cơ học `§C1` (grep từng cụm ở `§B1`, đếm `của`, `rằng`, `được … bởi`, đại từ,
    em-dash, câu dài). Ghi lại số hit trước khi sửa.
 4. Viết lại. Sửa theo `§B1` và `§B2`, lấy nhịp từ `anchors.md`. Chỗ nào tối nghĩa mà bạn
@@ -93,17 +94,19 @@ Rồi tiếp:
 
 ```
 Vòng: {{ROUND}}
-Điểm bản NHẬN ĐƯỢC (không phải bản của tôi): nhịp câu _ · từ ngữ _ · xưng hô _ · mạch đoạn _ · thuật ngữ _
+Điểm bản NHẬN ĐƯỢC (không phải bản của tôi): nhịp câu _ · xưng hô _ · mạch đoạn _ · thuật ngữ _
 Cơ học trước → sau: <mục>: <n> → <n>  (từng mục có hit)
 Đã sửa: <3-8 gạch đầu dòng, mỗi dòng là một LOẠI sửa, kèm 1 ví dụ trước → sau>
-Sửa thực chất hay không: CÓ / KHÔNG  (KHÔNG = bản nhận được đã ổn, tôi gần như không đụng)
+Biên độ sửa (ước lượng): <số câu tôi đã sửa>/<tổng số câu bản nhận được> ≈ <n>%
 Cấu trúc mới đề xuất thêm vào §B1: <cụm dính syntax> → <bản viết lại> → <khung tiếng Anh nếu đoán được>
                                     (hoặc: không có cái nào mới)
 Chỗ tối nghĩa không tự đoán được: <liệt kê, hoặc: không có>
 ```
 
-Trường `Sửa thực chất hay không` là cái quyết định vòng lặp có dừng hay không, nên trả lời
-thật. Đổi vài dấu phẩy = `KHÔNG`. Viết lại câu, tách câu, đổi chủ ngữ = `CÓ`.
+`Biên độ sửa` chính thức do người điều phối đo bằng script trên bản trước và sau vòng sửa;
+ước lượng của bạn chỉ dùng làm đối chứng. Hãy khai thật số câu đã đụng. Nếu hai con số lệch
+nhau quá 2 lần, người điều phối sẽ nêu ra trong run report để bắt lỗi đếm hoặc dấu hiệu lách
+cổng.
 
 **Không tự thêm mục vào `vi-conventions.md` hay `anchors.md`.** Bạn đề xuất trong report;
 người điều phối ghi. Bạn ghi thì vòng sau sẽ có hai người cùng ghi một file.

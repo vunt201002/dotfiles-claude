@@ -353,20 +353,75 @@ phải được gọi tên và giải thích vì sao giữ.
 
 ### §C2. Tầng taste — 5 dimension, 0-10
 
-| Dimension | Đo cái gì |
+| Dimension | Đo cái gì | Cách chấm và đóng |
+|---|---|---|
+| `nhịp câu` | độ dài + số mệnh đề; câu có ngắt đúng chỗ người Việt cần thở không | không trần · editor chấm hội tụ |
+| `từ ngữ` | có cấu trúc §B1 nào sót không; có danh-từ-hoá thừa không | máy chấm hit §B1 · **tripwire**, không phải một chân của cổng |
+| `xưng hô` | một họ duy nhất, giữ suốt bài | có trần · editor chấm tuyệt đối |
+| `mạch đoạn` | connector có bị dịch 1:1 không; đoạn ngắt theo ý tiếng Việt hay theo bản gốc | không trần · editor chấm hội tụ |
+| `thuật ngữ` | §A1 giữ tiếng Anh; §A2 dùng đúng chỗ; §A3 không dính bản dịch cấm | có trần · editor chấm tuyệt đối |
+
+**Cổng đóng mới** — ba loại điều kiện khác nhau về bản chất, đừng trộn:
+
+1. **Tuyệt đối** — `xưng hô` và `thuật ngữ` ≥9. Hai mặt này có trần: hoặc bài giữ đúng một
+   họ đại từ hoặc không, hoặc theo §A hoặc không.
+2. **Hội tụ** — `nhịp câu` và `mạch đoạn`, mỗi cái ≥8 **và** chênh ≤1 so với cùng dimension
+   ở vòng trước. Sàn là bắt buộc: 5-5 là hội tụ ở mức thấp, phải báo cáo chứ không được đóng.
+   Vì cần hai điểm mới tính được chênh lệch, **vòng 1 không bao giờ đóng được**.
+3. **Tripwire** — `từ ngữ` (máy chấm) ≥8, và mọi hit phải được phán chứ không clear im lặng.
+   Nó **không** nằm trong nhóm hội tụ; lý do đo được ở ngay dưới.
+
+**Vì sao `từ ngữ` là tripwire chứ không phải một mặt để hội tụ.** Đo sau khi bộ dò chạy đúng:
+
+| Phép thử | Kết quả |
 |---|---|
-| `nhịp câu` | độ dài + số mệnh đề; câu có ngắt đúng chỗ người Việt cần thở không |
-| `từ ngữ` | có cấu trúc §B1 nào sót không; có danh-từ-hoá thừa không |
-| `xưng hô` | một họ duy nhất, giữ suốt bài |
-| `mạch đoạn` | connector có bị dịch 1:1 không; đoạn ngắt theo ý tiếng Việt hay theo bản gốc |
-| `thuật ngữ` | §A1 giữ tiếng Anh; §A2 dùng đúng chỗ; §A3 không dính bản dịch cấm |
+| Sàn — văn bản ghép từ chính cột 2 của §B1 | 55 hit / 1 111 từ → **0 điểm** |
+| 9 bài `dich.md` đã đóng | 9 · 9 · 9 · 10 · 10 · 9 · 9 · 10 · 9 |
+| `tom-tat.md` (chưa từng qua editor mù nguồn) so với `dich.md` cùng bài | 2 thấp hơn · 3 bằng · **2 cao hơn** |
 
-**Ngưỡng đóng: mọi dimension ≥9.** Lấy đúng ngưỡng của việc *improve/build/redesign* trong
-`personal/global-CLAUDE.md`, vì dịch/viết lại là làm ra văn bản mới, không phải fix bug —
-không có áp lực minimal-fix nào để phải chấp nhận 8.
+Bộ dò **có sàn**, nó không mù. Nhưng trên tiếng Việt đã tử tế thì nó bão hoà ở 9-10, và phép
+thử `tom-tat.md` cho thấy nó **không phân biệt được** bản đã qua vòng mù nguồn với bản chưa
+qua. Đặt một điều kiện luôn tự động đạt vào danh sách điều kiện đóng là tự lừa mình: cổng
+trông có ba chân mà thật ra đứng bằng hai. Nên `từ ngữ` giữ vai tripwire — im khi ổn, kêu khi
+có cấu trúc cấm thật.
 
-**Ai chấm:** editor của vòng sau chấm bản của vòng trước. Không ai tự chấm bản của chính
-mình. Chi tiết vòng lặp ở SKILL.md.
+Hệ quả phải nói rõ: điểm 9 máy chấm cho `np-overrated` trùng đúng điểm 9 của editor **không
+phải bằng chứng hai thang khớp nhau**. Trên một thước đo mà mọi bài đều 9-10, trùng một điểm
+là trùng ngẫu nhiên.
+
+Ngoài điểm số, `Biên độ sửa` phải ≤10%, do main session chạy script để đo chứ không lấy lời
+editor. Một câu của bản `before` bị tính là **đã đổi** nếu nó không xuất hiện **nguyên văn**
+trong bản `after` (so sánh sau khi chuẩn hoá khoảng trắng). Tách một câu thành hai → câu gốc
+không sống sót → tính 1. Xoá câu → tính 1. **Thêm câu mới không làm tăng mẫu số** — chế độ
+VIẾT LẠI ngắn hơn là đúng.
+
+Lý do đổi cổng đến từ 21 lượt chấm thật trong pipeline (7 bài × 3 vòng):
+
+| Dimension | Số lượt đạt ≥9 |
+|---|---|
+| `xưng hô` | 19/21 (90%) |
+| `thuật ngữ` | 18/21 (86%) |
+| `mạch đoạn` | 9/21 (43%) |
+| `nhịp câu` | 4/21 (19%) |
+| `từ ngữ` | 1/21 (5%) |
+
+`xưng hô` và `thuật ngữ` có trần rõ, nên ngưỡng ≥9 tuyệt đối từ quy ước
+*improve/build/redesign* trong `personal/global-CLAUDE.md` vẫn áp được. Ba dimension còn lại
+không có trần: người chấm cũng là người sắp sửa nên luôn có thể tìm thêm chỗ để hạ điểm;
+vì vậy bê nguyên ngưỡng tuyệt đối đó sang đây không còn đúng. Cờ nhị phân cũ chỉ bật ở
+1/21 lượt; xác suất đóng ước tính khoảng 0,02%, còn hạ 9 xuống 8 cũng chỉ lên khoảng 1,2%.
+Nút chặn chính là cờ tự khai không kiểm được, không phải riêng con số 9. §B1 dài từ 52 lên
+105 dòng còn làm cùng một bản dịch bị chấm `từ ngữ` thấp dần, nên dimension này chuyển sang
+số đếm có coverage công khai.
+
+**Giới hạn độ tin cậy:** thang điểm này chưa từng đối chiếu với người thật. Cả 21 lượt đều
+là model tự chấm nhau trên mẫu 7 bài; các tỉ lệ trên là chẩn đoán nội bộ, không phải ngưỡng
+đã được kiểm chứng. Mốc `Biên độ sửa ≤10%` là phỏng đoán đầu tiên, chưa có dữ liệu; đo lại
+sau ~10 bài nữa rồi chỉnh.
+
+**Ai chấm:** editor của vòng sau chấm bốn dimension taste của bản vòng trước; main session
+chạy script chấm `từ ngữ` trên cùng bản đó. Không ai tự chấm bản của chính mình. Chi tiết
+vòng lặp ở SKILL.md.
 
 ---
 

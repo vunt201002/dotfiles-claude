@@ -288,6 +288,15 @@ ignore something. The gate is the mechanism; a request is not.
 
 ### 4c. Spawn
 
+Immediately before spawning the editor, snapshot the draft it is about to receive:
+
+```bash
+cp "$WORK/vi/draft.md" "$WORK/vi/draft-r<N>-before.md"
+```
+
+Step 6 needs this snapshot to measure edit amplitude. Without it, amplitude collapses back
+into an editor's unverifiable self-report.
+
 Spawn a background `Agent` (`general-purpose`, named `editor-vi-r<N>` so rounds don't
 collide) whose prompt is **the contents of `$WORK/vi/brief-sent.md`, pasted verbatim**.
 Nothing before it, nothing after it.
@@ -323,8 +332,10 @@ receipt exists to catch.
   a fresh copy of the draft. Report the leak to the user; it means the gate has a hole
   worth closing permanently.
 
-Keep the report's scores, the mechanical before→after counts, the `Sửa thực chất` flag, and
-its proposed new `§B1` rows. Step 6 and Step 8 need them.
+Keep the report's four editor scores, its mechanical before→after counts, its estimated edit
+amplitude, and its proposed new `§B1` rows. The main session must now run
+`vi-score.ts delta` on the snapshot and edited draft for the official amplitude; the
+editor's estimate is only a cross-check. Step 6 and Step 8 need these values.
 
 ---
 
@@ -401,19 +412,61 @@ r=2: Step 4 editor E2 (fresh agent, gets the edited file + findings-r1) → Step
 r=3: same, last round
 ```
 
-**Close when both are true:**
+**Close only when all four are true:**
 
 1. The latest meaning check returns no `Blocker`/`High` findings.
-2. The latest editor scored the text it *received* ≥9 on all five dimensions of
-   `vi-conventions.md §C2`, and reported `Sửa thực chất: KHÔNG`.
+2. The bounded dimensions are absolute: the latest editor scored the text it *received*
+   `xưng hô` ≥9 and `thuật ngữ` ≥9.
+3. The unbounded dimensions have converged above a floor: `nhịp câu` and `mạch đoạn` are
+   each ≥8, and each differs by ≤1 from the same dimension's score in the previous round.
+   Convergence without the floor does not close: 5→5 is a low-level convergence result to
+   report, not a good translation.
+4. The official `Biên độ sửa` is ≤10%, measured by the main session with the script, never
+   accepted from the editor's estimate.
 
-Condition 2 is the honest one, and it is why each round spawns a **fresh** editor: round
-N's editor grades round N-1's output. Nobody ever grades their own writing. An editor that
-reads the text, scores it ≥9 everywhere, and finds nothing substantive to change **is** the
-stopping signal — it is a blind Vietnamese reader who had no complaints.
+Machine-scored `từ ngữ` is a **tripwire, not a fifth thing to converge**. It must be ≥8 and
+every hit must be ruled on, but it takes no part in condition 3. Measured across the whole
+vault it saturates at 9-10 on any competent Vietnamese, and it does not separate text that
+went through the blind editor from text that never did — so counting it as a converging
+dimension would make this gate look like it stands on three legs when it stands on two.
+`vi-conventions.md §C2` carries those measurements.
+
+Round 1 can never close because no previous-round scores exist for condition 3. After each
+editor returns, run both commands against the snapshot taken in Step 4c:
+
+```bash
+bun ~/.claude/skills/read-vi/bin/vi-score.ts b1 "$WORK/vi/draft-r<N>-before.md"
+bun ~/.claude/skills/read-vi/bin/vi-score.ts delta "$WORK/vi/draft-r<N>-before.md" "$WORK/vi/draft.md"
+```
+
+The `từ ngữ` score is deterministic: it comes from §B1 plus the explicit `§B1-skip`, not
+editor taste. Each hit is still evidence to judge, not a verdict. For example, `#4 có khả
+năng` catches “Có khả năng bạn đạp vào rìa marine layer,” where it means probability, not
+nominalized ability. If a hit is noise, add it to `§B1-skip` with the reason in Step 8.
+Never clear it silently or rewrite Vietnamese to please the script.
+
+The `b1` command supplies `từ ngữ` for the text the editor received. The `delta` command
+supplies the official amplitude for that editor's before→after change. Compare it with the
+editor's estimate; if one is more than twice the other, call the discrepancy out in the run
+report as a likely counting error or gate-evasion signal.
+
+The amplitude contract is exact: một câu của bản `before` bị tính là **đã đổi** nếu nó không
+xuất hiện **nguyên văn** trong bản `after` (so sánh sau khi chuẩn hoá khoảng trắng). Tách một
+câu thành hai → câu gốc không sống sót → tính 1. Xoá câu → tính 1. **Thêm câu mới không làm
+tăng mẫu số** — chế độ VIẾT LẠI ngắn hơn là đúng. The ≤10% threshold is a first guess with
+no calibration data; measure it again after about 10 more articles, then adjust it.
+
+Each round still spawns a **fresh** editor because round N's editor grades round N-1's
+output. Nobody ever grades their own writing. The stopping signal is therefore a blind
+Vietnamese reader seeing bounded correctness, stable unbounded scores above their floor,
+and little measured rewriting left to do.
 
 **Cap: 3 rounds.** Out of rounds and not closed → stop. Report which dimensions are still
-short and by how much, and which findings are unresolved. Do not run a fourth round.
+short and by how much, and which findings are unresolved. For each of the two converging
+dimensions, distinguish **`chưa hội tụ`** (still moving by >1 point) from **`hội tụ ở mức thấp`**
+(it moved by ≤1 but is stuck at ≤7). Those mean different things: the latter says the loop
+is no longer improving that dimension and another identical round would be pointless. Do
+not run a fourth round.
 
 **The only exit with a finding still open:** the finding genuinely cannot be fixed within
 the task's constraints (a source sentence that is ambiguous in the original, a term with no
@@ -474,7 +527,8 @@ Header block (extends the shape already used by the one hand-made translation in
 > Tóm tắt: [tom-tat.md](tom-tat.md)
 > Chế độ: <DỊCH SÁT | VIẾT LẠI | HỖN HỢP> — <một dòng vì sao chọn chế độ này>
 > Xưng hô: <bạn | mình>
-> Pass 2 (editor mù nguồn): <k> vòng · điểm vòng cuối: nhịp câu _ · từ ngữ _ · xưng hô _ · mạch đoạn _ · thuật ngữ _
+> Pass 2 (editor mù nguồn): <k> vòng · editor chấm bản nhận được: nhịp câu _ · xưng hô _ · mạch đoạn _ · thuật ngữ _
+> Máy chấm: từ ngữ _ (bản đang lưu) · _ (bản editor vòng cuối nhận được, dùng cho tripwire) · biên độ sửa chính thức: _%
 > Pass 3 (soát nghĩa): <n> finding · đã sửa <m> · còn lại: <liệt kê, hoặc "không còn">
 > <Lưu từ digest <ngày>, bài số <N>.  — chỉ khi vào bằng `digest <N>`>
 ```
@@ -571,8 +625,11 @@ Print a short close to the user:
 READ-VI — <title>
 ────────────────────────────────
 Chế độ:  <mode> — <vì sao>
-Vòng:    <k>/3 · đóng vì <mọi dimension ≥9 và editor không sửa thực chất | hết cap>
-Điểm:    nhịp câu _ · từ ngữ _ · xưng hô _ · mạch đoạn _ · thuật ngữ _
+Vòng:    <k>/3 · <đóng: tuyệt đối + hội tụ + biên độ ≤10% | hết cap: chưa hội tụ / hội tụ ở mức thấp / thiếu ngưỡng tuyệt đối>
+Điểm:    tuyệt đối: xưng hô _ · thuật ngữ _
+         hội tụ:   nhịp câu _ (Δ_) · mạch đoạn _ (Δ_)
+         tripwire: từ ngữ _ (máy) · <n> hit <(liệt kê nếu >0)>
+         biên độ sửa: _% (máy đo)
 Nghĩa:   <n> finding · còn lại <m> <(liệt kê nếu >0)>
 Lưu:     personal/read-vi/<ngày>-<slug>/
          dich.md · tom-tat.md
