@@ -1204,6 +1204,58 @@ describe('bad agent output', () => {
     expect(loadTask(taskId)?.state).toBe('REPORTED');
   });
 
+  test('a gate verdict before trailing chatter survives the real closing adapter', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'spec-check') {
+        return transcriptReply('gate-chatter.jsonl', [PASS_VERDICT, 'Tests finished, 790 pass.']);
+      }
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const row = readEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
+    expect(row?.verdict).toBe('pass');
+  });
+
+  test('gate chatter quoting unrelated JSON does not outrank the real verdict', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'spec-check') {
+        return transcriptReply('gate-quoted-json.jsonl', [
+          PASS_VERDICT,
+          'For reference, the config was ```json\n{"maxAgents":20,"runner":"cmux"}\n```',
+        ]);
+      }
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const row = readEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
+    expect(row?.verdict).toBe('pass');
+  });
+
+  test('a gate with no verdict-shaped candidate keeps the existing failure reason', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'spec-check') {
+        return transcriptReply('gate-unparseable-chatter.jsonl', ['No structured result.', 'Tests finished, 790 pass.']);
+      }
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const row = readEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
+    expect(row?.verdict).toBe('error');
+    expect(row?.caught).toBe('agent returned no parseable verdict block');
+  });
+
   test('a sizing envelope before trailing chatter survives the real sizing parse path', async () => {
     const { port } = makePort((phase) =>
       phase === 'size'

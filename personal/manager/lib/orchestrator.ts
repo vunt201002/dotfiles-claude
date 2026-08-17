@@ -28,7 +28,7 @@ import {
 import type { AgentRole, AssertRunRecord, TaskRecord, TaskSource, TaskState } from '../types';
 import { ACTIVE_STATES, isTerminal } from '../types';
 import { logGate, shouldBlindSample } from './gate-log-port';
-import { extractJsonBlock, parseEnvelope } from './envelope';
+import { parseEnvelope } from './envelope';
 import { acquire, BROWSER_TOKEN, projectLock, release, releaseAll } from './locks';
 import {
   BLOCKING_HOOK_GATES,
@@ -63,7 +63,7 @@ import { listTasks, loadTask, newTaskRecord, saveTask, saveTaskAndIndex } from '
 import { resolveTaskWorkdir } from './worktrees';
 import {
   applyEnsembleRule,
-  parseVerdict,
+  parseVerdictCandidates,
   verifyDeterministicGates,
   type AgentVerdict,
   type GateReport,
@@ -114,29 +114,6 @@ function parseRunEnvelope(run: SpawnResult, roundTwoFail: boolean) {
     if (parsed.ok) return parsed;
   }
   return parseEnvelope(run.output, { roundTwoFail });
-}
-
-const VERDICT_KINDS = new Set(['pass', 'fail', 'blocked']);
-
-/**
- * Verdict-shaped, not merely JSON.
- *
- * `parseVerdict` never fails — it normalizes anything into a `fail` — so "the
- * newest message that parses" would let a closing sentence that happens to
- * quote a JSON object outrank the real verdict two messages earlier.
- */
-function looksLikeVerdict(output: string): boolean {
-  const raw = extractJsonBlock(output);
-  if (!raw || typeof raw !== 'object') return false;
-  const kind = (raw as { verdict?: unknown }).verdict;
-  return typeof kind === 'string' && VERDICT_KINDS.has(kind);
-}
-
-function parseRunVerdict(run: SpawnResult) {
-  for (const output of run.outputs ?? []) {
-    if (looksLikeVerdict(output)) return parseVerdict(output);
-  }
-  return parseVerdict(run.output);
 }
 
 export class Orchestrator {
@@ -348,7 +325,7 @@ export class Orchestrator {
       await this.terminate(task, 'BLOCKED', spawnFailureReason('execution', run));
       return false;
     }
-    const verdict = parseRunVerdict(run);
+    const verdict = parseVerdictCandidates(run.outputs, run.output);
     const current = this.absorbVerdict(loadTask(task.id) ?? task, verdict);
 
     if (verdict.irreversible.length > 0 && await this.parkIfIrreversible(current, verdict.irreversible)) return false;
@@ -783,6 +760,7 @@ export class Orchestrator {
         });
         return {
           output: result.output,
+          outputs: result.outputs,
           costUsd: result.costUsd,
           costKnown: result.costKnown,
           exitReason: result.exitReason,

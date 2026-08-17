@@ -88,7 +88,8 @@ function harness(
     diff: () => DIFF,
     spawn: async (req) => {
       prompts.push(req);
-      return { output: reply(req.gate), costUsd: 0.05, costKnown: true, exitReason: 'success' };
+      const output = reply(req.gate);
+      return { output, outputs: [output], costUsd: 0.05, costKnown: true, exitReason: 'success', model: 'test', family: 'test' };
     },
     ...overrides,
   };
@@ -469,9 +470,12 @@ describe('a review gate whose transport never ran says so', () => {
     return {
       spawn: async () => ({
         output: 'SKIP: codex binary not found',
+        outputs: [],
         costUsd: 0,
         costKnown: false,
         exitReason: 'codex_not_installed',
+        model: 'test',
+        family: 'test',
       }),
     };
   }
@@ -510,7 +514,15 @@ describe('a review gate whose transport never ran says so', () => {
   // cheap run and drag every future ceiling below what the lane really costs.
   test('an unpriced run writes no cost at all, rather than a zero', async () => {
     const { ctx } = harness({
-      spawn: async () => ({ output: verdictJson({}), costUsd: 0, costKnown: false, exitReason: 'success' }),
+      spawn: async () => ({
+        output: verdictJson({}),
+        outputs: [],
+        costUsd: 0,
+        costKnown: false,
+        exitReason: 'success',
+        model: 'test',
+        family: 'test',
+      }),
     });
     await runReviewChain(ctx);
 

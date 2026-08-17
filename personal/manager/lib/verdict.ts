@@ -57,6 +57,7 @@ export interface AgentVerdict {
 }
 
 const MAX_ROOT_CAUSE_CHARS = 300;
+const VERDICT_KINDS = new Set(['pass', 'fail', 'blocked']);
 
 const DETERMINISTIC_GATES = new Set(['guard', 'lint', 'tsc', 'red-test', 'B8-assert']);
 
@@ -112,6 +113,23 @@ export function parseVerdict(output: string): AgentVerdict {
     advisories: stringList(v.advisories),
     root_cause: rootCause.slice(0, MAX_ROOT_CAUSE_CHARS),
   };
+}
+
+/**
+ * The newest thing the agent said that is verdict-SHAPED, not merely parseable.
+ *
+ * `parseVerdict` never fails — it normalizes anything into a `fail` — so "the
+ * newest message that parses" would let a closing sentence that happens to
+ * quote a JSON object outrank the real verdict two messages earlier.
+ */
+export function parseVerdictCandidates(candidates: readonly string[], fallback: string): AgentVerdict {
+  for (const candidate of candidates) {
+    const raw = extractJsonBlock(candidate);
+    if (!raw || typeof raw !== 'object') continue;
+    const kind = (raw as { verdict?: unknown }).verdict;
+    if (typeof kind === 'string' && VERDICT_KINDS.has(kind)) return parseVerdict(candidate);
+  }
+  return parseVerdict(fallback);
 }
 
 /** Appended to `caught` on a demoted gate so the reason survives into the log. */

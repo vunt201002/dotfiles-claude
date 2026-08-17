@@ -173,7 +173,7 @@ function chainContext(overrides: Partial<ChainContext> = {}): ChainContext {
     rootCause: 'the rule engine returns the base price',
     hasRealBrowser: false,
     exec,
-    spawn: async () => ({ output: PASS_VERDICT, costUsd: 0.01, costKnown: true, exitReason: 'success', model: 'm', family: 'anthropic' }),
+    spawn: async () => ({ output: PASS_VERDICT, outputs: [PASS_VERDICT], costUsd: 0.01, costKnown: true, exitReason: 'success', model: 'm', family: 'anthropic' }),
     ...overrides,
   };
 }
@@ -326,7 +326,7 @@ describe('the closing chain runs against the tree the agent changed', () => {
         workdir: resolveTaskWorkdir('wd-07', REPO, true),
         spawn: async (req) => {
           prompts.push(req.prompt);
-          return { output: PASS_VERDICT, costUsd: 0.01, costKnown: true, exitReason: 'success', model: 'm', family: 'codex' };
+          return { output: PASS_VERDICT, outputs: [PASS_VERDICT], costUsd: 0.01, costKnown: true, exitReason: 'success', model: 'm', family: 'codex' };
         },
       }),
     );

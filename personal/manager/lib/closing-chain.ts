@@ -49,7 +49,7 @@ import {
   type SpecCheckInput,
 } from './prompts';
 import { transportFailed } from './spawn';
-import { parseVerdict, type AgentVerdict, type GateReport } from './verdict';
+import { parseVerdictCandidates, type AgentVerdict, type GateReport } from './verdict';
 import { taskDiff, type TaskWorkdir } from './worktrees';
 
 export type ChainGate = 'B8-assert' | 'B8-judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
@@ -112,6 +112,7 @@ export interface GateSpawnRequest {
 
 export interface GateSpawnResult {
   output: string;
+  outputs: string[];
   costUsd: number;
   /** False when nobody priced the run. The gate log then carries no cost at all. */
   costKnown: boolean;
@@ -388,7 +389,7 @@ async function runLlmGate(ctx: ChainContext, gate: ChainGate, prompt: string): P
     write(ctx, report, cost);
     return { gate, reports: [report], verdict: null, assert: null, costUsd: result.costUsd, unavailable: true };
   }
-  const verdict = parseVerdict(result.output);
+  const verdict = parseVerdictCandidates(result.outputs, result.output);
   const report = { ...reportFromVerdict(gate, verdict), family: result.family };
   write(ctx, report, cost);
   return { gate, reports: [report], verdict, assert: null, costUsd: result.costUsd };
