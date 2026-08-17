@@ -10,7 +10,7 @@ import {
 import { verifyFixtures, runRedTestGate, runGuardGate, runLintGate, runTscGate, runTscRatchet, type Verdict } from './lib/gates';
 import { backendLabel, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skippedLlmGate } from './lib/llm-gates';
 import {
-  summarize, diffBaseline, diffAgainstBaseline, buildReport, render, exitCodeFor, unfitToFreeze, BASELINE_PATH,
+  summarize, diffBaseline, diffAgainstBaseline, buildReport, render, exitCodeFor, unfitToFreeze, writeBaseline, BASELINE_PATH,
   type GateStats, type OracleReport, type DiffContext,
 } from './lib/report';
 
@@ -601,7 +601,7 @@ describe('what may be frozen as a baseline', () => {
   test('a run with a gate that scored nothing is refused', () => {
     const report = reportWith([GUARD_AFTER_DENYLIST_SPLIT, RED_TEST_ALL_ERRORS]);
 
-    expect(unfitToFreeze(report, PAID_GATES_OFF)).toEqual([
+    expect(unfitToFreeze(report, PAID_GATES_OFF, report)).toEqual([
       'red-test scored nothing at all (19/19 fixtures errored)',
     ]);
   });
@@ -609,13 +609,13 @@ describe('what may be frozen as a baseline', () => {
   test('a run with a dead deterministic gate is refused', () => {
     const report = reportWith([GUARD_CANARY_FAILED, RED_TEST_SCORED]);
 
-    expect(unfitToFreeze(report, PAID_GATES_OFF)[0]).toContain('guard could not run: canary did not trip');
+    expect(unfitToFreeze(report, PAID_GATES_OFF, report)[0]).toContain('guard could not run: canary did not trip');
   });
 
   test('a run with an unverified fixture is refused', () => {
     const report = { ...reportWith([RED_TEST_SCORED]), fixtures_unverified: ['stage-whole-index: green on buggy'] };
 
-    expect(unfitToFreeze(report, PAID_GATES_OFF)).toEqual([
+    expect(unfitToFreeze(report, PAID_GATES_OFF, report)).toEqual([
       'a fixture does not demonstrate its bug: stage-whole-index: green on buggy',
     ]);
   });
@@ -628,13 +628,52 @@ describe('what may be frozen as a baseline', () => {
       SPEC_CHECK_NEVER_SCORED, REVIEWER_NEVER_SCORED,
     ]);
 
-    expect(unfitToFreeze(report, PAID_GATES_OFF)).toEqual([]);
+    expect(unfitToFreeze(report, PAID_GATES_OFF, report)).toEqual([]);
+  });
+
+  test('a run cannot drop a gate scored by the current baseline', () => {
+    const baseline = reportWith([RED_TEST_SCORED, SPEC_CHECK_SCORED]);
+    const report = reportWith([RED_TEST_SCORED, SPEC_CHECK_NEVER_SCORED]);
+
+    expect(unfitToFreeze(report, EVERYTHING_EXPECTED, baseline)).toEqual([
+      'spec-check scored nothing at all (19/19 fixtures errored)',
+    ]);
+  });
+
+  test('operator-disabled does not excuse dropping a gate scored by the current baseline', () => {
+    const baseline = reportWith([RED_TEST_SCORED, SPEC_CHECK_SCORED]);
+    const report = reportWith([RED_TEST_SCORED, SPEC_CHECK_NEVER_SCORED]);
+
+    expect(unfitToFreeze(report, PAID_GATES_OFF, baseline)).toEqual([
+      'spec-check scored nothing at all (19/19 fixtures errored)',
+    ]);
+  });
+
+  test('a run scoring the full set scored by the current baseline is fit to freeze', () => {
+    const baseline = reportWith([RED_TEST_SCORED, SPEC_CHECK_SCORED]);
+    const report = reportWith([RED_TEST_SCORED, SPEC_CHECK_SCORED]);
+
+    expect(unfitToFreeze(report, EVERYTHING_EXPECTED, baseline)).toEqual([]);
+  });
+
+  test('a healthy first run scores every declared gate family', () => {
+    const report = reportWith([RED_TEST_SCORED, SPEC_CHECK_SCORED]);
+
+    expect(unfitToFreeze(report, EVERYTHING_EXPECTED, null)).toEqual([]);
+  });
+
+  test('a degenerate first run that misses a declared gate family is refused', () => {
+    const report = reportWith([RED_TEST_SCORED, SPEC_CHECK_NEVER_SCORED]);
+
+    expect(unfitToFreeze(report, PAID_GATES_OFF, null)).toEqual([
+      'the llm gate family scored nothing at all',
+    ]);
   });
 
   test('gates that scored nothing are only excused by the same three channels', () => {
     const report = reportWith([RED_TEST_SCORED, SPEC_CHECK_NEVER_SCORED]);
 
-    expect(unfitToFreeze(report, EVERYTHING_EXPECTED)).toEqual([
+    expect(unfitToFreeze(report, EVERYTHING_EXPECTED, report)).toEqual([
       'spec-check scored nothing at all (19/19 fixtures errored)',
     ]);
   });
@@ -646,7 +685,7 @@ describe('what may be frozen as a baseline', () => {
   test('a run that does not say which fixtures it measured is refused', () => {
     const report = reportWith([RED_TEST_SCORED], { corpus: null });
 
-    expect(unfitToFreeze(report, PAID_GATES_OFF)).toEqual([
+    expect(unfitToFreeze(report, PAID_GATES_OFF, report)).toEqual([
       'this run does not record which fixtures it measured, so freezing it would pin numbers to a corpus nobody can name',
     ]);
   });
@@ -1592,6 +1631,25 @@ describe.skipIf(!llm.enabled)('oracle llm gates (ORACLE_LLM=1)', () => {
       expect(stats.applicable).toBe(cases.length);
     }
   }, 1_800_000);
+});
+
+describe('writeBaseline symlink guard', () => {
+  test('refuses to write when the baseline path is a symlink and leaves the link target untouched', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-wb-'));
+    const real = path.join(dir, 'real.json');
+    const link = path.join(dir, 'baseline.json');
+    const sentinel = '"untouched"\n';
+    try {
+      fs.writeFileSync(real, sentinel);
+      fs.symlinkSync(real, link);
+
+      const report = reportWith([RED_TEST_SCORED]);
+      expect(() => writeBaseline(report, link)).toThrow(/baseline\.json.*symbolic link/i);
+      expect(fs.readFileSync(real, 'utf-8')).toBe(sentinel);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 if (!llm.enabled) {

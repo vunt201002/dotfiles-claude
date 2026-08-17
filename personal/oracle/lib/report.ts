@@ -221,8 +221,18 @@ function emptyDiff(hasBaseline: boolean): BaselineDiff {
  * nothing retires that gate's ratchet silently: the next healthy run reads as a
  * first measurement rather than a recovery.
  */
-export function unfitToFreeze(report: OracleReport, context: DiffContext = STRICT): string[] {
+export function unfitToFreeze(
+  report: OracleReport,
+  context: DiffContext = STRICT,
+  baseline: OracleReport | null = readBaseline(),
+): string[] {
   const reasons = inconsistencies(report, 'this run');
+  const baselineScoredGates = new Set(
+    baseline?.gates
+      .filter(g => g.detection_rate !== null || g.fp_rate !== null)
+      .map(g => g.gate) ?? [],
+  );
+  const currentGates = new Set(report.gates.map(g => g.gate));
   if (!report.corpus) {
     reasons.push('this run does not record which fixtures it measured, so freezing it would pin numbers to a corpus nobody can name');
   }
@@ -236,8 +246,22 @@ export function unfitToFreeze(report: OracleReport, context: DiffContext = STRIC
     }
     const scoredNothing = g.detection_rate === null && g.fp_rate === null;
     const switchedOff = context.operatorDisabledGates.includes(g.gate) && g.available === false;
-    if (scoredNothing && !switchedOff) {
+    if (scoredNothing && (!switchedOff || baselineScoredGates.has(g.gate))) {
       reasons.push(`${g.gate} scored nothing at all (${g.error}/${report.fixtures_total} fixtures errored)`);
+    }
+  }
+  for (const gate of baselineScoredGates) {
+    if (!currentGates.has(gate)) {
+      reasons.push(`${gate} is absent from this run even though the current baseline scores it`);
+    }
+  }
+  if (!baseline) {
+    const families = new Set(report.gates.map(g => g.family));
+    for (const family of families) {
+      const familyScored = report.gates.some(
+        g => g.family === family && (g.detection_rate !== null || g.fp_rate !== null),
+      );
+      if (!familyScored) reasons.push(`the ${family} gate family scored nothing at all`);
     }
   }
   return reasons;
@@ -495,13 +519,34 @@ export function diffAgainstBaseline(
 }
 
 export function diffBaseline(report: OracleReport, context: DiffContext = STRICT): BaselineDiff {
-  if (!fs.existsSync(BASELINE_PATH)) return emptyDiff(false);
-  const base = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8')) as OracleReport;
+  const base = readBaseline();
+  if (!base) return emptyDiff(false);
   return diffAgainstBaseline(report, base, context);
 }
 
-export function writeBaseline(report: OracleReport): void {
-  fs.writeFileSync(BASELINE_PATH, `${JSON.stringify(report, null, 2)}\n`);
+function readBaseline(): OracleReport | null {
+  if (!fs.existsSync(BASELINE_PATH)) return null;
+  return JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8')) as OracleReport;
+}
+
+/**
+ * Freeze this run as the yardstick.
+ *
+ * A symlink at the destination is refused rather than followed: the baseline is
+ * the one file whose contents are the operator's own decision, and writing
+ * through a link would hand that decision to whoever placed the link.
+ */
+export function writeBaseline(report: OracleReport, dest: string = BASELINE_PATH): void {
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.lstatSync(dest);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  if (stat?.isSymbolicLink()) {
+    throw new Error(`writeBaseline: ${dest} is a symbolic link — refusing to write`);
+  }
+  fs.writeFileSync(dest, `${JSON.stringify(report, null, 2)}\n`);
 }
 
 const PAD = 16;
