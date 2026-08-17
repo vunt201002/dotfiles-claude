@@ -162,6 +162,7 @@ export interface AssertCommandSpec {
 export interface ProjectEntry {
   path: string;
   assert?: Array<string | AssertCommandSpec>;
+  oracle_kind?: string[];
 }
 
 export interface ProjectRegistry {
@@ -178,7 +179,12 @@ export function projectEntry(project: string): ProjectEntry | null {
   const value = loadProjectRegistry()[project];
   if (typeof value === 'string') return { path: value };
   if (value && typeof value === 'object' && typeof value.path === 'string') {
-    return Array.isArray(value.assert) ? { path: value.path, assert: value.assert } : { path: value.path };
+    const entry: ProjectEntry = { path: value.path };
+    if (Array.isArray(value.assert)) entry.assert = value.assert;
+    if (Array.isArray(value.oracle_kind) && value.oracle_kind.every((kind) => typeof kind === 'string')) {
+      entry.oracle_kind = value.oracle_kind;
+    }
+    return entry;
   }
   return null;
 }
@@ -195,7 +201,8 @@ export function rememberAssertCommands(project: string, commands: Array<string |
   if (existing === undefined) return false;
   const entryPath = typeof existing === 'string' ? existing : existing.path;
   if (typeof entryPath !== 'string' || !entryPath) return false;
-  registry[project] = { path: entryPath, assert: commands };
+  const oracleKind = typeof existing === 'object' ? existing.oracle_kind : undefined;
+  registry[project] = oracleKind ? { path: entryPath, assert: commands, oracle_kind: oracleKind } : { path: entryPath, assert: commands };
   atomicWriteJson(projectsFile(), registry);
   return true;
 }
@@ -239,8 +246,15 @@ export function registerProject(project: string, dir: string): RegisterResult {
     existing && typeof existing === 'object' && existingPath && path.resolve(existingPath) === abs
       ? existing.assert
       : undefined;
-
-  registry[name] = keepAssert ? { path: abs, assert: keepAssert } : { path: abs };
+  const keepOracleKind =
+    existing && typeof existing === 'object' && existingPath && path.resolve(existingPath) === abs
+      ? existing.oracle_kind
+      : undefined;
+  registry[name] = {
+    path: abs,
+    ...(keepAssert ? { assert: keepAssert } : {}),
+    ...(keepOracleKind ? { oracle_kind: keepOracleKind } : {}),
+  };
   ensureManagerDirs();
   atomicWriteJson(projectsFile(), registry);
   return { ok: true, path: abs, reason: '' };

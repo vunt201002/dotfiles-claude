@@ -1,6 +1,27 @@
-import { describe, test, expect } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterAll, beforeEach, describe, test, expect } from 'bun:test';
 import { applyRouterOverrides, extractJsonBlock, parseEnvelope, validateEnvelope } from '../lib/envelope';
+import { ensureManagerDirs, projectsFile } from '../lib/paths';
+import { sizingPrompt } from '../lib/prompts';
 import type { TaskEnvelope } from '../types';
+
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-envelope-'));
+process.env.MANAGER_HOME = HOME;
+
+function register(value: unknown): void {
+  fs.writeFileSync(projectsFile(), JSON.stringify({ kivora: value }));
+}
+
+beforeEach(() => {
+  ensureManagerDirs();
+  register({ path: '/tmp/kivora', oracle_kind: ['playwright', 'tsc'] });
+});
+
+afterAll(() => {
+  fs.rmSync(HOME, { recursive: true, force: true });
+});
 
 function goodEnvelope(overrides: Partial<TaskEnvelope> = {}): TaskEnvelope {
   return {
@@ -73,6 +94,7 @@ describe('validateEnvelope', () => {
 
 describe('router overrides', () => {
   test('an empty oracle list forces oracle_available false and needs_human', () => {
+    register({ path: '/tmp/kivora', oracle_kind: [] });
     const { envelope, overrides } = applyRouterOverrides(goodEnvelope({ oracle_kind: [] }));
     expect(envelope.oracle_available).toBe(false);
     expect(envelope.needs_human).toBe(true);
@@ -80,8 +102,34 @@ describe('router overrides', () => {
   });
 
   test('no oracle means no autonomous lane even when the list is honest', () => {
+    register({ path: '/tmp/kivora', oracle_kind: [] });
     const { envelope } = applyRouterOverrides(goodEnvelope({ oracle_kind: [], oracle_available: false }));
     expect(envelope.needs_human).toBe(true);
+  });
+
+  test('unknown never raises an honest "no oracle" to yes', () => {
+    fs.writeFileSync(projectsFile(), JSON.stringify({ someone_else: '/tmp/other' }));
+    const { envelope, overrides } = applyRouterOverrides(goodEnvelope({ oracle_kind: [], oracle_available: false }));
+    expect(envelope.oracle_kind).toEqual(['unknown']);
+    expect(envelope.oracle_available).toBe(false);
+    expect(overrides.join(' ')).toContain('verifies no oracle');
+  });
+
+  test('unrecognized leaves the claim alone and says it is unchecked', () => {
+    register({ path: '/tmp/kivora', assert: ['./scripts/verify-everything.sh'] });
+    const { envelope, overrides } = applyRouterOverrides(goodEnvelope({ oracle_kind: [], oracle_available: true }));
+    expect(envelope.oracle_kind).toEqual(['unrecognized']);
+    expect(envelope.oracle_available).toBe(true);
+    expect(overrides.join(' ')).toContain("stays the agent's unchecked claim");
+  });
+
+  test('a registry oracle raises an agent that undersold what can check it', () => {
+    register({ path: '/tmp/kivora', assert: ['bun test personal/manager/'] });
+    const { envelope, overrides } = applyRouterOverrides(goodEnvelope({ oracle_kind: [], oracle_available: false }));
+    expect(envelope.oracle_kind).toEqual(['bun-test']);
+    expect(envelope.oracle_available).toBe(true);
+    expect(envelope.needs_human).toBe(false);
+    expect(overrides.join(' ')).toContain('oracle_available=true');
   });
 
   test('a QC bounce forces bug-lon', () => {
@@ -116,14 +164,56 @@ describe('router overrides', () => {
   });
 
   test('the input envelope is left untouched', () => {
+    register({ path: '/tmp/kivora', oracle_kind: [] });
     const input = goodEnvelope({ oracle_kind: [] });
     applyRouterOverrides(input);
     expect(input.oracle_available).toBe(true);
+  });
+
+  test('an explicit registry oracle_kind beats the agent claim', () => {
+    register({ path: '/tmp/kivora', oracle_kind: ['playwright', 'lint'] });
+    const { envelope } = applyRouterOverrides(goodEnvelope({ oracle_kind: ['jest'] }));
+    expect(envelope.oracle_kind).toEqual(['playwright', 'lint']);
+  });
+
+  test('assert commands derive oracle kinds instead of trusting the agent', () => {
+    register({ path: '/tmp/kivora', assert: ['npx tsc --noEmit', 'npx eslint .'] });
+    const { envelope } = applyRouterOverrides(goodEnvelope({ oracle_kind: ['playwright'] }));
+    expect(envelope.oracle_kind).toEqual(['tsc', 'lint']);
+  });
+
+  test('a hallucinated jest oracle is dropped for a bun test project and recorded', () => {
+    register({ path: '/tmp/kivora', assert: ['bun test personal/manager/'] });
+    const { envelope, overrides } = applyRouterOverrides(goodEnvelope({ oracle_kind: ['jest'] }));
+    expect(envelope.oracle_kind).toEqual(['bun-test']);
+    expect(overrides).toContain(
+      'oracle_kind ["jest"] -> ["bun-test"] (registry ["bun-test"], agent my-chrome absent)',
+    );
+  });
+
+  test('my-chrome survives registry reconciliation', () => {
+    register({ path: '/tmp/kivora', assert: ['bun test'] });
+    const { envelope } = applyRouterOverrides(goodEnvelope({ oracle_kind: ['jest', 'my-chrome'] }));
+    expect(envelope.oracle_kind).toEqual(['bun-test', 'my-chrome']);
+  });
+
+  test('an unregistered project remains unknown instead of becoming no oracle', () => {
+    fs.writeFileSync(projectsFile(), '{}');
+    const { envelope } = applyRouterOverrides(goodEnvelope({ oracle_kind: [] }));
+    expect(envelope.oracle_kind).toEqual(['unknown']);
+    expect(envelope.oracle_available).toBe(true);
+  });
+
+  test('an unrecognized assert command stays visibly unrecognized', () => {
+    register({ path: '/tmp/kivora', assert: ['node scripts/verify.js'] });
+    const { envelope } = applyRouterOverrides(goodEnvelope({ oracle_kind: [] }));
+    expect(envelope.oracle_kind).toEqual(['unrecognized']);
   });
 });
 
 describe('parseEnvelope', () => {
   test('parses agent prose plus a fenced block and applies overrides', () => {
+    register({ path: '/tmp/kivora', oracle_kind: [] });
     const text = `Here is my sizing.\n\n\`\`\`json\n${JSON.stringify(goodEnvelope({ oracle_kind: [] }))}\n\`\`\``;
     const result = parseEnvelope(text);
     expect(result.ok).toBe(true);
@@ -135,5 +225,14 @@ describe('parseEnvelope', () => {
     const result = parseEnvelope('I could not size this.');
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toContain('no JSON object');
+  });
+});
+
+describe('sizing prompt', () => {
+  test('asks the agent only about the browser capability it can know', () => {
+    const prompt = sizingPrompt('kivora', 't105');
+    expect(prompt).toContain('Do not guess them');
+    expect(prompt).toContain('use ["my-chrome"]');
+    expect(prompt).not.toContain('playwright, tsc, jest');
   });
 });

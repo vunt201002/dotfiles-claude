@@ -9,10 +9,33 @@
 export type TaskSize = 'S' | 'M' | 'L' | 'XL';
 export type Uncertainty = 'low' | 'med' | 'high';
 export type Lane = 'trivial' | 'bug-nho' | 'bug-lon' | 'feature';
-export type OracleKind = 'playwright' | 'tsc' | 'jest' | 'lint' | 'emulator' | 'my-chrome';
+export type OracleKind =
+  | 'playwright'
+  | 'tsc'
+  | 'jest'
+  | 'lint'
+  | 'emulator'
+  | 'my-chrome'
+  | 'bun-test'
+  | 'vitest'
+  | 'pytest'
+  | 'unknown'
+  | 'unrecognized';
 export type TaskSource = 'cli' | 'api' | 'telegram';
 
 export const LANES: readonly Lane[] = ['trivial', 'bug-nho', 'bug-lon', 'feature'];
+
+/**
+ * The two `OracleKind` values that record the ABSENCE of knowledge rather than
+ * an oracle: `unknown` (the registry has nothing to say about this project) and
+ * `unrecognized` (it names a command nobody here can classify).
+ *
+ * They keep that absence visible wherever `oracle_kind` is printed, so they
+ * must never be counted as evidence — `oracle_available` derived from list
+ * length alone would read "we do not know" as "yes", which is the one thing
+ * this field exists to prevent.
+ */
+export const UNVERIFIED_ORACLE_KINDS: readonly OracleKind[] = ['unknown', 'unrecognized'];
 
 /** §3.1 — what a main agent hands back after sizing an issue. */
 export interface TaskEnvelope {

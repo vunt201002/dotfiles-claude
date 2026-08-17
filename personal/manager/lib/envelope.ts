@@ -1,5 +1,5 @@
 /**
- * Task envelope parsing, validation, and the four router overrides (§3.1, §7.1).
+ * Task envelope parsing, validation, and router overrides (§3.1, §7.1).
  *
  * A main agent answers in prose with a JSON block. The manager refuses to act
  * on anything it cannot validate: a missing field is a hard reject, not a
@@ -8,11 +8,24 @@
  */
 
 import type { Lane, OracleKind, TaskEnvelope, TaskSize, Uncertainty } from '../types';
-import { LANES } from '../types';
+import { LANES, UNVERIFIED_ORACLE_KINDS } from '../types';
+import { projectEntry } from './paths';
 
 const SIZES: readonly TaskSize[] = ['S', 'M', 'L', 'XL'];
 const UNCERTAINTIES: readonly Uncertainty[] = ['low', 'med', 'high'];
 const LANE_RANK: Record<Lane, number> = { trivial: 0, 'bug-nho': 1, 'bug-lon': 2, feature: 3 };
+const UNKNOWN_ORACLE: OracleKind = 'unknown';
+const UNRECOGNIZED_ORACLE: OracleKind = 'unrecognized';
+const REAL_BROWSER_ORACLE: OracleKind = 'my-chrome';
+const ASSERT_ORACLE_KINDS: ReadonlyArray<{ kind: OracleKind; shape: RegExp }> = [
+  { kind: 'playwright', shape: /\bplaywright\b/i },
+  { kind: 'jest', shape: /\bjest\b/i },
+  { kind: 'tsc', shape: /\b(tsc|typecheck|type-check)\b/i },
+  { kind: 'lint', shape: /\b(eslint|oxlint|lint)\b/i },
+  { kind: 'bun-test', shape: /\bbun\s+(?:run\s+)?test(?:\s|:|$)/i },
+  { kind: 'vitest', shape: /\bvitest\b/i },
+  { kind: 'pytest', shape: /\bpytest\b/i },
+];
 
 /** Areas where a cheap lane is never acceptable (§7.1 override 3). */
 const SENSITIVE_AREA = /\b(auth|authn|authz|login|session|token|oauth|payment|billing|checkout|charge|refund|migration|migrate|schema)\b/i;
@@ -163,8 +176,22 @@ export interface OverrideContext {
   roundTwoFail?: boolean;
 }
 
+function registryOracleKinds(project: string): OracleKind[] {
+  const entry = projectEntry(project);
+  if (!entry) return [UNKNOWN_ORACLE];
+  if (entry.oracle_kind !== undefined) return entry.oracle_kind as OracleKind[];
+  if (!entry.assert || entry.assert.length === 0) return [UNKNOWN_ORACLE];
+
+  const kinds = entry.assert.flatMap((spec) => {
+    const command = typeof spec === 'string' ? spec : spec.cmd;
+    const matches = ASSERT_ORACLE_KINDS.filter(({ shape }) => shape.test(command)).map(({ kind }) => kind);
+    return matches.length > 0 ? matches : [UNRECOGNIZED_ORACLE];
+  });
+  return [...new Set(kinds)];
+}
+
 /**
- * Apply the four router overrides. Returns a NEW envelope; the original is
+ * Apply router overrides. Returns a NEW envelope; the original is
  * kept intact so the report can show what the agent proposed versus what the
  * manager enforced.
  */
@@ -175,9 +202,30 @@ export function applyRouterOverrides(input: TaskEnvelope, ctx: OverrideContext =
   const out: TaskEnvelope = { ...input, oracle_kind: [...input.oracle_kind] };
   const overrides: string[] = [];
 
-  if (out.oracle_kind.length === 0 && out.oracle_available) {
-    out.oracle_available = false;
-    overrides.push('oracle_kind empty -> oracle_available=false');
+  const fromRegistry = registryOracleKinds(input.project);
+  const browserOracle = input.oracle_kind.includes(REAL_BROWSER_ORACLE) ? [REAL_BROWSER_ORACLE] : [];
+  const reconciledKinds = [...new Set([...fromRegistry, ...browserOracle])];
+  if (JSON.stringify(input.oracle_kind) !== JSON.stringify(reconciledKinds)) {
+    overrides.push(
+      `oracle_kind ${JSON.stringify(input.oracle_kind)} -> ${JSON.stringify(reconciledKinds)} (registry ${JSON.stringify(fromRegistry)}, agent my-chrome ${browserOracle.length > 0 ? 'kept' : 'absent'})`,
+    );
+  }
+  out.oracle_kind = reconciledKinds;
+  const verifiedKinds = reconciledKinds.filter((kind) => !UNVERIFIED_ORACLE_KINDS.includes(kind));
+  if (verifiedKinds.length > 0) {
+    if (!out.oracle_available) {
+      out.oracle_available = true;
+      overrides.push(`verified oracles ${JSON.stringify(verifiedKinds)} -> oracle_available=true`);
+    }
+  } else if (reconciledKinds.length === 0) {
+    if (out.oracle_available) {
+      out.oracle_available = false;
+      overrides.push('oracle_kind empty -> oracle_available=false');
+    }
+  } else {
+    overrides.push(
+      `oracle_kind ${JSON.stringify(reconciledKinds)} verifies no oracle — oracle_available=${out.oracle_available} stays the agent's unchecked claim`,
+    );
   }
   if (!out.oracle_available && !out.needs_human) {
     out.needs_human = true;

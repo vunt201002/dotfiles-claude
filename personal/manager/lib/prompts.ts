@@ -58,13 +58,13 @@ Lane rubric:
 - bug-lon: size >= M, or uncertainty >= med, or QC already bounced it once
 - feature: new work to build
 
-Overrides you must respect: no oracle means needs_human; anything touching auth, payment, or data migration is at minimum bug-lon; more than two assumptions means needs_human.
+Overrides you must respect: anything touching auth, payment, or data migration is at minimum bug-lon; more than two assumptions means needs_human. The manager, not you, applies the no-oracle override from registry data.
 
 Answer in prose, then close with ONE fenced json block holding exactly these keys:
 \`\`\`json
-{"project":"${project}","issue":"${issue}","title":"","size":"S|M|L|XL","uncertainty":"low|med|high","lane":"trivial|bug-nho|bug-lon|feature","why":"","oracle_available":true,"oracle_kind":["playwright","tsc"],"needs_human":false,"blocking_questions":[],"assumptions":[],"assumption_count":0,"est_cost_usd":0,"est_turns":0}
+{"project":"${project}","issue":"${issue}","title":"","size":"S|M|L|XL","uncertainty":"low|med|high","lane":"trivial|bug-nho|bug-lon|feature","why":"","oracle_available":false,"oracle_kind":[],"needs_human":false,"blocking_questions":[],"assumptions":[],"assumption_count":0,"est_cost_usd":0,"est_turns":0}
 \`\`\`
-oracle_kind lists what can actually check this work today: playwright, tsc, jest, lint, emulator, my-chrome. An empty list means no oracle exists.`;
+The manager gets test and check oracles from the project registry. Do not guess them or set needs_human because this advisory list is empty. oracle_kind is advisory only for a real browser capability: use ["my-chrome"] when you can actually use my-chrome for this task, otherwise use []. Set oracle_available to match that advisory list; the manager reconciles both fields with the registry.`;
 }
 
 export function executePrompt(envelope: TaskEnvelope, attempt: number, priorFailure: string): string {
