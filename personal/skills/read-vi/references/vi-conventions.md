@@ -266,6 +266,24 @@ tiếng Việt. Biết khung nguồn thì bắt được cả họ hàng của n
 
 | 105 | `- **Standard mode** — coding agent đầy đủ: …` *(gạch đầu dòng)* | `- **Standard mode** là coding agent đầy đủ: …` · `- **Code mode**: vẫn đúng bộ năng lực…` | em-dash **thay cho động từ** ở đầu một mục liệt kê. Khác #35: #35 là em-dash chặt một câu văn xuôi dài, dòng này là em-dày nối tên với định nghĩa. Grep riêng được: `** — `. **Luật sửa:** vế sau là cụm danh từ → dùng `là`; vế sau là vị ngữ → dùng dấu hai chấm; vế sau đã có sẵn một dấu hai chấm → buộc dùng `là`, đừng chồng hai dấu |
 
+### §B1-skip. Dòng không máy hoá được — do người quyết
+
+`vi-score.ts` tự loại các biến thể có cụm in đậm quá ngắn/quá phổ thông, cụm thuần ASCII, hay
+chứa placeholder `<...>`. Bảng dưới là những dòng phải loại bằng **phán quyết**, vì máy không
+phân biệt được: cụm in đậm ở đó là *ví dụ cụ thể của một bài*, hoặc là một từ tiếng Việt bình
+thường mà bản thân nó không sai — luật thật nằm ở chỗ khác trong dòng.
+
+Loại khỏi phần chấm máy **không có nghĩa là bỏ luật**. Editor vẫn đọc và vẫn áp dòng đó; chỉ
+là script không đếm được nó mà không sinh nhiễu.
+
+| Dòng | Cụm bị bắt | Vì sao loại |
+|---|---|---|
+| 66 | tồn tại và duy nhất | cụm toán riêng của bài dynamic programming; chỉ khớp lại chính bài đẻ ra nó |
+| 82 | chẳng hạn | từ tiếng Việt bình thường; luật thật là chỗ đặt trong ngoặc đơn, không phải bản thân từ |
+| 83 | theo cách | như trên — `theo cách` tự nó không sai, cái sai là khung câu quanh nó |
+
+Thêm dòng vào đây khi một hit hoá ra là nhiễu chứ không phải lỗi dịch, theo đúng §D.
+
 ### §B2. Hai lỗi cấu trúc (không phải chuỗi ký tự — phải đọc mới thấy)
 
 **a) Câu để nguyên độ dài tiếng Anh.** Tiếng Anh xếp chồng mệnh đề quan hệ rất thoải mái;
@@ -316,6 +334,9 @@ Theo đúng hình dạng của `design-eye §B`: tầng cơ học chạy trướ
 taste chạy sau.
 
 ### §C1. Tầng cơ học — grep được, không cần "gu"
+
+Chạy tầng này bằng `bun ~/.claude/skills/read-vi/bin/vi-score.ts c1 <file>`. Mục cuối cần
+so byte với bản gốc nên script không kiểm được; vẫn phải làm tay.
 
 Chạy trên đúng file tiếng Việt cuối cùng. Mỗi mục phải **0 hit**, hoặc từng hit còn lại
 phải được gọi tên và giải thích vì sao giữ.
