@@ -157,7 +157,12 @@ nội bộ** + rubric 15 câu. Project có `DESIGN.md` → đó là chuẩn, đ�
 | 19 | Widget chỉ hỏng trên MỘT SỐ theme | CSS host page bleed (reset, `!important`, inherit) | repro theo theme; diff computed styles vs trang sạch; fix = scoping | 0 |
 | 20 | Modal/dropdown bị cắt ở mép container | ancestor `overflow:hidden` (hoặc transform) clip popout | popout đứt đúng biên 1 parent; walk ancestors | 0 |
 | 21 | Control nổi (close/back/FAB) chỉ đè content SAU KHI cuộn | control out-of-flow là SIBLING của scroller chứ không nằm trong nó → rect bất biến theo scroll, content trôi qua bên dưới | `getBoundingClientRect()` tại 3+ scrollTop: chỉ 1 giá trị `top` ⇒ bị ghim. Fix = đưa vào header `flex-shrink:0` ngoài scroller, KHÔNG phải chỉnh z-index/offset | 1 |
-| 22 | Cùng 1 component/state hiển thị khác nhau giữa các surface; QC chỉ báo 1 surface | markup+CSS duplicate nguyên si qua N surface, một bản drift sang bậc token khác | grep tên class → ra >1 file thì so *bậc token* từng bản TRƯỚC khi đổ tại theme/rem; fix phải quét đủ N bản | 1 |
+| 22 | Cùng 1 component/state hiển thị khác nhau giữa các surface; QC chỉ báo 1 surface | markup+CSS duplicate nguyên si qua N surface, một bản drift sang bậc token khác | grep tên class → ra >1 file thì so *bậc token* từng bản TRƯỚC khi đổ tại theme/rem; fix phải quét đủ N bản | 2 |
+| 23 | Cùng một nhãn hiện 2 lần: heading của card + label của control ngay dưới, **cùng bậc chữ** | component tự render heading mặc định, caller cũng render heading riêng — caller quên prop opt-out mà chính component **đã có sẵn** | a11y tree thấy 2 heading trùng chữ lệch 1 bậc (h3 rồi h4); grep prop opt-out trong component rồi xem call site anh em đã truyền chưa | 1 |
+| 24 | Góc của một control lệch hẳn so với card xung quanh | control tự ý thoát thang radius bằng pill `999px`/`9999px` | grep `999px\|9999px\|border-radius: 50%` trong CSS admin. Radius thường khai **2 lần** — track ngoài và segment active trong; sửa mỗi lớp ngoài để lại pill trong hộp bo, hở hình lưỡi liềm ở góc | 1 |
+| 25 | Title/header chỉ chiếm một phần bề ngang dù container đã đủ rộng; text wrap sớm | component vendor tự cap `max-width` theo đơn vị `ch` khi một prop *khác* được set (Polaris: `subtitle` + `secondaryActions` → `45ch`) | `rect.width` của block **bằng đúng** computed `max-width` ⇒ đọc *class* của element rồi tra rule trong stylesheet vendor. Đừng đổ tại container | 1 |
+| 26 | Nội dung bị cắt đáy trong modal, mà **không có thanh cuộn nào ở đâu cả** | box `max-height` + `overflow:hidden` vừa tự clip vừa **bỏ đói** scroll container của ancestor — ancestor cấu hình đúng nhưng không bao giờ nhận được overflow | so `scrollHeight` vs `clientHeight` trên box, RỒI đếm element trong subtree có `overflow-y:auto/scroll` kèm overflow thật — ra **0** là dính. Khác #20 (ancestor clip popout) và #15 (height cứng) | 1 |
+| 27 | Element shrink-wrap (`inline-flex`) bỗng giãn hết track khi làm con trực tiếp của grid/flex | grid/flex **blockify** con: `display:inline-flex` → `flex` | so rect của item với rect của con bên trong; lệch ⇒ wrapper span là load-bearing, đừng xoá vì tưởng thừa | 1 |
 
 (Bản đầy đủ 28 pattern + nguồn từng dòng: `personal/docs/claude-smarter-research-2026-07-20.md` Phần 2.)
 
@@ -171,6 +176,11 @@ nội bộ** + rubric 15 câu. Project có `DESIGN.md` → đó là chuẩn, đ�
 - KHÔNG đóng fix mobile khi mới nhìn viewport desktop (matrix bắt buộc — my-frontend-fix bước 2).
 - KHÔNG kết luận "sai size = do rem/62.5%" khi token đã là px — đọc *declared value* của rule (`sheet.cssRules`) trước rồi mới nghi cascade; nguyên nhân hay gặp hơn là chọn nhầm bậc trong type ramp.
 - KHÔNG đo overlap bằng `getBoundingClientRect()` thô khi element nằm trong scroller — rect không bị clip nên sinh false positive/negative; giao với client rect của scroll container trước.
+- KHÔNG xoá heading trùng bằng cách sửa component hay ẩn bằng CSS — dùng đúng prop opt-out component đã có, theo cách call site anh em đang làm (sửa component sẽ đổi mặc định cho MỌI caller khác).
+- KHÔNG gộp cặp `overflow-x`/`overflow-y` khác giá trị thành shorthand `overflow` khi dọn dẹp — cặp tách rời thường là chủ đích, và gộp lại sẽ bỏ đói scroll container của ancestor (§D1 #26).
+- KHÔNG đóng fix "chữ to quá" chỉ bằng `font-size` — đo *natural single-line width* của label so với bề ngang content thật (đã trừ padding + icon + gap) trước. Chrome ăn >50% bề ngang thì font-size một mình không cứu được, và fix sẽ bị QC trả về.
+- KHÔNG lấy `options[0]` làm fallback cho control kiểu enum đã có default ở tầng dữ liệu — đọc default của chính migration helper/resolver mà dùng, nếu không admin sẽ hiển thị một giá trị mà storefront không render.
+- KHÔNG kết luận "header hẹp hơn body" khi chưa đo **cả hai mép của cả hai** — cái hẹp thường là block *con* bị vendor cap (§D1 #25), không phải container.
 - *(append tại đây khi bug mới dạy được điều cấm mới)*
 
 ---
