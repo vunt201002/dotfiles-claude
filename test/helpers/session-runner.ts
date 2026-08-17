@@ -131,6 +131,7 @@ export async function runSkillTest(options: {
    *  per-test GSTACK_HOME overrides so the test doesn't have to spell out
    *  env setup in the prompt itself. */
   env?: Record<string, string>;
+  requiresOperatorCredentials?: boolean;
 }): Promise<SkillTestResult> {
   const {
     prompt,
@@ -184,7 +185,10 @@ export async function runSkillTest(options: {
     // AskUserQuestion failure rather than emit a prose question no human reads). A
     // suite exercising the INTERACTIVE prose-fallback path opts out by passing
     // `env: { GSTACK_HEADLESS: '' }` — extraEnv wins because it spreads last.
-    env: hermeticChildEnv({ GSTACK_HEADLESS: '1', ...extraEnv }),
+    env: hermeticChildEnv(
+      { GSTACK_HEADLESS: '1', ...extraEnv },
+      { requiresOperatorCredentials: options.requiresOperatorCredentials },
+    ),
     stdin: new Blob([prompt]),
     stdout: 'pipe',
     stderr: 'pipe',

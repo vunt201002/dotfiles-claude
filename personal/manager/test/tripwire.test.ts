@@ -85,6 +85,23 @@ function offenders(pattern: RegExp, allowed: string[]): string[] {
   return hits;
 }
 
+function runnerOptions(name: string): string {
+  const source = fs.readFileSync(path.join(MANAGER_DIR, SPAWN_MODULE), 'utf-8');
+  const match = source.match(new RegExp(`const result = await ${name}\\(\\{([\\s\\S]*?)\\n    \\}\\);`));
+  expect(match, `${name} options must remain statically inspectable`).not.toBeNull();
+  return match?.[1] ?? '';
+}
+
+describe('manager runner credential wiring', () => {
+  test('Agent SDK manager port requires operator credentials', () => {
+    expect(runnerOptions('runAgentSdkTest')).toContain('requiresOperatorCredentials: true');
+  });
+
+  test('Claude CLI manager port requires operator credentials', () => {
+    expect(runnerOptions('runSkillTest')).toContain('requiresOperatorCredentials: true');
+  });
+});
+
 describe('every agent spawn goes through the shared semaphore', () => {
   test('1. runAgentSdkTest is only called from lib/spawn.ts', () => {
     const hits = offenders(/\brunAgentSdkTest\s*\(/, [SPAWN_MODULE]);

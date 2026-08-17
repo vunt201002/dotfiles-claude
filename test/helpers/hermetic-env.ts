@@ -73,11 +73,22 @@ export interface HermeticEnvOpts {
   /** Per-runner additional allowed names (exact match) or prefixes (entries
    * ending in '*'). Example: codex runner passes ['OPENAI_API_KEY', 'CODEX_*']. */
   extraAllow?: string[];
+  requiresOperatorCredentials?: boolean;
 }
 
 /** EVALS_HERMETIC !== '0'. Read at call time (see module doc — ESM hoist). */
 export function isHermeticEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.EVALS_HERMETIC !== '0';
+}
+
+function completeChildEnv(
+  base: NodeJS.ProcessEnv,
+  overrides?: Record<string, string | undefined>,
+): Record<string, string> {
+  const complete: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) if (v !== undefined) complete[k] = v;
+  for (const [k, v] of Object.entries(overrides ?? {})) if (v !== undefined) complete[k] = v;
+  return complete;
 }
 
 /**
@@ -94,10 +105,7 @@ export function buildHermeticEnv(
 ): Record<string, string> {
   if (!isHermeticEnabled(base)) {
     // Escape hatch: byte-identical to the legacy spread.
-    const legacy: Record<string, string> = {};
-    for (const [k, v] of Object.entries(base)) if (v !== undefined) legacy[k] = v;
-    for (const [k, v] of Object.entries(overrides ?? {})) if (v !== undefined) legacy[k] = v;
-    return legacy;
+    return completeChildEnv(base, overrides);
   }
 
   const promoted = promotedEnv(base);
@@ -331,6 +339,9 @@ export function hermeticChildEnv(
   overrides?: Record<string, string | undefined>,
   opts?: HermeticEnvOpts,
 ): Record<string, string> {
+  if (opts?.requiresOperatorCredentials) {
+    return completeChildEnv(process.env, overrides);
+  }
   if (!isHermeticEnabled()) {
     return buildHermeticEnv(process.env, {}, overrides, opts);
   }

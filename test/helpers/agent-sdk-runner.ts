@@ -100,6 +100,7 @@ export interface RunAgentSdkOptions {
   permissionMode?: PermissionMode;
   settingSources?: SettingSource[];
   env?: Record<string, string>;
+  requiresOperatorCredentials?: boolean;
   pathToClaudeCodeExecutable?: string;
   testName?: string;
   runId?: string;
@@ -376,7 +377,9 @@ export async function runAgentSdkTest(
         permissionMode: resolvedPermissionMode,
         allowDangerouslySkipPermissions: resolvedPermissionMode === 'bypassPermissions',
         settingSources: opts.settingSources ?? [],
-        env: hermeticChildEnv(opts.env),
+        env: hermeticChildEnv(opts.env, {
+          requiresOperatorCredentials: opts.requiresOperatorCredentials,
+        }),
         pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
         ...(hasCanUseTool ? { canUseTool: opts.canUseTool } : {}),
         ...(opts.signal ? { abortController: controllerForSignal(opts.signal) } : {}),

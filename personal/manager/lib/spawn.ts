@@ -269,6 +269,7 @@ export const agentSdkSpawnPort: SpawnPort = {
       allowedTools: tools.allowedTools,
       disallowedTools: tools.disallowedTools,
       env: childEnv(req),
+      requiresOperatorCredentials: true,
       testName: `${req.taskId}:${req.role}`,
       signal: req.signal,
     });
@@ -301,6 +302,7 @@ export const cliSpawnPort: SpawnPort = {
       allowedTools: toolsFor(req, policy).allowedTools,
       testName: `${req.taskId}:${req.role}`,
       env: childEnv(req),
+      requiresOperatorCredentials: true,
     });
     const cost = runCost(result.costEstimate.estimatedCost, undefined, req.modelAlias);
     return {

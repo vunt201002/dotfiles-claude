@@ -236,6 +236,27 @@ describe('gcStaleHermeticDirs', () => {
 });
 
 describe('hermeticChildEnv composition', () => {
+  test('operator credentials bypass fresh config while preserving the complete env and last overrides', () => {
+    expect(isHermeticEnabled()).toBe(true);
+    const dirs = getHermeticDirs();
+    const e = hermeticChildEnv(
+      { PATH: 'manager-override-path' },
+      { requiresOperatorCredentials: true },
+    );
+    expect(e.CLAUDE_CONFIG_DIR).not.toBe(dirs.configDir);
+    expect(e.HOME).toBe(process.env.HOME as string);
+    expect(e.SHELL).toBe(process.env.SHELL as string);
+    expect(e.PATH).toBe('manager-override-path');
+  });
+
+  test('default remains hermetic when EVALS_HERMETIC is enabled', () => {
+    expect(isHermeticEnabled()).toBe(true);
+    const dirs = getHermeticDirs();
+    const e = hermeticChildEnv();
+    expect(e.CLAUDE_CONFIG_DIR).toBe(dirs.configDir);
+    expect(e.GSTACK_HOME).toBe(dirs.gstackHome);
+  });
+
   test('hermetic by default: redirects config dirs, drops contamination', () => {
     // process.env in a real test run may carry CONDUCTOR_*/CLAUDECODE — the
     // composition must scrub them and point at the singleton dirs.
