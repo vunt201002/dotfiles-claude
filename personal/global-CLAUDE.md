@@ -35,6 +35,68 @@ waiting.
   unless the user explicitly says to work inline this time ("làm luôn trong
   session này", "don't spawn an agent for this").
 
+## Hard rule: Claude thinks, codex does the hands work
+
+Claude's time is worth most on the parts that need judgement, and worth least
+on the parts that need typing. So the default division is:
+
+| Claude (this session, or a Claude sub agent) | codex |
+|---|---|
+| research, brainstorm, plan, spec | implement, execute, refactor |
+| review, judge, adversarial verify | explore a codebase, trace call sites |
+| decide scope, weigh trade-offs, choose the approach | mechanical edits across many files |
+| write the brief; read the result and rule on it | run the edit-verify-iterate loop |
+
+**The rule:** when work is code-related, non-trivial, and mostly *labour* —
+implementing an agreed plan, applying a decided refactor, walking a codebase to
+find every call site, anything that is mostly typing and iterating — spawn
+**codex** to do it and take back the result. Do not do it by hand, and do not
+spawn a Claude agent to do it either.
+
+The real invocation, the one already running in this repo
+(`personal/oracle/lib/llm-backends.ts:179`):
+
+```
+codex exec "<full brief>" --json --skip-git-repo-check -s read-only
+```
+
+`-s read-only` is for work that only reads. Implementation work needs a
+write-capable sandbox instead; pick the narrowest one that lets the job finish.
+codex takes its model and auth from the operator's own `~/.codex/` config, so
+no API key is passed and none belongs in the command.
+
+### What stays Claude's, always
+
+- **The brief.** codex starts with nothing. A one-line prompt gets one-line
+  thinking. Same standard as the sub agent rule below — full context, what is
+  already ruled out, the file paths and constraints already known, what "done"
+  looks like.
+- **The verdict.** codex reporting "done" is a claim, not a result. It goes
+  through `/review` exactly like a Claude agent's work does. Everything in the
+  next section applies to codex output unchanged.
+- **Anything where being wrong is expensive and being fast is not the point** —
+  architecture, a scope cut, a security call, a measurement design.
+
+### The one thing this rule must not break: independence
+
+If codex writes the code, **codex must not be the one that reviews it**. Two
+runs of the same model share a failure mode, so their agreement is not
+corroboration — it is one opinion counted twice. This is the same rule the
+manager layer enforces on its own gates (§7.3 BLOCKER 4), and it is why
+`reviewProvider` exists as a separate setting from the builder.
+
+So: codex builds → Claude reviews. Claude builds → codex reviews. Never the
+same engine on both ends of its own work.
+
+### Honest limit, stated rather than hidden
+
+We have measured codex on this machine as a **gate** — `spec-check` precision
+57%, `reviewer` 62% (13/08). We have **not** measured it as a builder here.
+So this rule is a bet on the split being right, not a conclusion from data.
+Treat early codex-built work with the same suspicion as any first measurement,
+and if it turns out worse, say so with numbers rather than reverting on a
+feeling.
+
 ## Non-negotiable: sub agent quality must match main-session quality
 
 Delegating to a sub agent must never be an excuse for a shallower result.
