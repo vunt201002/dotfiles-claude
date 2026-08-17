@@ -28,6 +28,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { cappedDiff, readDiff, type DiffResult } from './git';
 import { atomicWriteJson, managerDir, readJson, slug } from './paths';
 
 export interface WorktreeRecord {
@@ -218,11 +219,139 @@ export function isDirty(dir: string): boolean {
   return worktreeStatus(dir).length > 0;
 }
 
-/** Diff against the commit the worktree started at, including untracked files. */
-export function worktreeDiff(record: WorktreeRecord): string {
-  git(['add', '-A', '--intent-to-add'], record.dir, 60_000);
+/**
+ * Diff against the commit the worktree started at, including untracked files.
+ *
+ * A failed git run is reported, never returned as an empty diff: "the agent
+ * changed nothing" and "we could not read what the agent changed" are the two
+ * answers that must never be printed the same way.
+ */
+export function worktreeDiff(record: WorktreeRecord): DiffResult {
+  const intent = git(['add', '-A', '--intent-to-add'], record.dir, 60_000);
+  if (!intent.ok) {
+    return {
+      ok: false,
+      text: '',
+      truncated: false,
+      error: `git add --intent-to-add failed in ${record.dir}: ${intent.stderr || 'no stderr'}`,
+    };
+  }
   const out = git(['diff', record.baseSha], record.dir, 60_000);
-  return out.ok ? out.stdout : '';
+  if (!out.ok) {
+    return {
+      ok: false,
+      text: '',
+      truncated: false,
+      error: `git diff ${record.baseSha} failed in ${record.dir}: ${out.stderr || 'no stderr'}`,
+    };
+  }
+  return cappedDiff(out.stdout);
+}
+
+export interface TaskWorkdir {
+  /** Where the task's work is: its own worktree, or the project root when it has none. */
+  dir: string;
+  source: 'worktree' | 'scope';
+  /** Null when this task used `scope` or says it created a worktree whose registry entry is gone. */
+  record: WorktreeRecord | null;
+  /**
+   * Non-empty when the worktree cannot be trusted. `dir` never points at the
+   * project checkout in that state, so an ignoring caller still fails closed.
+   */
+  reason: string;
+}
+
+/**
+ * Where a task's work actually is.
+ *
+ * The durable marker separates a task that used `scope` from one whose
+ * registry entry vanished. Records written before the marker existed take the
+ * legacy `scope` path. Once marked, a missing, implausible, or absent worktree
+ * gets no fallback: no other tree may be reported as this task's.
+ */
+export function resolveTaskWorkdir(taskId: string, scope: string, worktreeCreated = false): TaskWorkdir {
+  if (!worktreeCreated) return { dir: path.resolve(scope), source: 'scope', record: null, reason: '' };
+  const record = worktreeFor(taskId);
+  if (!record) {
+    return {
+      dir: path.join(worktreesRoot(), '.lost', slug(taskId)),
+      source: 'worktree',
+      record: null,
+      reason: `task ${taskId} created a worktree, but its registry entry was lost. No other tree may be measured in its place`,
+    };
+  }
+  if (
+    typeof record.taskId !== 'string' ||
+    typeof record.project !== 'string' ||
+    typeof record.repo !== 'string' ||
+    typeof record.dir !== 'string' ||
+    typeof record.branch !== 'string' ||
+    typeof record.baseSha !== 'string' ||
+    typeof record.createdAt !== 'string'
+  ) {
+    return {
+      dir: path.join(worktreesRoot(), '.invalid', slug(taskId)),
+      source: 'worktree',
+      record: null,
+      reason: `task ${taskId} has a malformed worktree registry entry. No tree may be measured from it`,
+    };
+  }
+  const root = path.resolve(worktreesRoot());
+  const dir = path.resolve(record.dir);
+  const relative = path.relative(root, dir);
+  const repo = path.resolve(record.repo);
+  const expectedRepo = path.resolve(scope);
+  if (record.taskId !== taskId || !relative || relative.startsWith('..') || path.isAbsolute(relative) || repo !== expectedRepo) {
+    return {
+      dir,
+      source: 'worktree',
+      record,
+      reason: `task ${taskId} has an implausible worktree registry entry: task=${record.taskId}, repo=${record.repo}, dir=${record.dir}. No tree may be measured from it`,
+    };
+  }
+  if (fs.existsSync(record.dir)) {
+    const realRoot = fs.realpathSync(root);
+    const realDir = fs.realpathSync(record.dir);
+    const realRelative = path.relative(realRoot, realDir);
+    if (!realRelative || realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+      return {
+        dir: realDir,
+        source: 'worktree',
+        record,
+        reason: `task ${taskId} has a worktree registry entry that resolves outside ${realRoot}: ${record.dir}. No tree may be measured from it`,
+      };
+    }
+  }
+  if (!fs.existsSync(record.dir)) {
+    return {
+      dir: record.dir,
+      source: 'worktree',
+      record,
+      reason: `task ${taskId} has a worktree registered at ${record.dir} and the directory is not there. Its work is on branch ${record.branch}; no other tree may be measured in its place`,
+    };
+  }
+  return { dir: record.dir, source: 'worktree', record, reason: '' };
+}
+
+/**
+ * What this task changed, read from the tree it changed.
+ *
+ * A worktree is diffed against the commit it started at rather than with
+ * `git diff`: an agent that commits its own work is not misbehaving, and
+ * staged-plus-unstaged would report that task as having changed nothing at
+ * all. It over-reports rather than under-reports — anything pulled in from the
+ * base shows up too — which is the safe direction for a reviewer.
+ *
+ * An empty diff is `ok: false`. A gate handed nothing has nothing to judge,
+ * and a clean pass over an empty diff reads exactly like a clean pass over
+ * real work.
+ */
+export function taskDiff(work: TaskWorkdir): DiffResult {
+  if (work.reason) return { ok: false, text: '', truncated: false, error: work.reason };
+  const diff = work.record ? worktreeDiff(work.record) : readDiff(work.dir);
+  if (!diff.ok || diff.text.trim() !== '') return diff;
+  const since = work.record ? ` since ${work.record.baseSha.slice(0, 12)}` : '';
+  return { ok: false, text: '', truncated: false, error: `nothing changed in ${work.dir}${since}` };
 }
 
 export interface RemoveResult {

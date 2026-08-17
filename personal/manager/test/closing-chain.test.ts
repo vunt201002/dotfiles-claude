@@ -78,6 +78,7 @@ function harness(
     project: PROJECT,
     issue: 't7',
     scope: REPO,
+    workdir: { dir: REPO, source: 'scope', record: null, reason: '' },
     envelope: envelope(),
     attempt: 1,
     reviewDepth: 'summary',
@@ -117,6 +118,22 @@ describe('the chain each lane actually runs (§7.2)', () => {
   test('trivial closes on the hooks alone', () => {
     expect(VERIFY_CHAIN.trivial).toEqual([]);
     expect(REVIEW_CHAIN.trivial).toEqual([]);
+  });
+
+  test('an empty trivial verify chain is unmeasured, not proven', async () => {
+    const { ctx } = harness({ envelope: envelope({ lane: 'trivial' }) });
+    const chain = await runVerifyChain(ctx);
+    expect(chain.runs).toEqual([]);
+    expect(chain.proven).toBe(false);
+    expect(chain.oracleFault).toBe(false);
+  });
+
+  test('an empty bug-nho review chain is unmeasured, not proven', async () => {
+    const { ctx } = harness({ envelope: envelope({ lane: 'bug-nho' }) });
+    const chain = await runReviewChain(ctx);
+    expect(chain.runs).toEqual([]);
+    expect(chain.proven).toBe(false);
+    expect(chain.oracleFault).toBe(false);
   });
 
   test('bug-nho stops at the repeatable half', () => {

@@ -56,8 +56,11 @@ import {
   signalForTask,
   type SpawnPort,
   type SpawnRequest,
+  type SpawnResult,
+  transportFailed,
 } from './spawn';
 import { listTasks, loadTask, newTaskRecord, saveTask, saveTaskAndIndex } from './store';
+import { resolveTaskWorkdir } from './worktrees';
 import {
   applyEnsembleRule,
   parseVerdict,
@@ -99,6 +102,11 @@ const APPROVAL_BUDGET = 'raise the budget';
 const APPROVAL_START = 'start this task';
 const APPROVAL_ORACLE = 'fix the oracle, then re-verify';
 const APPROVAL_ASSERT_CMD = 'run this test command';
+
+function spawnFailureReason(phase: 'sizing' | 'execution', run: SpawnResult): string {
+  const detail = run.output.trim();
+  return `${phase} spawn failed (${run.exitReason})${detail ? `: ${detail}` : ''}`;
+}
 
 export class Orchestrator {
   private readonly spawnPort: SpawnPort;
@@ -217,12 +225,18 @@ export class Orchestrator {
 
   private async phaseSize(task: TaskRecord): Promise<boolean> {
     await this.ensureProjectLock(task);
+    task = loadTask(task.id) ?? task;
+    if (isTerminal(task.state)) return false;
     const budget = this.preflightBudget(task);
     if (!budget.ok) {
       await this.parkForApproval(task, APPROVAL_BUDGET, budget.reason);
       return false;
     }
     const run = await this.spawn(task, 'main', sizingPrompt(task.project, task.issue), this.spawnPort);
+    if (transportFailed(run.exitReason)) {
+      await this.terminate(task, 'BLOCKED', spawnFailureReason('sizing', run));
+      return false;
+    }
     const parsed = parseEnvelope(run.output, { roundTwoFail: this.roundTwoFail.has(task.id) });
     if (!parsed.ok || !parsed.envelope) {
       await this.terminate(task, 'BLOCKED', `envelope rejected: ${parsed.errors.join('; ')}`);
@@ -247,12 +261,14 @@ export class Orchestrator {
   }
 
   private async phaseGate(task: TaskRecord): Promise<boolean> {
+    await this.ensureProjectLock(task);
+    task = loadTask(task.id) ?? task;
+    if (isTerminal(task.state)) return false;
     const envelope = task.envelope;
     if (!envelope) {
       await this.terminate(task, 'BLOCKED', 'no envelope at gate');
       return false;
     }
-    await this.ensureProjectLock(task);
     const policy = loadConfig().spawn[task.source] ?? loadConfig().spawn.cli;
     const reasons: string[] = [];
     if (envelope.needs_human) reasons.push('envelope needs_human');
@@ -275,12 +291,14 @@ export class Orchestrator {
   }
 
   private async phaseExecute(task: TaskRecord): Promise<boolean> {
+    await this.ensureProjectLock(task);
+    task = loadTask(task.id) ?? task;
+    if (isTerminal(task.state)) return false;
     const envelope = task.envelope;
     if (!envelope) {
       await this.terminate(task, 'BLOCKED', 'no envelope at execute');
       return false;
     }
-    await this.ensureProjectLock(task);
     const budget = this.preflightBudget(task);
     if (!budget.ok) {
       await this.parkForApproval(task, APPROVAL_BUDGET, budget.reason);
@@ -295,10 +313,14 @@ export class Orchestrator {
       executePrompt(envelope, task.attempt, priorFailure),
       this.spawnPort,
     );
+    if (transportFailed(run.exitReason)) {
+      await this.terminate(task, 'BLOCKED', spawnFailureReason('execution', run));
+      return false;
+    }
     const verdict = parseVerdict(run.output);
     const current = this.absorbVerdict(loadTask(task.id) ?? task, verdict);
 
-    if (await this.parkIfIrreversible(current, verdict.irreversible)) return false;
+    if (verdict.irreversible.length > 0 && await this.parkIfIrreversible(current, verdict.irreversible)) return false;
     if (verdict.verdict === 'blocked') {
       const why = verdict.reason || 'agent reported blocked';
       await this.terminate(
@@ -342,12 +364,14 @@ export class Orchestrator {
    * or the environment is fixed.
    */
   private async phaseVerify(task: TaskRecord): Promise<boolean> {
+    await this.ensureProjectLock(task);
+    task = loadTask(task.id) ?? task;
+    if (isTerminal(task.state)) return false;
     const envelope = task.envelope;
     if (!envelope) {
       await this.terminate(task, 'BLOCKED', 'no envelope at verify');
       return false;
     }
-    await this.ensureProjectLock(task);
     const budget = this.preflightBudget(task);
     if (!budget.ok) {
       await this.parkForApproval(task, APPROVAL_BUDGET, budget.reason);
@@ -360,9 +384,10 @@ export class Orchestrator {
 
     const assertRun = await runVerifyChain(this.chainContext(task, envelope, hasRealBrowser), headless);
     let current = this.absorbChain(loadTask(task.id) ?? task, assertRun, 'verify');
+    let unmeasuredWhy = '';
 
     if (!assertRun.proven) {
-      const why = assertRun.reports.find((r) => r.verdict !== 'pass')?.caught || 'B8-assert did not pass';
+      const why = assertRun.reports.find((r) => r.verdict !== 'pass')?.caught || assertRun.lines[0] || 'no verify gate ran';
       if (assertRun.assertPending.length > 0) {
         current.pending_assert_cmds = [...assertRun.assertPending];
         await this.parkForApproval(
@@ -376,15 +401,20 @@ export class Orchestrator {
         await this.parkForApproval(current, APPROVAL_ORACLE, `the oracle did not run: ${why}`);
         return false;
       }
-      const next = nextAfterVerifyFailure(current);
-      if (next.to === 'RUNNING') {
-        const retried = applyTransition(current, 'RUNNING', { reason: next.reason, failureReason: why });
-        await saveTaskAndIndex(retried);
-        this.logTransition(retried, 'VERIFYING', 'RUNNING', 'caught', why);
-        return true;
+      if (lane.length === 0 && assertRun.runs.length === 0) {
+        unmeasuredWhy = why;
+        current.report_lines.push(`UNMEASURED: ${why}`);
+      } else {
+        const next = nextAfterVerifyFailure(current);
+        if (next.to === 'RUNNING') {
+          const retried = applyTransition(current, 'RUNNING', { reason: next.reason, failureReason: why });
+          await saveTaskAndIndex(retried);
+          this.logTransition(retried, 'VERIFYING', 'RUNNING', 'caught', why);
+          return true;
+        }
+        await this.terminate(current, 'BLOCKED', `${next.reason}; still failing: ${why}`);
+        return false;
       }
-      await this.terminate(current, 'BLOCKED', `${next.reason}; still failing: ${why}`);
-      return false;
     }
 
     if (browser.length > 0) {
@@ -404,9 +434,10 @@ export class Orchestrator {
       }
     }
 
-    const review = applyTransition(current, 'REVIEW', { reason: 'B8 verify passed' });
+    const reviewReason = unmeasuredWhy ? `verify unmeasured: ${unmeasuredWhy}` : 'B8 verify passed';
+    const review = applyTransition(current, 'REVIEW', { reason: reviewReason });
     await saveTaskAndIndex(review);
-    this.logTransition(review, 'VERIFYING', 'REVIEW', 'pass', '');
+    this.logTransition(review, 'VERIFYING', 'REVIEW', unmeasuredWhy ? 'skipped' : 'pass', unmeasuredWhy);
     return true;
   }
 
@@ -446,12 +477,14 @@ export class Orchestrator {
    * review gates.
    */
   private async phaseReview(task: TaskRecord): Promise<boolean> {
+    await this.ensureProjectLock(task);
+    task = loadTask(task.id) ?? task;
+    if (isTerminal(task.state)) return false;
     const envelope = task.envelope;
     if (!envelope) {
       await this.terminate(task, 'BLOCKED', 'no envelope at review');
       return false;
     }
-    await this.ensureProjectLock(task);
     const budget = this.preflightBudget(task);
     if (!budget.ok) {
       await this.parkForApproval(task, APPROVAL_BUDGET, budget.reason);
@@ -459,14 +492,16 @@ export class Orchestrator {
     }
     const chain = await runReviewChain(this.chainContext(task, envelope, false));
     const current = this.absorbChain(loadTask(task.id) ?? task, chain, 'report');
-    if (await this.parkIfChainIrreversible(current, chain)) return false;
+    const hasIrreversible = chain.runs.some((run) => (run.verdict?.irreversible.length ?? 0) > 0);
+    if (hasIrreversible && await this.parkIfChainIrreversible(current, chain)) return false;
 
     const ensemble = applyEnsembleRule(this.collectGateReports(current, chain.reports));
     if (ensemble.outcome === 'block') {
       await this.terminate(current, 'BLOCKED', `review blocked: ${ensemble.why}`);
       return false;
     }
-    if (await this.parkIfReviewDidNotRun(current, chain, ensemble)) return false;
+    const reviewDidNotRun = chain.runs.some((run) => run.unavailable) || ensemble.broken.length > 0;
+    if (reviewDidNotRun && await this.parkIfReviewDidNotRun(current, chain, ensemble)) return false;
     if (ensemble.outcome === 'warn') current.report_lines.push(`WARN: ${ensemble.why}`);
     if (!ensemble.measured) current.report_lines.push(`UNMEASURED: ${ensemble.why}`);
 
@@ -586,13 +621,16 @@ export class Orchestrator {
   // Internals
   // -------------------------------------------------------------------------
 
+  /**
+   * `opts.scope` overrides the project root for one run. The chain gates use
+   * it to sit in the task's own worktree; nothing else passes it.
+   */
   private async spawn(
     task: TaskRecord,
     role: AgentRole,
     prompt: string,
     port: SpawnPort,
-    readOnly = false,
-    extraTools: string[] = [],
+    opts: { readOnly?: boolean; extraTools?: string[]; scope?: string } = {},
   ) {
     const cfg = loadConfig();
     const modelAlias = modelForRole(role, { lane: task.envelope?.lane, attempt: task.attempt, cfg });
@@ -601,15 +639,15 @@ export class Orchestrator {
       taskId: task.id,
       project: task.project,
       issue: task.issue,
-      scope: task.scope,
+      scope: opts.scope ?? task.scope,
       source: task.source,
       prompt,
       modelAlias,
       lane: task.envelope?.lane,
       attempt: task.attempt,
       signal: signalForTask(task.id),
-      allowedTools: readOnly ? [...READ_ONLY_TOOLS, ...extraTools] : undefined,
-      disallowedTools: readOnly ? [...READ_ONLY_DISALLOWED] : undefined,
+      allowedTools: opts.readOnly ? [...READ_ONLY_TOOLS, ...(opts.extraTools ?? [])] : undefined,
+      disallowedTools: opts.readOnly ? [...READ_ONLY_DISALLOWED] : undefined,
     };
     const startedAt = new Date().toISOString();
     const result = await port.run(req);
@@ -625,6 +663,7 @@ export class Orchestrator {
     });
     current.cost_usd_actual = round6(current.cost_usd_actual + result.costUsd);
     if (!result.costKnown) current.cost_unmeasured_runs = unmeasuredRuns(current) + 1;
+    if (result.worktreeCreated) current.worktree_created = true;
     saveTask(current);
     return result;
   }
@@ -684,12 +723,19 @@ export class Orchestrator {
    * SpecCheckInput): the record carries the builder's own account of its work
    * in five different fields, and a chain that could reach it would leak that
    * account into the one gate whose value depends on never having seen it.
+   *
+   * The gates are also spawned INTO the task's worktree, not into the project
+   * root. `scope` is the write fence as well as the cwd (see spawn.ts), and a
+   * report-only gate that can only read is safer fenced to the one directory
+   * this task owns than to the shared checkout every other lane is editing.
    */
   private chainContext(task: TaskRecord, envelope: NonNullable<TaskRecord['envelope']>, hasRealBrowser: boolean): ChainContext {
+    const workdir = resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined);
     return {
       project: task.project,
       issue: task.issue,
       scope: task.scope,
+      workdir,
       envelope,
       attempt: task.attempt,
       reviewDepth: task.review_depth,
@@ -699,7 +745,11 @@ export class Orchestrator {
       diff: this.diff,
       spawn: async (req) => {
         const port = req.role === 'judge' ? this.spawnPort : this.reviewPort;
-        const result = await this.spawn(task, req.role, req.prompt, port, req.readOnly, req.extraTools ?? []);
+        const result = await this.spawn(task, req.role, req.prompt, port, {
+          readOnly: req.readOnly,
+          extraTools: req.extraTools ?? [],
+          scope: workdir.dir,
+        });
         return {
           output: result.output,
           costUsd: result.costUsd,
@@ -934,10 +984,10 @@ export class Orchestrator {
    * would look like it had not worked.
    */
   private async terminate(task: TaskRecord, to: TaskState, why: string): Promise<void> {
-    const settled = loadTask(task.id);
-    if (settled && isTerminal(settled.state)) return;
-    const from = task.state;
-    const ended = applyTransition(task, to, { reason: why, failureReason: why });
+    const current = loadTask(task.id) ?? task;
+    if (isTerminal(current.state)) return;
+    const from = current.state;
+    const ended = applyTransition(current, to, { reason: why, failureReason: why });
     await saveTaskAndIndex(ended);
     await releaseAll(ended.id);
     clearTaskAbort(ended.id);

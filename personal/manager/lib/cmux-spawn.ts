@@ -288,15 +288,19 @@ export const cmuxSpawnPort: SpawnPort = {
       return refusal('worktree_failed', `could not prepare a worktree for ${req.taskId}: ${worktree.reason}`);
     }
     const dir = worktree.record.dir;
+    const worktreeCreated = true as const;
 
     const cap = resolveMaxAgents(cfg);
     const slot = await waitForSlot(cap, { signal: req.signal, timeoutMs: cfg.cmuxSlotWaitMs });
-    if (slot === 'aborted') return refusal('aborted', 'stopped while waiting for a free agent slot');
+    if (slot === 'aborted') return { ...refusal('aborted', 'stopped while waiting for a free agent slot'), worktreeCreated };
     if (slot === 'timeout') {
-      return refusal(
-        'no_free_slot',
-        `all ${cap} agent slots were still busy after waiting. Panes you opened yourself count toward the cap — close one, or raise maxAgents.`,
-      );
+      return {
+        ...refusal(
+          'no_free_slot',
+          `all ${cap} agent slots were still busy after waiting. Panes you opened yourself count toward the cap — close one, or raise maxAgents.`,
+        ),
+        worktreeCreated,
+      };
     }
 
     const stateDir = paneStateDir(req.taskId, req.role);
@@ -318,10 +322,13 @@ export const cmuxSpawnPort: SpawnPort = {
       }),
     });
     if (!created.ok) {
-      return launchFailure(
-        'cmux_create_failed',
-        `cmux did not hand back a workspace ref: ${created.reason}. A pane may be open and running unattended; check cmux and close it by hand.`,
-      );
+      return {
+        ...launchFailure(
+          'cmux_create_failed',
+          `cmux did not hand back a workspace ref: ${created.reason}. A pane may be open and running unattended; check cmux and close it by hand.`,
+        ),
+        worktreeCreated,
+      };
     }
 
     const booted = await waitForSession(dir, { timeoutMs: cfg.cmuxStartupMs, startedAfter: startedAt / 1000 });
@@ -369,6 +376,7 @@ export const cmuxSpawnPort: SpawnPort = {
       model: cost.model || resolveModelId(req.modelAlias),
       sessionId: booted?.sessionId ?? '',
       durationMs: Date.now() - startedAt,
+      worktreeCreated,
     };
   },
 };

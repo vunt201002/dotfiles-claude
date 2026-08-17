@@ -134,6 +134,8 @@ export interface TaskRecord {
   issue: string;
   /** Absolute path the task is allowed to write inside (§6.8 blast radius). */
   scope: string;
+  /** Present only after a spawn result observed that this task created a worktree. */
+  worktree_created?: true;
   envelope: TaskEnvelope | null;
   attempt: number;
   max_attempts: number;

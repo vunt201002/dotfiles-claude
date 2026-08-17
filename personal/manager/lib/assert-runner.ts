@@ -828,7 +828,18 @@ export function summarizeAssertRuns(outcomes: AssertOutcome[], plan: AssertPlan)
 
 export interface AssertGateInput {
   project: string;
+  /** Where the command is RESOLVED from: the registry entry, CLAUDE.md, package.json. */
   scope: string;
+  /**
+   * Where the command RUNS. Defaults to `scope`; the closing chain passes the
+   * task's own worktree.
+   *
+   * The two are separate on purpose. The plan stays anchored to the checkout a
+   * human approved commands against, so a task cannot choose its own oracle by
+   * editing the CLAUDE.md in front of it, while the numbers come from the tree
+   * the agent actually changed.
+   */
+  cwd?: string;
   timeoutMs?: number;
   exec?: ExecFn;
   persist?: boolean;
@@ -845,7 +856,10 @@ export async function runAssertGate(input: AssertGateInput): Promise<AssertGateR
   const runs =
     plan.commands.length === 0
       ? []
-      : await runAssertCommands(plan.commands, input.scope, { timeoutMs: input.timeoutMs, exec: input.exec });
+      : await runAssertCommands(plan.commands, input.cwd ?? input.scope, {
+          timeoutMs: input.timeoutMs,
+          exec: input.exec,
+        });
   const outcomes = runs.map(classifyRun);
   const summary = summarizeAssertRuns(outcomes, plan);
   const reports =

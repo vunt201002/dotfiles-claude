@@ -37,7 +37,7 @@
 import { loadConfig, READ_ONLY_DISALLOWED, READ_ONLY_TOOLS } from '../config';
 import type { AgentRole, Lane, TaskEnvelope } from '../types';
 import { runAssertGate, type AssertGateResult, type ExecFn } from './assert-runner';
-import { readDiff, type DiffResult } from './git';
+import type { DiffResult } from './git';
 import { logGate, readEntries } from './gate-log-port';
 import { workOnly } from './gate-log';
 import {
@@ -50,6 +50,7 @@ import {
 } from './prompts';
 import { transportFailed } from './spawn';
 import { parseVerdict, type AgentVerdict, type GateReport } from './verdict';
+import { taskDiff, type TaskWorkdir } from './worktrees';
 
 export type ChainGate = 'B8-assert' | 'B8-judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
 
@@ -169,7 +170,18 @@ export interface ChainRun {
 export interface ChainContext {
   project: string;
   issue: string;
+  /** The project's own checkout. Only B8-assert's command plan is resolved from it. */
   scope: string;
+  /**
+   * Where this task's work actually is. Every gate reads THIS, never `scope`.
+   *
+   * The two were one field until 14/08, and a task run in a worktree had its
+   * whole closing chain pointed at the main checkout: the assert counted the
+   * project's tests instead of the task's, and the reviewers read whatever
+   * another session happened to have uncommitted. Required rather than
+   * optional so a caller cannot leave it out and get the old behaviour back.
+   */
+  workdir: TaskWorkdir;
   envelope: TaskEnvelope;
   attempt: number;
   reviewDepth: 'summary' | 'full-diff';
@@ -179,7 +191,7 @@ export interface ChainContext {
   /** Swapped in tests so no real command runs. */
   exec?: ExecFn;
   assertTimeoutMs?: number;
-  diff?: (scope: string) => DiffResult;
+  diff?: (work: TaskWorkdir) => DiffResult;
   /** True when the task's oracle includes the real logged-in browser. */
   hasRealBrowser?: boolean;
 }
@@ -388,11 +400,25 @@ function skipped(ctx: ChainContext, gate: ChainGate, why: string): ChainGateRun 
   return { gate, reports: [report], verdict: null, assert: null, costUsd: 0 };
 }
 
+/**
+ * A gate with no tree to look at.
+ *
+ * `unavailable` preserves why the oracle did not run, separately from a gate
+ * that ran and returned an error verdict.
+ */
+function noTree(ctx: ChainContext, gate: ChainGate, why: string): ChainGateRun {
+  const report: GateReport = { gate, gate_family: 'deterministic', verdict: 'error', caught: why };
+  write(ctx, report, NOTHING_SPENT);
+  return { gate, reports: [report], verdict: null, assert: null, costUsd: 0, unavailable: true };
+}
+
 async function runVerifyGate(ctx: ChainContext, gate: ChainGate): Promise<ChainGateRun> {
   if (gate === 'B8-assert') {
+    if (ctx.workdir.reason) return noTree(ctx, gate, ctx.workdir.reason);
     const result = await runAssertGate({
       project: ctx.project,
       scope: ctx.scope,
+      cwd: ctx.workdir.dir,
       exec: ctx.exec,
       timeoutMs: ctx.assertTimeoutMs,
     });
@@ -410,7 +436,7 @@ async function runVerifyGate(ctx: ChainContext, gate: ChainGate): Promise<ChainG
   return runLlmGate(ctx, gate, prompt);
 }
 
-function assemble(runs: ChainGateRun[], lines: string[]): ChainRun {
+function assemble(runs: ChainGateRun[], lines: string[], forceUnavailable = false): ChainRun {
   const advisories: string[] = [];
   for (const run of runs) {
     for (const advisory of run.verdict?.advisories ?? []) {
@@ -419,13 +445,14 @@ function assemble(runs: ChainGateRun[], lines: string[]): ChainRun {
     }
   }
   const assertRun = runs.find((r) => r.assert !== null)?.assert ?? null;
-  const unavailable = runs.some((r) => r.unavailable);
+  const unavailable = forceUnavailable || runs.some((r) => r.unavailable);
+  const measured = runs.length > 0;
   return {
     runs,
     reports: runs.flatMap((r) => r.reports),
     advisories,
     lines,
-    proven: unavailable ? false : assertRun ? assertRun.summary.proven : true,
+    proven: unavailable || !measured ? false : assertRun ? assertRun.summary.proven : true,
     oracleFault: unavailable ? true : assertRun ? assertRun.summary.oracle_fault : false,
     assertPending: assertRun ? assertRun.plan.pending.map((c) => c.cmd) : [],
   };
@@ -443,6 +470,7 @@ export async function runVerifyChain(
 ): Promise<ChainRun> {
   const runs: ChainGateRun[] = [];
   const lines: string[] = [];
+  if (gates.length === 0 && ctx.workdir.reason) return assemble(runs, [ctx.workdir.reason], true);
   for (const gate of gates) {
     const run = await runVerifyGate(ctx, gate);
     runs.push(run);
@@ -471,7 +499,7 @@ export async function runReviewChain(ctx: ChainContext): Promise<ChainRun> {
   const lines: string[] = [];
   if (gates.length === 0) return assemble(runs, lines);
 
-  const diff = (ctx.diff ?? readDiff)(ctx.scope);
+  const diff = (ctx.diff ?? taskDiff)(ctx.workdir);
   if (!diff.ok) {
     for (const gate of gates) {
       const report: GateReport = {

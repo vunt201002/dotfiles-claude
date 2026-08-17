@@ -27,7 +27,7 @@ import { loadConfig } from './config';
 import { brainstorm } from './lib/brainstorm';
 import { costBreakdown } from './lib/cost';
 import { fleetReport } from './lib/fleet-view';
-import { readDiff } from './lib/git';
+import { resolveTaskWorkdir, taskDiff } from './lib/worktrees';
 import { subscribe, type ManagerEvent } from './lib/events';
 import { Orchestrator } from './lib/orchestrator';
 import { ensureManagerDirs, pidFile, portFile, tokenFile } from './lib/paths';
@@ -174,7 +174,7 @@ export function buildFetchHandler(deps: HandlerDeps): (req: Request) => Promise<
         if (req.method !== 'GET') return json({ error: 'method not allowed' }, 405);
         const task = loadTask(id);
         if (!task) return json({ error: `no such task ${id}` }, 404);
-        const diff = readDiff(task.scope);
+        const diff = taskDiff(resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined));
         if (!diff.ok) return json({ error: diff.error }, 409);
         return new Response(diff.text, {
           status: 200,

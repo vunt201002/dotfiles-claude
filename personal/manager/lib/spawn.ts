@@ -69,6 +69,8 @@ export interface SpawnResult {
   model: string;
   sessionId: string;
   durationMs: number;
+  /** Present only when this run observed a successfully created task worktree. */
+  worktreeCreated?: true;
 }
 
 /**
@@ -83,6 +85,7 @@ export const TRANSPORT_FAILURES: readonly string[] = [
   'codex_not_installed',
   'codex_no_answer',
   'codex_timeout',
+  'cmux_not_installed',
   'cmux_unavailable',
   'guard_not_wired',
   'cmux_create_failed',

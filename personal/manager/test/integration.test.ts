@@ -212,6 +212,23 @@ afterAll(() => {
 });
 
 describe('full lifecycle on a fixture repo with a mocked runner', () => {
+  test('a healthy trivial task advances while reporting verify as unmeasured', async () => {
+    const { port, calls } = makePort((phase) =>
+      phase === 'size' ? envelopeJson({ lane: 'trivial', size: 'S' }) : PASS_VERDICT,
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(task?.pending_action).toBe('');
+    expect(task?.report_lines).toContain('UNMEASURED: no verify gate ran');
+    expect(calls.map((call) => call.phase)).toEqual(['size', 'execute']);
+    const verifyTransition = readEntries().find((entry) => entry.gate === 'lifecycle:VERIFYING->REVIEW');
+    expect(verifyTransition?.verdict).toBe('skipped');
+  });
+
   test('a clean task walks INTAKE -> REPORTED and records every transition', async () => {
     const { port, calls } = makePort(happyReply);
     const manager = newOrchestrator(port);
@@ -1139,6 +1156,74 @@ describe('spec-check stays blind through the real driver', () => {
 });
 
 describe('bad agent output', () => {
+  test('a sizing transport refusal tells the operator why no agent ran', async () => {
+    const port: SpawnPort = {
+      async run(req) {
+        return {
+          output: 'cmux is not answering on its socket. Start the cmux app, or select the sdk runner.',
+          exitReason: 'cmux_unavailable',
+          turnsUsed: 0,
+          costUsd: 0,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: '',
+          durationMs: 1,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('cmux_unavailable');
+    expect(task?.failure_reason).toContain('Start the cmux app');
+    expect(task?.failure_reason).not.toContain('no JSON object found');
+  });
+
+  test('a malformed sizing response cannot erase its agent handle or cost', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? 'I could not size this.' : PASS_VERDICT), 0.37);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task).toMatchObject({
+      state: 'BLOCKED',
+      agents: [{ role: 'main', session: 'sess-1', status: 'done' }],
+      cost_usd_actual: 0.37,
+    });
+  });
+
+  test('an execution transport refusal is not rendered as a malformed verdict', async () => {
+    const { port: healthy } = makePort(happyReply);
+    const port: SpawnPort = {
+      async run(req) {
+        if (phaseOf(req) !== 'execute') return healthy.run(req);
+        return {
+          output: 'the pre-tool-use guard is missing; install it before using a permission-skipping pane.',
+          exitReason: 'guard_not_wired',
+          turnsUsed: 0,
+          costUsd: 0,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: '',
+          durationMs: 1,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('guard_not_wired');
+    expect(task?.failure_reason).toContain('pre-tool-use guard is missing');
+    expect(task?.failure_reason).not.toContain('no JSON object found');
+  });
+
   test('an unparseable envelope blocks instead of routing on a guess', async () => {
     const { port } = makePort((phase) => (phase === 'size' ? 'I could not size this.' : PASS_VERDICT));
     const manager = newOrchestrator(port);

@@ -168,7 +168,41 @@ describe('what the manager can still tell you after the fact', () => {
     const record = ensureTaskWorktree('joy-t9-01', 'joy', dir).record!;
     fs.writeFileSync(path.join(record.dir, 'added.ts'), 'export const x = 1;\n');
     const diff = worktreeDiff(record);
-    expect(diff).toContain('added.ts');
+    expect(diff.ok).toBe(true);
+    expect(diff.text).toContain('added.ts');
+  });
+
+  // An empty string for both "nothing changed" and "git would not answer" is
+  // the shape this whole layer exists to refuse: one of them is a measurement
+  // and the other is the absence of one.
+  test('a diff git cannot produce is reported, not returned as an empty one', () => {
+    const dir = repo('diff-broken');
+    const record = ensureTaskWorktree('joy-t9-02', 'joy', dir).record!;
+    const diff = worktreeDiff({ ...record, baseSha: 'de1e7ed0000000000000000000000000000000ff' });
+    expect(diff.ok).toBe(false);
+    expect(diff.text).toBe('');
+    expect(diff.error).toContain('git diff');
+  });
+
+  test('a failed intent-to-add is reported before untracked files can disappear', () => {
+    const dir = repo('intent-broken');
+    const record = ensureTaskWorktree('joy-t9-03', 'joy', dir).record!;
+    fs.writeFileSync(path.join(record.dir, 'only-untracked.ts'), 'export const hidden = true;\n');
+    const gitPath = spawnSync('git', ['rev-parse', '--git-path', 'index'], {
+      cwd: record.dir,
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    }).stdout.trim();
+    const lock = path.isAbsolute(gitPath) ? `${gitPath}.lock` : path.join(record.dir, `${gitPath}.lock`);
+    fs.writeFileSync(lock, 'stale');
+    try {
+      const diff = worktreeDiff(record);
+      expect(diff.ok).toBe(false);
+      expect(diff.text).toBe('');
+      expect(diff.error).toContain('git add --intent-to-add failed');
+    } finally {
+      fs.rmSync(lock, { force: true });
+    }
   });
 
   // Reported rather than auto-pruned: a missing directory is also what a

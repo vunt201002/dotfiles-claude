@@ -57,13 +57,22 @@ export function readDiff(scope: string): DiffResult {
   } catch (err) {
     return { ok: false, text: '', truncated: false, error: `git is not runnable: ${(err as Error).message}` };
   }
-  if (combined.length > MAX_DIFF_BYTES) {
+  return cappedDiff(combined);
+}
+
+/**
+ * Caps a diff at what a phone can render and the daemon can hold. Exported so
+ * every producer of a DiffResult truncates at the same size and says so the
+ * same way; a second cap would drift from this one.
+ */
+export function cappedDiff(text: string): DiffResult {
+  if (text.length > MAX_DIFF_BYTES) {
     return {
       ok: true,
-      text: `${combined.slice(0, MAX_DIFF_BYTES)}\n... truncated at ${MAX_DIFF_BYTES} bytes ...\n`,
+      text: `${text.slice(0, MAX_DIFF_BYTES)}\n... truncated at ${MAX_DIFF_BYTES} bytes ...\n`,
       truncated: true,
       error: '',
     };
   }
-  return { ok: true, text: combined, truncated: false, error: '' };
+  return { ok: true, text, truncated: false, error: '' };
 }
