@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { buildLaunchCommand, parseWorkspaceRef, sendText, writePromptFile } from '../lib/cmux-control';
 import { cmuxStorePath, type CmuxSession } from '../lib/cmux-sessions';
-import { guardIsWired, lastAssistantText, waitForSlot, watchSession } from '../lib/cmux-spawn';
+import { assistantTexts, guardIsWired, lastAssistantText, waitForSlot, watchSession } from '../lib/cmux-spawn';
 import { resetConfigCache } from '../config';
 import { measuredCost } from '../lib/cost';
 import { managerConfigFile } from '../lib/paths';
@@ -270,6 +270,18 @@ describe('reading back what the agent said', () => {
       ].join('\n'),
     );
     expect(lastAssistantText(transcript)).toBe('VERDICT: pass');
+  });
+
+  test('assistant texts contain every non-empty message newest first', () => {
+    fs.writeFileSync(
+      transcript,
+      [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'thinking out loud' }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'VERDICT: pass' }] } }),
+      ].join('\n'),
+    );
+    expect(assistantTexts(transcript)).toEqual(['VERDICT: pass', 'thinking out loud']);
   });
 
   test('a transcript that is not there reads as empty, not as a throw', () => {

@@ -58,6 +58,8 @@ export interface SpawnRequest {
 
 export interface SpawnResult {
   output: string;
+  /** Assistant messages ordered newest first. */
+  outputs: string[];
   exitReason: string;
   turnsUsed: number;
   costUsd: number;
@@ -273,6 +275,7 @@ export const agentSdkSpawnPort: SpawnPort = {
     const cost = runCost(result.costUsd, usageFromEvents(result), req.modelAlias);
     return {
       output: result.output,
+      outputs: result.output ? [result.output] : [],
       exitReason: result.exitReason,
       turnsUsed: result.turnsUsed,
       costUsd: cost.usd,
@@ -302,6 +305,7 @@ export const cliSpawnPort: SpawnPort = {
     const cost = runCost(result.costEstimate.estimatedCost, undefined, req.modelAlias);
     return {
       output: result.output,
+      outputs: result.output ? [result.output] : [],
       exitReason: result.exitReason,
       turnsUsed: result.costEstimate.turnsUsed,
       costUsd: cost.usd,
@@ -397,8 +401,10 @@ export const reviewPorts: Record<string, SpawnPort> = {
         cwd: path.resolve(req.scope),
         sandbox: 'read-only',
       });
+      const outcome = codexOutcome(result);
       return {
-        ...codexOutcome(result),
+        ...outcome,
+        outputs: outcome.output ? [outcome.output] : [],
         turnsUsed: result.toolCalls.length,
         costUsd: 0,
         costKnown: false,

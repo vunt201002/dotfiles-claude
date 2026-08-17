@@ -28,7 +28,7 @@ import {
 import type { AgentRole, AssertRunRecord, TaskRecord, TaskSource, TaskState } from '../types';
 import { ACTIVE_STATES, isTerminal } from '../types';
 import { logGate, shouldBlindSample } from './gate-log-port';
-import { parseEnvelope } from './envelope';
+import { extractJsonBlock, parseEnvelope } from './envelope';
 import { acquire, BROWSER_TOKEN, projectLock, release, releaseAll } from './locks';
 import {
   BLOCKING_HOOK_GATES,
@@ -106,6 +106,37 @@ const APPROVAL_ASSERT_CMD = 'run this test command';
 function spawnFailureReason(phase: 'sizing' | 'execution', run: SpawnResult): string {
   const detail = run.output.trim();
   return `${phase} spawn failed (${run.exitReason})${detail ? `: ${detail}` : ''}`;
+}
+
+function parseRunEnvelope(run: SpawnResult, roundTwoFail: boolean) {
+  for (const output of run.outputs ?? []) {
+    const parsed = parseEnvelope(output, { roundTwoFail });
+    if (parsed.ok) return parsed;
+  }
+  return parseEnvelope(run.output, { roundTwoFail });
+}
+
+const VERDICT_KINDS = new Set(['pass', 'fail', 'blocked']);
+
+/**
+ * Verdict-shaped, not merely JSON.
+ *
+ * `parseVerdict` never fails — it normalizes anything into a `fail` — so "the
+ * newest message that parses" would let a closing sentence that happens to
+ * quote a JSON object outrank the real verdict two messages earlier.
+ */
+function looksLikeVerdict(output: string): boolean {
+  const raw = extractJsonBlock(output);
+  if (!raw || typeof raw !== 'object') return false;
+  const kind = (raw as { verdict?: unknown }).verdict;
+  return typeof kind === 'string' && VERDICT_KINDS.has(kind);
+}
+
+function parseRunVerdict(run: SpawnResult) {
+  for (const output of run.outputs ?? []) {
+    if (looksLikeVerdict(output)) return parseVerdict(output);
+  }
+  return parseVerdict(run.output);
 }
 
 export class Orchestrator {
@@ -237,7 +268,7 @@ export class Orchestrator {
       await this.terminate(task, 'BLOCKED', spawnFailureReason('sizing', run));
       return false;
     }
-    const parsed = parseEnvelope(run.output, { roundTwoFail: this.roundTwoFail.has(task.id) });
+    const parsed = parseRunEnvelope(run, this.roundTwoFail.has(task.id));
     if (!parsed.ok || !parsed.envelope) {
       await this.terminate(task, 'BLOCKED', `envelope rejected: ${parsed.errors.join('; ')}`);
       return false;
@@ -317,7 +348,7 @@ export class Orchestrator {
       await this.terminate(task, 'BLOCKED', spawnFailureReason('execution', run));
       return false;
     }
-    const verdict = parseVerdict(run.output);
+    const verdict = parseRunVerdict(run);
     const current = this.absorbVerdict(loadTask(task.id) ?? task, verdict);
 
     if (verdict.irreversible.length > 0 && await this.parkIfIrreversible(current, verdict.irreversible)) return false;

@@ -122,6 +122,36 @@ export function lastAssistantText(transcriptPath: string): string {
   return last;
 }
 
+export function assistantTexts(transcriptPath: string): string[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, 'utf-8');
+  } catch {
+    return [];
+  }
+  const outputs: string[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const record = entry as { type?: string; message?: { content?: unknown } };
+    if (record.type !== 'assistant') continue;
+    const content = record.message?.content;
+    if (!Array.isArray(content)) continue;
+    const text = content
+      .filter((block) => (block as { type?: string })?.type === 'text')
+      .map((block) => String((block as { text?: unknown }).text ?? ''))
+      .join('');
+    if (text.trim()) outputs.unshift(text);
+  }
+  return outputs;
+}
+
 export interface WatchOutcome {
   health: SessionHealth | 'never-started' | 'aborted' | 'timeout';
   /** Set once the session was observed doing work, so idle-at-boot is not read as done. */
@@ -243,6 +273,7 @@ export async function waitForSlot(
 function refusal(reason: string, detail: string): SpawnResult {
   return {
     output: detail,
+    outputs: [],
     exitReason: reason,
     turnsUsed: 0,
     costUsd: 0,
@@ -342,6 +373,7 @@ export const cmuxSpawnPort: SpawnPort = {
     const transcriptPath = outcome.transcriptPath || booted?.transcriptPath || '';
     const usage = transcriptPath ? usageFromTranscript(transcriptPath) : null;
     const output = transcriptPath ? lastAssistantText(transcriptPath) : '';
+    const outputs = transcriptPath ? assistantTexts(transcriptPath) : [];
     const exitReason = EXIT_REASON[outcome.health] ?? outcome.health;
     const cost = measuredCost(
       {
@@ -369,6 +401,7 @@ export const cmuxSpawnPort: SpawnPort = {
 
     return {
       output: output || screen || `cmux pane ${created.ref} ended as "${exitReason}" with nothing in its transcript.`,
+      outputs,
       exitReason,
       turnsUsed: usage?.turns ?? 0,
       costUsd: cost.usd,

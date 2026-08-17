@@ -123,8 +123,10 @@ function workingPort(work: (record: WorktreeRecord) => void, lane: TaskEnvelope[
         if (!made.ok || !made.record) throw new Error(`fixture worktree failed: ${made.reason}`);
         work(made.record);
       }
+      const output = gate === 'size' ? envelopeJson({ lane }) : PASS_VERDICT;
       return {
-        output: gate === 'size' ? envelopeJson({ lane }) : PASS_VERDICT,
+        output,
+        outputs: [output],
         exitReason: 'success',
         turnsUsed: 2,
         costUsd: 0.1,

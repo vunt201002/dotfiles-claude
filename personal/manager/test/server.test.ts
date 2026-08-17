@@ -51,8 +51,10 @@ const GREEN_SUITE = [' 4 pass', ' 0 fail', 'Ran 4 tests across 1 files.'].join('
 
 const port: SpawnPort = {
   async run(req) {
+    const output = req.prompt.startsWith('Size issue') ? envelopeJson() : PASS_VERDICT;
     return {
-      output: req.prompt.startsWith('Size issue') ? envelopeJson() : PASS_VERDICT,
+      output,
+      outputs: [output],
       exitReason: 'success',
       turnsUsed: 1,
       costUsd: 0.05,

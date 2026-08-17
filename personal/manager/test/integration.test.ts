@@ -15,6 +15,7 @@ import { __clearWaiters, BROWSER_TOKEN, holderOf, projectLock } from '../lib/loc
 import { Orchestrator } from '../lib/orchestrator';
 import type { ExecFn, ExecResult } from '../lib/assert-runner';
 import { approveCommands, isCommandApproved } from '../lib/assert-approvals';
+import { assistantTexts, lastAssistantText } from '../lib/cmux-spawn';
 import type { DiffResult } from '../lib/git';
 import { assertApprovalsFile, ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths';
 import { reconcile } from '../lib/reconcile';
@@ -99,6 +100,17 @@ function verdictJson(body: Record<string, unknown>): string {
   return `Done.\n\`\`\`json\n${JSON.stringify(body)}\n\`\`\``;
 }
 
+function transcriptReply(name: string, messages: string[]): { output: string; outputs: string[] } {
+  const transcript = path.join(HOME, name);
+  fs.writeFileSync(
+    transcript,
+    messages
+      .map((text) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }))
+      .join('\n'),
+  );
+  return { output: lastAssistantText(transcript), outputs: assistantTexts(transcript) };
+}
+
 type Phase = 'size' | 'execute' | 'B8-judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
 
 function phaseOf(req: SpawnRequest): Phase {
@@ -127,7 +139,7 @@ interface MockCall {
  * claim has no independent witness.
  */
 function makePort(
-  reply: (phase: Phase, call: MockCall, callIndex: number) => string,
+  reply: (phase: Phase, call: MockCall, callIndex: number) => string | { output: string; outputs: string[] },
   costUsd = 0.1,
   hookGates: string[] = ['tsc'],
 ): { port: SpawnPort; calls: MockCall[] } {
@@ -147,8 +159,11 @@ function makePort(
         projectLockHolder: holderOf(projectLock(req.project)),
       };
       calls.push(call);
+      const response = reply(call.phase, call, calls.length - 1);
+      const output = typeof response === 'string' ? response : response.output;
       return {
-        output: reply(call.phase, call, calls.length - 1),
+        output,
+        outputs: typeof response === 'string' ? (output ? [output] : []) : response.outputs,
         exitReason: 'success',
         turnsUsed: 3,
         costUsd,
@@ -1156,11 +1171,73 @@ describe('spec-check stays blind through the real driver', () => {
 });
 
 describe('bad agent output', () => {
+  test('a verdict before trailing chatter survives the real execute parse path', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute') {
+        return transcriptReply('execute-chatter.jsonl', [PASS_VERDICT, 'Tests finished, 790 pass.']);
+      }
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+  });
+
+  test('trailing chatter that quotes unrelated JSON does not outrank the real verdict', async () => {
+    const { port } = makePort((phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute') {
+        return transcriptReply('execute-quoted-json.jsonl', [
+          PASS_VERDICT,
+          'For reference, the config I read was ```json\n{"maxAgents":20,"runner":"cmux"}\n```',
+        ]);
+      }
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(loadTask(taskId)?.state).toBe('REPORTED');
+  });
+
+  test('a sizing envelope before trailing chatter survives the real sizing parse path', async () => {
+    const { port } = makePort((phase) =>
+      phase === 'size'
+        ? transcriptReply('sizing-chatter.jsonl', [envelopeJson({ title: 'Recovered sizing payload' }), 'Sizing complete.'])
+        : PASS_VERDICT,
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('REPORTED');
+    expect(task?.envelope?.title).toBe('Recovered sizing payload');
+  });
+
+  test('no parseable candidate keeps the existing verdict failure reason', async () => {
+    const { port } = makePort((phase) =>
+      phase === 'size'
+        ? envelopeJson()
+        : transcriptReply('unparseable-chatter.jsonl', ['No structured result.', 'Tests finished, 790 pass.']),
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(loadTask(taskId)?.failure_reason).toBe('execute failed: agent returned no parseable verdict block');
+  });
+
   test('a sizing transport refusal tells the operator why no agent ran', async () => {
     const port: SpawnPort = {
       async run(req) {
         return {
           output: 'cmux is not answering on its socket. Start the cmux app, or select the sdk runner.',
+          outputs: [],
           exitReason: 'cmux_unavailable',
           turnsUsed: 0,
           costUsd: 0,
@@ -1203,6 +1280,7 @@ describe('bad agent output', () => {
         if (phaseOf(req) !== 'execute') return healthy.run(req);
         return {
           output: 'the pre-tool-use guard is missing; install it before using a permission-skipping pane.',
+          outputs: [],
           exitReason: 'guard_not_wired',
           turnsUsed: 0,
           costUsd: 0,
@@ -1382,7 +1460,7 @@ describe('a review that did not run is not a review that found nothing', () => {
     return {
       async run() {
         return {
-          output, exitReason, turnsUsed: 0, costUsd: 0, costKnown: false,
+          output, outputs: [], exitReason, turnsUsed: 0, costUsd: 0, costKnown: false,
           model: 'codex', sessionId: '', durationMs: 1,
         };
       },

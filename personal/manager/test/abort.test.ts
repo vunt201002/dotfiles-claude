@@ -23,6 +23,7 @@ function idleReply(): SpawnPort {
     async run() {
       return {
         output: 'no verdict block',
+        outputs: ['no verdict block'],
         exitReason: 'success',
         turnsUsed: 1,
         costUsd: 0,
