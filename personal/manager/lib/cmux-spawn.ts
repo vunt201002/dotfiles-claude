@@ -40,7 +40,7 @@ import {
   writePromptFile,
 } from './cmux-control';
 import { busyCount, fleet, healthOf, needsHuman, usageFromTranscript, type SessionHealth } from './cmux-sessions';
-import { managerDir } from './paths';
+import { atomicWriteJson, managerDir } from './paths';
 import { agentSdkSpawnPort, scopeDirective, type SpawnPort, type SpawnRequest, type SpawnResult } from './spawn';
 import { ensureTaskWorktree } from './worktrees';
 
@@ -51,6 +51,142 @@ import { ensureTaskWorktree } from './worktrees';
  */
 export function paneStateDir(taskId: string, role: string): string {
   return path.join(managerDir(), 'panes', `${taskId}.${role}`);
+}
+
+export type PaneClosedState = 'yes' | 'no' | 'unknown';
+
+export interface PaneRecord {
+  workspaceRef: string;
+  taskId: string;
+  role: string;
+  createdAt: string;
+  fate: 'unrecorded' | 'ended';
+  paneClosed: PaneClosedState;
+  endedAt?: string;
+  exitReason?: string;
+}
+
+export type PaneOwnership =
+  | { ownership: 'manager'; workspaceRef: string; taskId: string; role: string; record: PaneRecord }
+  | { ownership: 'unknown'; workspaceRef: string | null; recordFile?: string; reason?: string };
+
+export function paneRecordFile(taskId: string, role: string): string {
+  return path.join(paneStateDir(taskId, role), 'pane.json');
+}
+
+export function recordCreatedPane(workspaceRef: string, taskId: string, role: string): PaneRecord {
+  const record: PaneRecord = {
+    workspaceRef,
+    taskId,
+    role,
+    createdAt: new Date().toISOString(),
+    fate: 'unrecorded',
+    paneClosed: 'unknown',
+  };
+  atomicWriteJson(paneRecordFile(taskId, role), record);
+  return record;
+}
+
+export function recordEndedPane(record: PaneRecord, exitReason: string, paneClosed: PaneClosedState): PaneRecord {
+  const ended: PaneRecord = {
+    ...record,
+    fate: 'ended',
+    paneClosed,
+    endedAt: new Date().toISOString(),
+    exitReason,
+  };
+  atomicWriteJson(paneRecordFile(record.taskId, record.role), ended);
+  return ended;
+}
+
+export async function recordPaneAndWaitForSession(
+  workspaceRef: string,
+  taskId: string,
+  role: string,
+  dir: string,
+  opts: Parameters<typeof waitForSession>[1],
+  waiter: typeof waitForSession = waitForSession,
+): Promise<{ record: PaneRecord; session: Awaited<ReturnType<typeof waitForSession>> }> {
+  const record = recordCreatedPane(workspaceRef, taskId, role);
+  const session = await waiter(dir, opts);
+  return { record, session };
+}
+
+function validPaneRecord(value: unknown): value is PaneRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Partial<PaneRecord>;
+  return (
+    typeof record.workspaceRef === 'string' &&
+    typeof record.taskId === 'string' &&
+    typeof record.role === 'string' &&
+    typeof record.createdAt === 'string' &&
+    (record.fate === 'unrecorded' || record.fate === 'ended') &&
+    (record.paneClosed === 'yes' || record.paneClosed === 'no' || record.paneClosed === 'unknown')
+  );
+}
+
+export function readPaneOwnership(workspaceRefs: readonly string[] = []): PaneOwnership[] {
+  const panesDir = path.join(managerDir(), 'panes');
+  let entries: fs.Dirent[] = [];
+  let unreadableDir = '';
+  try {
+    entries = fs.readdirSync(panesDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unreadableDir = String(error);
+    if (unreadableDir && workspaceRefs.length === 0) {
+      return [{ ownership: 'unknown', workspaceRef: null, recordFile: panesDir, reason: unreadableDir }];
+    }
+    entries = [];
+  }
+  const owned = new Map<string, PaneRecord[]>();
+  const unreadable: PaneOwnership[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const recordFile = path.join(panesDir, entry.name, 'pane.json');
+    let record: unknown;
+    try {
+      record = JSON.parse(fs.readFileSync(recordFile, 'utf-8'));
+    } catch (error) {
+      unreadable.push({ ownership: 'unknown', workspaceRef: null, recordFile, reason: String(error) });
+      continue;
+    }
+    if (validPaneRecord(record)) {
+      const records = owned.get(record.workspaceRef) ?? [];
+      records.push(record);
+      owned.set(record.workspaceRef, records);
+    } else {
+      unreadable.push({ ownership: 'unknown', workspaceRef: null, recordFile, reason: 'pane record is malformed' });
+    }
+  }
+  if (workspaceRefs.length === 0) {
+    const records = [...owned.values()].flat().map(
+      (record): PaneOwnership => ({
+        ownership: 'manager',
+        workspaceRef: record.workspaceRef,
+        taskId: record.taskId,
+        role: record.role,
+        record,
+      }),
+    );
+    return [...records, ...unreadable];
+  }
+  return workspaceRefs.map((workspaceRef): PaneOwnership => {
+    const records = owned.get(workspaceRef) ?? [];
+    if (records.length === 0) {
+      return unreadableDir
+        ? { ownership: 'unknown', workspaceRef, recordFile: panesDir, reason: unreadableDir }
+        : { ownership: 'unknown', workspaceRef };
+    }
+    if (records.length > 1) return { ownership: 'unknown', workspaceRef, reason: 'multiple pane records claim this workspace ref' };
+    const record = records[0];
+    return {
+      ownership: 'manager',
+      workspaceRef,
+      taskId: record.taskId,
+      role: record.role,
+      record,
+    };
+  });
 }
 
 /**
@@ -362,7 +498,12 @@ export const cmuxSpawnPort: SpawnPort = {
       };
     }
 
-    const booted = await waitForSession(dir, { timeoutMs: cfg.cmuxStartupMs, startedAfter: startedAt / 1000 });
+    const recorded = await recordPaneAndWaitForSession(created.ref, req.taskId, req.role, dir, {
+      timeoutMs: cfg.cmuxStartupMs,
+      startedAfter: startedAt / 1000,
+    });
+    const paneRecord = recorded.record;
+    const booted = recorded.session;
     const outcome = await watchSession(dir, {
       timeoutMs: cfg.cmuxRunTimeoutMs,
       startupMs: cfg.cmuxStartupMs,
@@ -397,7 +538,9 @@ export const cmuxSpawnPort: SpawnPort = {
     const aborted = exitReason === 'aborted';
     const keepOpen = exitReason !== 'success' && !aborted;
     const screen = keepOpen ? readScreen(created.ref, 120) : '';
-    if (aborted || (!keepOpen && cfg.cmuxCloseOnSuccess)) closeWorkspace(created.ref);
+    const shouldClose = aborted || (!keepOpen && cfg.cmuxCloseOnSuccess);
+    const paneClosed: PaneClosedState = shouldClose ? (closeWorkspace(created.ref).ok ? 'yes' : 'unknown') : 'no';
+    recordEndedPane(paneRecord, exitReason, paneClosed);
 
     return {
       output: output || screen || `cmux pane ${created.ref} ended as "${exitReason}" with nothing in its transcript.`,

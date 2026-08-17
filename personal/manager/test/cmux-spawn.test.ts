@@ -2,15 +2,28 @@ import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 import { buildLaunchCommand, parseWorkspaceRef, sendText, writePromptFile } from '../lib/cmux-control';
 import { cmuxStorePath, type CmuxSession } from '../lib/cmux-sessions';
-import { assistantTexts, guardIsWired, lastAssistantText, waitForSlot, watchSession } from '../lib/cmux-spawn';
+import {
+  assistantTexts,
+  guardIsWired,
+  lastAssistantText,
+  readPaneOwnership,
+  recordEndedPane,
+  recordPaneAndWaitForSession,
+  waitForSlot,
+  watchSession,
+} from '../lib/cmux-spawn';
 import { resetConfigCache } from '../config';
 import { measuredCost } from '../lib/cost';
 import { managerConfigFile } from '../lib/paths';
 import { resolveSpawnRunner } from '../lib/spawn';
 
 const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cmux-spawn-')));
+process.env.MANAGER_HOME = HOME;
+process.env.GSTACK_HOME = HOME;
 const WORK = path.join(HOME, 'worktree');
 const ALIVE = process.pid;
 const DEAD = 2 ** 22;
@@ -63,6 +76,76 @@ afterAll(() => {
 });
 
 const FAST = { timeoutMs: 3_000, startupMs: 600, needsInputGraceMs: 300, pollMs: 30, home: HOME };
+
+describe('pane ownership survives the run that created it', () => {
+  beforeEach(() => {
+    fs.rmSync(path.join(HOME, 'manager', 'panes'), { recursive: true, force: true });
+  });
+
+  test('the ownership record exists before the session waiter runs', async () => {
+    const waiter = async (): Promise<null> => {
+      const ownership = readPaneOwnership(['workspace:41']);
+      expect(ownership[0].ownership).toBe('manager');
+      if (ownership[0].ownership === 'manager') expect(ownership[0].taskId).toBe('joy-t41');
+      return null;
+    };
+    await recordPaneAndWaitForSession('workspace:41', 'joy-t41', 'implementer', WORK, {}, waiter);
+  });
+
+  test('a fresh process can recover the task and role for an owned pane', async () => {
+    await recordPaneAndWaitForSession('workspace:42', 'joy-t42', 'reviewer', WORK, {}, async () => null);
+    const moduleUrl = pathToFileURL(path.resolve('personal/manager/lib/cmux-spawn.ts')).href;
+    const script = `const m = await import(${JSON.stringify(moduleUrl)}); process.stdout.write(JSON.stringify(m.readPaneOwnership(['workspace:42'])))`;
+    const child = spawnSync(process.execPath, ['-e', script], {
+      env: { ...process.env, MANAGER_HOME: HOME },
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)[0]).toMatchObject({ ownership: 'manager', taskId: 'joy-t42', role: 'reviewer' });
+  });
+
+  test('an unrecorded pane is unknown and is never claimed by the manager', () => {
+    expect(readPaneOwnership(['workspace:999'])).toEqual([{ ownership: 'unknown', workspaceRef: 'workspace:999' }]);
+  });
+
+  test('a legacy state directory with no record is reported as unknown instead of disappearing', () => {
+    const stateDir = path.join(HOME, 'manager', 'panes', 'old-task.implementer');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'prompt.txt'), 'old prompt');
+    expect(readPaneOwnership()).toContainEqual(
+      expect.objectContaining({ ownership: 'unknown', workspaceRef: null, recordFile: path.join(stateDir, 'pane.json') }),
+    );
+  });
+
+  test('duplicate records make a workspace ref unknown instead of guessing an owner', async () => {
+    await recordPaneAndWaitForSession('workspace:46', 'joy-t46-a', 'implementer', WORK, {}, async () => null);
+    await recordPaneAndWaitForSession('workspace:46', 'joy-t46-b', 'reviewer', WORK, {}, async () => null);
+    expect(readPaneOwnership(['workspace:46'])).toEqual([
+      { ownership: 'unknown', workspaceRef: 'workspace:46', reason: 'multiple pane records claim this workspace ref' },
+    ]);
+  });
+
+  test('a record not finalized by its run says fate unrecorded and closure unknown', async () => {
+    await recordPaneAndWaitForSession('workspace:43', 'joy-t43', 'implementer', WORK, {}, async () => null);
+    const ownership = readPaneOwnership(['workspace:43'])[0];
+    expect(ownership.ownership).toBe('manager');
+    if (ownership.ownership === 'manager') {
+      expect(ownership.record.fate).toBe('unrecorded');
+      expect(ownership.record.paneClosed).toBe('unknown');
+    }
+  });
+
+  test('finalization distinguishes a deliberately kept pane from a closed pane', async () => {
+    const kept = await recordPaneAndWaitForSession('workspace:44', 'joy-t44', 'implementer', WORK, {}, async () => null);
+    recordEndedPane(kept.record, 'needs_input', 'no');
+    const closed = await recordPaneAndWaitForSession('workspace:45', 'joy-t45', 'implementer', WORK, {}, async () => null);
+    recordEndedPane(closed.record, 'success', 'yes');
+    const ownership = readPaneOwnership(['workspace:44', 'workspace:45']);
+    expect(ownership[0].ownership === 'manager' && ownership[0].record.paneClosed).toBe('no');
+    expect(ownership[1].ownership === 'manager' && ownership[1].record.paneClosed).toBe('yes');
+  });
+});
 
 describe('watching a pane to a state worth reporting', () => {
   // A freshly-hooked session is idle for the moment between registering and
