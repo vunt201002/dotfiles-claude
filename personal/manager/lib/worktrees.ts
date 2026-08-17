@@ -357,6 +357,8 @@ export function taskDiff(work: TaskWorkdir): DiffResult {
 export interface RemoveResult {
   ok: boolean;
   reason: string;
+  branch: string | null;
+  hasUnmergedCommits: boolean | null;
 }
 
 /**
@@ -371,24 +373,46 @@ export function removeTaskWorktree(taskId: string, opts: { force?: boolean } = {
   const registry = loadWorktreeRegistry();
   const record = registry[taskId];
   if (!record) {
-    return { ok: false, reason: `task ${taskId} has no worktree the manager created; refusing to touch anything` };
+    return {
+      ok: false,
+      reason: `task ${taskId} has no worktree the manager created; refusing to touch anything`,
+      branch: null,
+      hasUnmergedCommits: null,
+    };
   }
+  const unmerged = git(['rev-list', '--count', `${record.baseSha}..${record.branch}`], record.repo, 30_000);
+  if (!unmerged.ok || !/^\d+$/.test(unmerged.stdout)) {
+    return {
+      ok: false,
+      reason: `could not measure commits on ${record.branch}: ${unmerged.stderr || unmerged.stdout || 'git returned no count'}`,
+      branch: record.branch,
+      hasUnmergedCommits: null,
+    };
+  }
+  const hasUnmergedCommits = Number(unmerged.stdout) > 0;
   if (fs.existsSync(record.dir) && !opts.force && isDirty(record.dir)) {
     return {
       ok: false,
       reason: `${record.dir} has uncommitted changes. Harvest them first, or pass force to discard them.`,
+      branch: record.branch,
+      hasUnmergedCommits,
     };
   }
   const args = ['worktree', 'remove', record.dir];
   if (opts.force) args.push('--force');
   const removed = git(args, record.repo);
   if (!removed.ok && fs.existsSync(record.dir)) {
-    return { ok: false, reason: `git worktree remove failed: ${removed.stderr || removed.stdout}` };
+    return {
+      ok: false,
+      reason: `git worktree remove failed: ${removed.stderr || removed.stdout}`,
+      branch: record.branch,
+      hasUnmergedCommits,
+    };
   }
   git(['worktree', 'prune'], record.repo);
-  delete registry[taskId];
+  if (!hasUnmergedCommits) delete registry[taskId];
   atomicWriteJson(worktreesFile(), registry);
-  return { ok: true, reason: '' };
+  return { ok: true, reason: '', branch: record.branch, hasUnmergedCommits };
 }
 
 /**

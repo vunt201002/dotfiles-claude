@@ -24,6 +24,12 @@ function git(args: string[], cwd: string): void {
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 }
 
+function gitOutput(args: string[], cwd: string): string {
+  const r = spawnSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8' });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
 /** A throwaway repo with one commit, so `git worktree add` has a HEAD to branch from. */
 function makeRepo(name: string): string {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `wt-repo-${name}-`)));
@@ -148,6 +154,8 @@ describe('removal refuses everything it did not create', () => {
     const result = removeTaskWorktree('never-registered');
     expect(result.ok).toBe(false);
     expect(result.reason).toContain('refusing');
+    expect(result.branch).toBeNull();
+    expect(result.hasUnmergedCommits).toBeNull();
   });
 
   test('a worktree with uncommitted changes is refused', () => {
@@ -158,6 +166,8 @@ describe('removal refuses everything it did not create', () => {
     const result = removeTaskWorktree('joy-t6-01');
     expect(result.ok).toBe(false);
     expect(result.reason).toContain('uncommitted');
+    expect(result.branch).toBe(record.branch);
+    expect(result.hasUnmergedCommits).toBe(false);
     expect(fs.existsSync(record.dir)).toBe(true);
   });
 
@@ -165,7 +175,10 @@ describe('removal refuses everything it did not create', () => {
     const dir = repo('force');
     const record = ensureTaskWorktree('joy-t7-01', 'joy', dir).record!;
     fs.writeFileSync(path.join(record.dir, 'scratch.txt'), 'x');
-    expect(removeTaskWorktree('joy-t7-01', { force: true }).ok).toBe(true);
+    const result = removeTaskWorktree('joy-t7-01', { force: true });
+    expect(result.ok).toBe(true);
+    expect(result.branch).toBe(record.branch);
+    expect(result.hasUnmergedCommits).toBe(false);
     expect(fs.existsSync(record.dir)).toBe(false);
     expect(loadWorktreeRegistry()['joy-t7-01']).toBeUndefined();
   });
@@ -173,9 +186,39 @@ describe('removal refuses everything it did not create', () => {
   test('a clean worktree is removed and drops out of the registry', () => {
     const dir = repo('clean');
     const record = ensureTaskWorktree('joy-t8-01', 'joy', dir).record!;
-    expect(removeTaskWorktree('joy-t8-01').ok).toBe(true);
+    const result = removeTaskWorktree('joy-t8-01');
+    expect(result.ok).toBe(true);
+    expect(result.branch).toBe(record.branch);
+    expect(result.hasUnmergedCommits).toBe(false);
     expect(fs.existsSync(record.dir)).toBe(false);
     expect(listWorktrees().some((r) => r.taskId === 'joy-t8-01')).toBe(false);
+    expect(gitOutput(['branch', '--list', record.branch], dir)).toContain(record.branch);
+  });
+
+  test('a removed worktree with commits reports and retains the branch record', () => {
+    const dir = repo('committed');
+    const record = ensureTaskWorktree('joy-t8-02', 'joy', dir).record!;
+    fs.writeFileSync(path.join(record.dir, 'finished.txt'), 'durable work\n');
+    git(['add', 'finished.txt'], record.dir);
+    git(['commit', '-qm', 'finish task'], record.dir);
+    const result = removeTaskWorktree('joy-t8-02');
+    expect(result).toMatchObject({ ok: true, branch: record.branch, hasUnmergedCommits: true });
+    expect(fs.existsSync(record.dir)).toBe(false);
+    expect(loadWorktreeRegistry()['joy-t8-02'].branch).toBe(record.branch);
+    expect(gitOutput(['branch', '--list', record.branch], dir)).toContain(record.branch);
+  });
+
+  test('force discards uncommitted changes but keeps committed history findable', () => {
+    const dir = repo('force-committed');
+    const record = ensureTaskWorktree('joy-t8-03', 'joy', dir).record!;
+    fs.writeFileSync(path.join(record.dir, 'finished.txt'), 'committed\n');
+    git(['add', 'finished.txt'], record.dir);
+    git(['commit', '-qm', 'keep this'], record.dir);
+    fs.writeFileSync(path.join(record.dir, 'scratch.txt'), 'discard this');
+    const result = removeTaskWorktree('joy-t8-03', { force: true });
+    expect(result).toMatchObject({ ok: true, branch: record.branch, hasUnmergedCommits: true });
+    expect(loadWorktreeRegistry()['joy-t8-03'].branch).toBe(record.branch);
+    expect(gitOutput(['show', `${record.branch}:finished.txt`], dir)).toBe('committed');
   });
 });
 
