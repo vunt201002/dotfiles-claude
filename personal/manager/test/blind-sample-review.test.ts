@@ -264,4 +264,23 @@ describe('manager review-sample CLI', () => {
     expect(result.stdout).toContain('blind samples awaiting human review = 1');
     expect(result.stdout).toContain('current overall denominator = 1 rows');
   });
+
+  test('--json withholds precision on the same terms as the table', () => {
+    const sample = task({
+      gate_reports: [{ gate: 'spec-check', gate_family: 'llm', verdict: 'caught', caught: 'finding', attempt: 1 }],
+    });
+    saveTask(sample);
+    gate();
+    const result = spawnSync(process.execPath, [GATE_LOG, 'stats', '--project', 'joy', '--json'], {
+      encoding: 'utf8',
+      env: process.env,
+    });
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.blind_samples_unreviewed).toBe(1);
+    for (const gateRow of Object.values(parsed.by_gate) as Array<{ precision: unknown; precision_status: string }>) {
+      expect(gateRow.precision).toBeNull();
+      expect(gateRow.precision_status).toBe('pending-human-review');
+    }
+  });
 });
