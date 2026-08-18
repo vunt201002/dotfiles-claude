@@ -23,6 +23,7 @@ export interface GateStats {
   detection_rate: number | null;
   coverage: number;
   false_positives: number;
+  fp_errors: number;
   fp_denominator: number;
   fp_rate: number | null;
 }
@@ -38,6 +39,7 @@ export interface OracleReport {
   matrix: Record<string, Record<string, Verdict>>;
   details: Record<string, Record<string, string>>;
   false_positives: Record<string, { on: string; detail: string }[]>;
+  fp_errors: Record<string, { on: string; detail: string }[]>;
   ratchet: Record<string, { holds: boolean; detail: string }>;
   deterministic_catch_share: number | null;
   caught_by_any_deterministic: number;
@@ -65,6 +67,7 @@ export function summarize(outcome: GateOutcome, total: number): GateStats {
     detection_rate: ratio(counts.caught, applicable),
     coverage: ratio(applicable, total) ?? 0,
     false_positives: outcome.false_positives.length,
+    fp_errors: outcome.fp_errors.length,
     fp_denominator: outcome.fp_denominator,
     fp_rate: ratio(outcome.false_positives.length, outcome.fp_denominator),
   };
@@ -105,6 +108,8 @@ export function buildReport(
 
   const falsePositives: Record<string, { on: string; detail: string }[]> = {};
   for (const o of outcomes) falsePositives[o.gate] = o.false_positives;
+  const fpErrors: Record<string, { on: string; detail: string }[]> = {};
+  for (const o of outcomes) fpErrors[o.gate] = o.fp_errors;
 
   return {
     generated_at: new Date().toISOString(),
@@ -116,6 +121,7 @@ export function buildReport(
     matrix,
     details,
     false_positives: falsePositives,
+    fp_errors: fpErrors,
     ratchet,
     deterministic_catch_share: ratio(deterministicCatches, totalCatches),
     caught_by_any_deterministic: caughtByAnyDeterministic.length,
@@ -320,6 +326,9 @@ function inconsistencies(report: OracleReport, side: string): string[] {
 
   for (const g of report.gates) {
     const where = `${side}: gate "${g.gate}"`;
+    if (typeof g.fp_errors !== 'number') {
+      found.push(`${where} has no fp_errors count; this file predates fixed-side error accounting and must be re-frozen`);
+    }
     if (g.applicable !== g.caught + g.missed) {
       found.push(`${where} says applicable ${g.applicable} but caught ${g.caught} + missed ${g.missed} is ${g.caught + g.missed}`);
     }
@@ -497,6 +506,9 @@ export function diffAgainstBaseline(
       const what = scored ? 'froze this gate' : 'recorded no number for this gate';
       diff.baselineCaveats.push(`${g.gate}: the baseline ${what} from a run where ${g.error}/${base.fixtures_total} fixtures errored`);
     }
+    if (g.fp_errors > 0) {
+      diff.baselineCaveats.push(`${g.gate}: the baseline froze false-positive measurements from a run where ${g.fp_errors} fixed-side calls errored`);
+    }
   }
 
   const sameMetrics = before.size === after.size && [...before.keys()].every(k => after.has(k));
@@ -637,6 +649,15 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
     lines.push('false positives');
     for (const [gate, fps] of Object.entries(report.false_positives)) {
       for (const fp of fps) lines.push(`  ${gate.padEnd(12)} ${fp.on.padEnd(34)} ${fp.detail}`);
+    }
+    lines.push('');
+  }
+
+  const anyFpErrors = Object.values(report.fp_errors).some(v => v.length > 0);
+  if (anyFpErrors) {
+    lines.push('false-positive measurement errors');
+    for (const [gate, errors] of Object.entries(report.fp_errors)) {
+      for (const error of errors) lines.push(`  ${gate.padEnd(12)} ${error.on.padEnd(34)} ${error.detail}`);
     }
     lines.push('');
   }

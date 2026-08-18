@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-18T10:39:50.332Z",
+  "generated_at": "2026-08-18T10:40:48.692Z",
   "corpus": {
     "fixtures": 19,
     "digest": "83737b82e05ac05e"
@@ -21,6 +21,7 @@
       "detection_rate": 0,
       "coverage": 0.105,
       "false_positives": 1,
+      "fp_errors": 0,
       "fp_denominator": 8,
       "fp_rate": 0.125
     },
@@ -37,6 +38,7 @@
       "detection_rate": 0,
       "coverage": 0.316,
       "false_positives": 0,
+      "fp_errors": 0,
       "fp_denominator": 6,
       "fp_rate": 0
     },
@@ -53,6 +55,7 @@
       "detection_rate": 0,
       "coverage": 0.421,
       "false_positives": 0,
+      "fp_errors": 0,
       "fp_denominator": 8,
       "fp_rate": 0
     },
@@ -69,6 +72,7 @@
       "detection_rate": 0.895,
       "coverage": 1,
       "false_positives": 0,
+      "fp_errors": 0,
       "fp_denominator": 19,
       "fp_rate": 0
     },
@@ -85,6 +89,7 @@
       "detection_rate": null,
       "coverage": 0,
       "false_positives": 0,
+      "fp_errors": 0,
       "fp_denominator": 0,
       "fp_rate": null
     },
@@ -101,6 +106,7 @@
       "detection_rate": null,
       "coverage": 0,
       "false_positives": 0,
+      "fp_errors": 0,
       "fp_denominator": 0,
       "fp_rate": null
     }
@@ -312,7 +318,7 @@
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
-      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-weQqjY/home/.claude/brain-vault, outside the checkout, so they never get committed",
+      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-rXufm4/home/.claude/brain-vault, outside the checkout, so they never get committed",
       "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
       "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
     },
@@ -420,6 +426,14 @@
         "detail": "a runbook about credential rotation contains no credentials — blocked anyway"
       }
     ],
+    "lint": [],
+    "tsc": [],
+    "red-test": [],
+    "spec-check": [],
+    "reviewer": []
+  },
+  "fp_errors": {
+    "guard": [],
     "lint": [],
     "tsc": [],
     "red-test": [],

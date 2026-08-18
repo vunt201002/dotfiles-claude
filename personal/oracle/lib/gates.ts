@@ -33,6 +33,8 @@ export interface GateOutcome {
   unavailable_reason: string;
   cells: Record<string, GateCell>;
   false_positives: FalsePositive[];
+  /** Fixed-side calls that produced no measurement, kept separate so they cannot be counted as false positives. */
+  fp_errors: FalsePositive[];
   fp_denominator: number;
 }
 
@@ -85,7 +87,7 @@ function caseMarker(c: FixtureCase, variant: string): string {
 }
 
 function emptyOutcome(gate: string, family: GateFamily): GateOutcome {
-  return { gate, family, available: true, unavailable_reason: '', cells: {}, false_positives: [], fp_denominator: 0 };
+  return { gate, family, available: true, unavailable_reason: '', cells: {}, false_positives: [], fp_errors: [], fp_denominator: 0 };
 }
 
 function markAll(outcome: GateOutcome, cases: FixtureCase[], verdict: Verdict, detail: string): GateOutcome {
@@ -346,12 +348,16 @@ export async function runRedTestGate(cases: FixtureCase[]): Promise<GateOutcome>
       ? { verdict: 'caught', detail: onBuggy.detail }
       : { verdict: 'missed', detail: `the test written from the ticket stays green: ${onBuggy.detail}` };
 
-    out.fp_denominator++;
     try {
       const onFixed = await c.probe.run(c.fixedDir);
+      if (onFixed.detail.startsWith('SKIPPED-LOUD:')) {
+        out.fp_errors.push({ on: `${c.bug.id}/fixed`, detail: onFixed.detail });
+        continue;
+      }
+      out.fp_denominator++;
       if (onFixed.red) out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: onFixed.detail });
     } catch (err: any) {
-      out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: `probe threw on fixed: ${err?.message ?? err}` });
+      out.fp_errors.push({ on: `${c.bug.id}/fixed`, detail: `probe threw on fixed: ${err?.message ?? err}` });
     }
   }
 

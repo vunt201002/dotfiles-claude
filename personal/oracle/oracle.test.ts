@@ -5,7 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   corpusFingerprint, fixtureEscapes, loadCases, loadGuardFpProbes, loadGroundTruth,
-  APPARATUS_DIR, FIXTURES_DIR, SHARED_FIXTURE_HARNESS, type CorpusFingerprint,
+  APPARATUS_DIR, FIXTURES_DIR, SHARED_FIXTURE_HARNESS, type CorpusFingerprint, type FixtureCase,
 } from './lib/cases';
 import { verifyFixtures, runRedTestGate, runGuardGate, runLintGate, runTscGate, runTscRatchet, type Verdict } from './lib/gates';
 import { backendLabel, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skippedLlmGate } from './lib/llm-gates';
@@ -26,7 +26,7 @@ const SPEC_CHECK_NEVER_SCORED: GateStats = {
   available: false,
   unavailable_reason: 'ORACLE_LLM=1 is not set — the paid gates are off by default',
   caught: 0, missed: 0, n_a: 0, error: 19, applicable: 0,
-  detection_rate: null, coverage: 0, false_positives: 0, fp_denominator: 0, fp_rate: null,
+  detection_rate: null, coverage: 0, false_positives: 0, fp_errors: 0, fp_denominator: 0, fp_rate: null,
 };
 
 const SPEC_CHECK_SCORED: GateStats = {
@@ -35,7 +35,7 @@ const SPEC_CHECK_SCORED: GateStats = {
   available: true,
   unavailable_reason: '',
   caught: 17, missed: 2, n_a: 0, error: 0, applicable: 19,
-  detection_rate: 0.895, coverage: 1, false_positives: 13, fp_denominator: 19, fp_rate: 0.684,
+  detection_rate: 0.895, coverage: 1, false_positives: 13, fp_errors: 0, fp_denominator: 19, fp_rate: 0.684,
 };
 
 const REVIEWER_SCORED: GateStats = {
@@ -44,7 +44,7 @@ const REVIEWER_SCORED: GateStats = {
   available: true,
   unavailable_reason: '',
   caught: 13, missed: 5, n_a: 0, error: 1, applicable: 18,
-  detection_rate: 0.722, coverage: 0.947, false_positives: 8, fp_denominator: 18, fp_rate: 0.444,
+  detection_rate: 0.722, coverage: 0.947, false_positives: 8, fp_errors: 0, fp_denominator: 18, fp_rate: 0.444,
 };
 
 const REVIEWER_NEVER_SCORED: GateStats = { ...SPEC_CHECK_NEVER_SCORED, gate: 'reviewer' };
@@ -55,7 +55,7 @@ const REVIEWER_QUOTA_DIED_AFTER_TWO: GateStats = {
   available: true,
   unavailable_reason: '',
   caught: 2, missed: 0, n_a: 0, error: 17, applicable: 2,
-  detection_rate: 1, coverage: 0.105, false_positives: 0, fp_denominator: 2, fp_rate: 0,
+  detection_rate: 1, coverage: 0.105, false_positives: 0, fp_errors: 0, fp_denominator: 2, fp_rate: 0,
 };
 
 const GUARD_AFTER_DENYLIST_SPLIT: GateStats = {
@@ -64,7 +64,7 @@ const GUARD_AFTER_DENYLIST_SPLIT: GateStats = {
   available: true,
   unavailable_reason: '',
   caught: 0, missed: 2, n_a: 17, error: 0, applicable: 2,
-  detection_rate: 0, coverage: 0.105, false_positives: 1, fp_denominator: 8, fp_rate: 0.125,
+  detection_rate: 0, coverage: 0.105, false_positives: 1, fp_errors: 0, fp_denominator: 8, fp_rate: 0.125,
 };
 
 const GUARD_BEFORE_DENYLIST_SPLIT: GateStats = {
@@ -87,7 +87,7 @@ const RED_TEST_SCORED: GateStats = {
   available: true,
   unavailable_reason: '',
   caught: 17, missed: 2, n_a: 0, error: 0, applicable: 19,
-  detection_rate: 0.895, coverage: 1, false_positives: 0, fp_denominator: 19, fp_rate: 0,
+  detection_rate: 0.895, coverage: 1, false_positives: 0, fp_errors: 0, fp_denominator: 19, fp_rate: 0,
 };
 
 const RED_TEST_ALL_ERRORS: GateStats = {
@@ -108,7 +108,7 @@ const LINT_SCORED: GateStats = {
   available: true,
   unavailable_reason: '',
   caught: 0, missed: 6, n_a: 13, error: 0, applicable: 6,
-  detection_rate: 0, coverage: 0.316, false_positives: 0, fp_denominator: 6, fp_rate: 0,
+  detection_rate: 0, coverage: 0.316, false_positives: 0, fp_errors: 0, fp_denominator: 6, fp_rate: 0,
 };
 
 const PAID_GATES_OFF: DiffContext = {
@@ -143,6 +143,7 @@ function reportWith(gates: GateStats[], parts: ReportParts = {}): OracleReport {
     matrix: parts.matrix ?? { 'idempotency-key-race': {} },
     details: {},
     false_positives: {},
+    fp_errors: {},
     ratchet: parts.ratchet ?? {},
     deterministic_catch_share: null,
     caught_by_any_deterministic: 17,
@@ -1184,7 +1185,7 @@ describe('baseline diff: what the measured set did', () => {
       available: true,
       unavailable_reason: '',
       caught: 0, missed: 19, n_a: 0, error: 0, applicable: 19,
-      detection_rate: 0, coverage: 1, false_positives: 12, fp_denominator: 19, fp_rate: 0.632,
+      detection_rate: 0, coverage: 1, false_positives: 12, fp_errors: 0, fp_denominator: 19, fp_rate: 0.632,
     };
     const base = reportWith([LINT_SCORED]);
     const now = reportWith([LINT_SCORED, uselessNewGate]);
@@ -1654,6 +1655,126 @@ describe.skipIf(!slowGates)('oracle deterministic gates (ORACLE=1)', () => {
       expect(exitCodeFor(diff)).toBe(1);
     }
   }, 900_000);
+});
+
+describe('false-positive measurement errors', () => {
+  function backend(call: (prompt: string) => unknown): Backend {
+    return {
+      name: 'codex',
+      family: 'openai',
+      available: () => ({ ok: true, reason: '' }),
+      callJson: async <T>(prompt: string) => call(prompt) as T,
+    };
+  }
+
+  function llmBackends(fixed: 'throw' | 'false-positive') {
+    let producerCalls = 0;
+    return {
+      gate: backend(() => {
+        producerCalls++;
+        if (fixed === 'throw' && producerCalls === 3) throw new Error('fixed transport died');
+        return { findings: [{ title: 'A finding', why_it_matters: 'It matters.', evidence: 'evidence' }] };
+      }),
+      judge: backend(prompt => {
+        const id = prompt.includes('llm-canary-unauthenticated-delete-all-customers')
+          ? 'llm-canary-unauthenticated-delete-all-customers'
+          : 'idempotency-key-race';
+        return { detected: [id], reasoning: 'The named defect is present.' };
+      }),
+    };
+  }
+
+  test('a fixed-side LLM call that throws is an fp error outside numerator and denominator', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'idempotency-key-race')!;
+    const outcome = await runSpecCheckGate([source], llmBackends('throw'));
+
+    expect(outcome.fp_errors).toEqual([
+      { on: 'idempotency-key-race/fixed', detail: 'spec-check failed on fixed: fixed transport died' },
+    ]);
+    expect(outcome.false_positives).toEqual([]);
+    expect(outcome.fp_denominator).toBe(0);
+  });
+
+  test('a fixed-side SKIPPED-LOUD probe is an fp error outside numerator and denominator', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'idempotency-key-race')!;
+    const fixture: FixtureCase = {
+      ...source,
+      probe: {
+        kind: source.probe.kind,
+        run: async variantDir => variantDir === source.buggyDir
+          ? { red: true, detail: 'bug reproduced' }
+          : { red: false, detail: 'SKIPPED-LOUD: symlink unavailable' },
+      },
+    };
+
+    const outcome = await runRedTestGate([fixture]);
+
+    expect(outcome.fp_errors).toEqual([
+      { on: 'idempotency-key-race/fixed', detail: 'SKIPPED-LOUD: symlink unavailable' },
+    ]);
+    expect(outcome.false_positives).toEqual([]);
+    expect(outcome.fp_denominator).toBe(0);
+  });
+
+  test('a completed fixed-side call that reports the bug remains a false positive', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'idempotency-key-race')!;
+    const outcome = await runSpecCheckGate([source], llmBackends('false-positive'));
+
+    expect(outcome.fp_errors).toEqual([]);
+    expect(outcome.false_positives).toEqual([
+      { on: 'idempotency-key-race/fixed', detail: 'The named defect is present.' },
+    ]);
+    expect(outcome.fp_denominator).toBe(1);
+  });
+
+  test('fp rate uses only completed fixed-side calls', () => {
+    const stats = summarize({
+      gate: 'spec-check', family: 'llm', available: true, unavailable_reason: '', cells: {},
+      false_positives: [{ on: 'real-fp/fixed', detail: 'reported' }],
+      fp_errors: [{ on: 'transport-dead/fixed', detail: 'timeout' }],
+      fp_denominator: 2,
+    }, 0);
+
+    expect(stats.false_positives).toBe(1);
+    expect(stats.fp_errors).toBe(1);
+    expect(stats.fp_denominator).toBe(2);
+    expect(stats.fp_rate).toBe(0.5);
+  });
+
+  test('a baseline without fp_errors is corrupt and no metric is compared', () => {
+    const legacyGate: Partial<GateStats> = { ...RED_TEST_SCORED };
+    delete legacyGate.fp_errors;
+    const baseline = reportWith([legacyGate as GateStats]);
+    const diff = diffAgainstBaseline(reportWith([RED_TEST_SCORED]), baseline);
+
+    expect(diff.corruption).toEqual([
+      'baseline: gate "red-test" has no fp_errors count; this file predates fixed-side error accounting and must be re-frozen',
+    ]);
+    expect(exitCodeFor(diff)).toBe(1);
+    expect(diff.regressions).toEqual([]);
+    expect(diff.improvements).toEqual([]);
+    expect(diff.lostMeasurements).toEqual([]);
+    expect(diff.firstMeasurements).toEqual([]);
+    expect(diff.unfrozenMeasurements).toEqual([]);
+  });
+
+  test('render lists fp errors separately from false positives with fixture names', () => {
+    const report = reportWith([{ ...RED_TEST_SCORED, false_positives: 1, fp_errors: 1, fp_rate: 0.053 }]);
+    report.false_positives = { 'red-test': [{ on: 'real-fp/fixed', detail: 'reported' }] };
+    report.fp_errors = { 'red-test': [{ on: 'transport-dead/fixed', detail: 'timeout' }] };
+    const out = render(report, diffAgainstBaseline(report, report));
+    const fpStart = out.indexOf('\nfalse positives\n');
+    const errorStart = out.indexOf('\nfalse-positive measurement errors\n');
+    const fpSection = out.slice(fpStart, errorStart);
+    const errorSection = out.slice(errorStart);
+
+    expect(fpStart).toBeGreaterThan(-1);
+    expect(errorStart).toBeGreaterThan(fpStart);
+    expect(fpSection).toContain('real-fp/fixed');
+    expect(fpSection).not.toContain('transport-dead/fixed');
+    expect(errorSection).toContain('transport-dead/fixed');
+    expect(out).toContain('caveat      red-test: the baseline froze false-positive measurements from a run where 1 fixed-side calls errored');
+  });
 });
 
 describe('oracle llm gate canaries', () => {

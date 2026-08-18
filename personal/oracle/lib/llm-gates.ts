@@ -149,6 +149,7 @@ async function runLlmGate(
     unavailable_reason: '',
     cells: {},
     false_positives: [],
+    fp_errors: [],
     fp_denominator: 0,
   };
 
@@ -188,15 +189,15 @@ async function runLlmGate(
       continue;
     }
 
-    out.fp_denominator++;
     try {
       const report = await produce(c, readVariant(c, 'fixed'), gateBackend);
       const scored = await scoreOne(c, report, judgeBackend);
+      out.fp_denominator++;
       if (scored.detected.includes(c.bug.id)) {
         out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: scored.reasoning.slice(0, 240) });
       }
     } catch (err: any) {
-      out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: `${gate} failed on fixed: ${err?.message ?? err}` });
+      out.fp_errors.push({ on: `${c.bug.id}/fixed`, detail: `${gate} failed on fixed: ${err?.message ?? err}` });
     }
   }
 
@@ -219,6 +220,7 @@ export function skippedLlmGate(gate: 'spec-check' | 'reviewer', cases: FixtureCa
     unavailable_reason: reason,
     cells: {},
     false_positives: [],
+    fp_errors: [],
     fp_denominator: 0,
   };
   for (const c of cases) out.cells[c.bug.id] = { verdict: 'error', detail: `not measured: ${reason}` };
