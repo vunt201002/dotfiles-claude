@@ -22,6 +22,26 @@ const RED = '\x1b[31m';
 
 const CONTEXT_COMPACT_THRESHOLD = 80;
 const BAR_CELLS = 10;
+const NARROW_BAR_CELLS = 6;
+const BRANCH_FLOOR = 12;
+const DIR_FLOOR = 10;
+const FALLBACK_COLUMNS = 80;
+const RESERVED_COLUMNS = 3;
+
+/**
+ * Moi profile la mot muc chi tiet, giau xuong ngheo. Thu tu nay la thu tu HY SINH:
+ * cai nao dung truoc thi mat truoc. Scale/model di truoc vi chung khong doi theo
+ * thoi gian va giong het nhau o moi pane; % context va rate limit khong bao gio bi bo.
+ */
+const PROFILES = [
+  { model: true, bar: BAR_CELLS, scale: true, tight: false, dir: Infinity },
+  { model: true, bar: NARROW_BAR_CELLS, scale: false, tight: false, dir: Infinity },
+  { model: true, bar: NARROW_BAR_CELLS, scale: false, tight: true, dir: Infinity },
+  { model: false, bar: NARROW_BAR_CELLS, scale: false, tight: true, dir: Infinity },
+  { model: false, bar: 0, scale: false, tight: true, dir: Infinity },
+  { model: false, bar: 0, scale: false, tight: true, dir: DIR_FLOOR },
+  { model: false, bar: 0, scale: false, tight: true, dir: 0 },
+];
 
 function readSession() {
   try {
@@ -61,9 +81,57 @@ function basename(dir) {
   return parts.length ? parts[parts.length - 1] : '?';
 }
 
-function gitSegment(cwd) {
+/** Be ngang kha dung cua PANE, khong phai cua ca terminal. */
+function budget() {
+  const raw = Number(process.env.STATUSLINE_COLUMNS || process.env.COLUMNS);
+  const columns = Number.isFinite(raw) && raw > 0 ? raw : FALLBACK_COLUMNS;
+  return Math.max(1, columns - RESERVED_COLUMNS);
+}
+
+function visibleWidth(text) {
+  return Array.from(text.replace(/\x1b\[[0-9;]*m/g, '')).length;
+}
+
+function clampVisible(text, max) {
+  if (visibleWidth(text) <= max) return text;
+  let kept = '';
+  let used = 0;
+  const tokens = text.split(/(\x1b\[[0-9;]*m)/);
+  for (const token of tokens) {
+    if (token.startsWith('\x1b[')) {
+      kept += token;
+      continue;
+    }
+    for (const ch of token) {
+      if (used >= max - 1) return `${kept}…${RESET}`;
+      kept += ch;
+      used += 1;
+    }
+  }
+  return kept + RESET;
+}
+
+function truncateEnd(text, max) {
+  const chars = Array.from(text);
+  if (max <= 0) return '';
+  if (chars.length <= max) return text;
+  return chars.slice(0, max - 1).join('') + '…';
+}
+
+/** Giu dau va duoi: duoi la phan phan biet nhanh, dau la loai nhanh (fix/, feat/). */
+function middleTruncate(text, max) {
+  const chars = Array.from(text);
+  if (max <= 0) return '';
+  if (chars.length <= max) return text;
+  if (max === 1) return '…';
+  const head = Math.max(1, Math.floor((max - 1) * 0.45));
+  const tail = max - 1 - head;
+  return chars.slice(0, head).join('') + '…' + chars.slice(chars.length - tail).join('');
+}
+
+function gitInfo(cwd) {
   const status = git(['status', '--porcelain=v2', '--branch'], cwd);
-  if (!status) return '';
+  if (!status) return null;
 
   let branch = '';
   let ahead = 0;
@@ -84,32 +152,51 @@ function gitSegment(cwd) {
     }
   }
 
-  if (!branch) return '';
+  if (!branch) return null;
   if (branch === '(detached)') branch = git(['rev-parse', '--short', 'HEAD'], cwd) || 'detached';
 
-  let marks = '';
-  if (ahead) marks += `${GREEN}↑${ahead}${RESET}${DIM}`;
-  if (behind) marks += `${YELLOW}↓${behind}${RESET}${DIM}`;
-  if (dirty) marks += `${YELLOW}●${dirty}${RESET}${DIM}`;
-
-  return `${DIM} ⎇ ${branch}${marks ? ' ' + marks : ''}${RESET}`;
+  return { branch, ahead, behind, dirty };
 }
 
-function contextSegment(session) {
+function renderGit(info, branchWidth) {
+  if (!info) return '';
+
+  let marks = '';
+  if (info.ahead) marks += `${GREEN}↑${info.ahead}${RESET}`;
+  if (info.behind) marks += `${YELLOW}↓${info.behind}${RESET}`;
+  if (info.dirty) marks += `${YELLOW}●${info.dirty}${RESET}`;
+
+  const branch = middleTruncate(info.branch, branchWidth);
+  if (!branch) return marks;
+  return `${DIM}⎇ ${branch}${RESET}${marks ? ' ' + marks : ''}`;
+}
+
+function contextInfo(session) {
   const ctx = session.context_window;
-  if (!ctx) return '';
+  if (!ctx) return null;
 
   const used = percentOrNull(ctx.used_percentage);
-  if (used === null) return '';
-
-  const filled = Math.min(BAR_CELLS, Math.round((used / 100) * BAR_CELLS));
-  const bar = '▓'.repeat(filled) + '░'.repeat(BAR_CELLS - filled);
-  const color = severityColor(used, 60, CONTEXT_COMPACT_THRESHOLD);
+  if (used === null) return null;
 
   const size = Number(ctx.context_window_size);
-  const scale = Number.isFinite(size) && size >= 1000000 ? `${DIM}1M${RESET}` : '';
+  return {
+    used,
+    scale: Number.isFinite(size) && size >= 1000000 ? '1M' : '',
+    color: severityColor(used, 60, CONTEXT_COMPACT_THRESHOLD),
+  };
+}
 
-  return ` ${color}${bar} ${used}%${RESET}${scale ? ' ' + scale : ''}`;
+function renderContext(info, profile, hasLeft) {
+  if (!info) return '';
+
+  let out = hasLeft ? `${DIM} │${RESET} ` : '';
+  if (profile.bar > 0) {
+    const filled = Math.min(profile.bar, Math.round((info.used / 100) * profile.bar));
+    out += `${info.color}${'▓'.repeat(filled)}${'░'.repeat(profile.bar - filled)}${RESET} `;
+  }
+  out += `${info.color}${info.used}%${RESET}`;
+  if (profile.scale && info.scale) out += ` ${DIM}${info.scale}${RESET}`;
+  return out;
 }
 
 function countdown(epochSeconds) {
@@ -121,15 +208,16 @@ function countdown(epochSeconds) {
   return hours ? `${hours}h${String(minutes).padStart(2, '0')}m` : `${minutes}m`;
 }
 
-function windowSegment(fallbackLabel, window, useCountdownAsLabel) {
+function windowSegment(fallbackLabel, window, useCountdownAsLabel, tight) {
   if (!window) return '';
   const used = percentOrNull(window.used_percentage);
   if (used === null) return '';
 
   const color = severityColor(used, 50, 80);
   const label = (useCountdownAsLabel && countdown(window.resets_at)) || fallbackLabel;
+  const gap = tight ? '' : ' ';
 
-  return `${DIM}${label} ${RESET}${color}${used}%${RESET}`;
+  return `${DIM}${label}${gap}${RESET}${color}${used}%${RESET}`;
 }
 
 function hasPercent(window) {
@@ -188,31 +276,85 @@ function pooledLimits(session) {
   return pooled;
 }
 
-function limitsSegment(session) {
-  const limits = pooledLimits(session);
+function renderLimits(limits, profile) {
   const parts = [
-    windowSegment('5h', limits.five_hour, true),
-    windowSegment('7d', limits.seven_day, false),
+    windowSegment('5h', limits.five_hour, !profile.tight, profile.tight),
+    windowSegment('7d', limits.seven_day, false, profile.tight),
   ].filter(Boolean);
-  return parts.length ? ` ${DIM}·${RESET} ${parts.join(`${DIM} · ${RESET}`)}` : '';
+  if (!parts.length) return '';
+  if (profile.tight) return ' ' + parts.join(' ');
+  return ` ${DIM}·${RESET} ` + parts.join(`${DIM} · ${RESET}`);
+}
+
+function compose(parts, profile, branchWidth) {
+  const left = [];
+  if (profile.model && parts.model) left.push(parts.model);
+  const dir = truncateEnd(parts.dir, profile.dir);
+  if (dir) left.push(dir);
+
+  const gitText = renderGit(parts.git, branchWidth);
+  if (gitText) left.push(gitText);
+
+  return (
+    left.join(' ') + renderContext(parts.context, profile, left.length > 0) + renderLimits(parts.limits, profile)
+  );
+}
+
+/** Be ngang cua branch la bien dan hoi: no an het cho con thua o profile giau nhat con vua. */
+function widestBranchThatFits(parts, profile, max, room) {
+  let low = 0;
+  let high = max;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (visibleWidth(compose(parts, profile, mid)) <= room) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
+
+/**
+ * Claude Code export COLUMNS rieng cho tung pane, va tu cat duoi dong khi tran —
+ * nghia la thu quan trong nhat (context, rate limit) nam cuoi dong se chet dau tien.
+ * Nen o day tu cat lay: chon profile giau nhat ma van vua, va khong bao gio de tran.
+ */
+function fit(parts) {
+  const room = budget();
+  const fullBranch = parts.git ? Array.from(parts.git.branch).length : 0;
+
+  let fallback = null;
+  for (const profile of PROFILES) {
+    const branchWidth = widestBranchThatFits(parts, profile, fullBranch, room);
+    if (branchWidth >= Math.min(fullBranch, BRANCH_FLOOR)) {
+      const line = compose(parts, profile, branchWidth);
+      if (visibleWidth(line) <= room) return line;
+    }
+    if (!fallback) {
+      const bare = compose(parts, profile, 0);
+      if (visibleWidth(bare) <= room) fallback = bare;
+    }
+  }
+
+  const last = PROFILES[PROFILES.length - 1];
+  return clampVisible(fallback || compose(parts, last, 0), room);
 }
 
 function main() {
   const session = readSession();
   const cwd = session.workspace?.current_dir || session.cwd || process.cwd();
 
-  const model = session.model?.display_name || '?';
+  const name = String(session.model?.display_name || '?').replace(/\s*\([^)]*\)\s*$/, '');
   const effort = session.effort?.level ? `${DIM}·${session.effort.level}${RESET}` : '';
   const fast = session.fast_mode ? `${DIM}·fast${RESET}` : '';
 
-  let out = `${DIM}${model}${RESET}${effort}${fast} ${basename(cwd)}`;
-  out += gitSegment(cwd);
+  const parts = {
+    model: `${DIM}${name}${RESET}${effort}${fast}`,
+    dir: basename(cwd),
+    git: gitInfo(cwd),
+    context: contextInfo(session),
+    limits: pooledLimits(session),
+  };
 
-  const context = contextSegment(session);
-  if (context) out += `${DIM} │${RESET}${context}`;
-  out += limitsSegment(session);
-
-  process.stdout.write(out + '\n');
+  process.stdout.write(fit(parts) + '\n');
 }
 
 try {
