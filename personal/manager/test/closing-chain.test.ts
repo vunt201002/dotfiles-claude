@@ -13,7 +13,10 @@ import { readEntries } from '../lib/gate-log-port';
 import {
   BROWSER_GATES,
   collectHookGates,
+  HOOK_GATES,
+  hookEvidenceGates,
   MANAGER_OWNED_GATES,
+  managerDispatchKind,
   needsBrowserToken,
   reportFromVerdict,
   REVIEW_CHAIN,
@@ -25,11 +28,13 @@ import {
   type ChainGate,
   type GateSpawnRequest,
 } from '../lib/closing-chain';
+import { displayChain, ORACLE_CHAIN } from '../lib/oracle-chain';
 import type { ExecFn } from '../lib/assert-runner';
 import { approveCommands } from '../lib/assert-approvals';
 import type { DiffResult } from '../lib/git';
 import { ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths';
-import { parseVerdict, verifyDeterministicGates, UNVERIFIED_MARK, type GateReport } from '../lib/verdict';
+import { executePrompt } from '../lib/prompts';
+import { applyEnsembleRule, parseVerdict, verifyDeterministicGates, UNVERIFIED_MARK, type GateReport } from '../lib/verdict';
 import type { Lane, TaskEnvelope } from '../types';
 
 const REPO = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-chain-repo-'));
@@ -129,25 +134,29 @@ describe('the chain each lane actually runs (§7.2)', () => {
     expect(chain.oracleFault).toBe(false);
   });
 
-  test('an empty bug-nho review chain is unmeasured, not proven', async () => {
-    const { ctx } = harness({ envelope: envelope({ lane: 'bug-nho' }) });
-    const chain = await runReviewChain(ctx);
-    expect(chain.runs).toEqual([]);
-    expect(chain.proven).toBe(false);
-    expect(chain.oracleFault).toBe(false);
-  });
-
-  test('bug-nho stops at the repeatable half', () => {
+  test('bug-nho adds spec-check without becoming bug-lon', () => {
     expect(VERIFY_CHAIN['bug-nho']).toEqual(['B8-assert']);
-    expect(REVIEW_CHAIN['bug-nho']).toEqual([]);
+    expect(REVIEW_CHAIN['bug-nho']).toEqual(['spec-check']);
+    expect(REVIEW_CHAIN['bug-nho']).not.toContain('tech-review');
   });
 
-  test('bug-lon adds the judge, spec-check and a reviewer', () => {
+  test('a lone bug-nho spec-check finding warns and does not block', async () => {
+    const { ctx } = harness(
+      { envelope: envelope({ lane: 'bug-nho' }) },
+      () => verdictJson({ findings: ['the diff exceeds the agreed scope'] }),
+    );
+    const chain = await runReviewChain(ctx);
+    const decision = applyEnsembleRule(chain.reports);
+    expect(chain.runs.map((run) => run.gate)).toEqual(['spec-check']);
+    expect(decision.outcome).toBe('warn');
+  });
+
+  test('bug-lon adds the judge, spec-check and tech-review', () => {
     expect(VERIFY_CHAIN['bug-lon']).toEqual(['B8-assert', 'B8-judge']);
     expect(REVIEW_CHAIN['bug-lon']).toEqual(['spec-check', 'tech-review']);
   });
 
-  test('feature swaps the judge for design-verify and adds impact', () => {
+  test('feature swaps the judge for design-judge and adds impact', () => {
     expect(VERIFY_CHAIN.feature).toEqual(['B8-assert', 'design-judge']);
     expect(REVIEW_CHAIN.feature).toEqual(['spec-check', 'tech-review', 'impact-review']);
   });
@@ -166,6 +175,39 @@ describe('the chain each lane actually runs (§7.2)', () => {
     expect(roleForGate('design-judge')).toBe('judge');
     expect(roleForGate('spec-check')).toBe('review');
     expect(roleForGate('tech-review')).toBe('review');
+  });
+
+  test('every declared lane entry has exactly one executable owner path', () => {
+    for (const lane of ['trivial', 'bug-nho', 'bug-lon', 'feature'] as Lane[]) {
+      const manager = new Set([...VERIFY_CHAIN[lane], ...REVIEW_CHAIN[lane]]);
+      for (const entry of ORACLE_CHAIN[lane]) {
+        const paths = [
+          entry.owner === 'manager-dispatch' && manager.has(entry.gate as ChainGate) && Boolean(managerDispatchKind(entry.gate)),
+          entry.owner === 'hook' && hookEvidenceGates(entry.gate).length > 0,
+          entry.owner === 'builder-artifact' && entry.gate === 'red-test',
+        ].filter(Boolean);
+        expect(paths, `${lane}:${entry.gate} must have exactly one owner path`).toHaveLength(1);
+      }
+    }
+  });
+
+  test('prompt display is generated from canonical gate names', () => {
+    const chain = 'hook(lint/tsc) -> red-test -> B8-assert -> B8-judge -> spec-check -> tech-review';
+    expect(displayChain('bug-lon')).toBe(chain);
+    expect(executePrompt(envelope(), 1, '')).toContain(`Oracle chain for this lane: ${chain}`);
+    expect(displayChain('feature')).not.toContain('acceptance test');
+    expect(displayChain('feature')).not.toContain('design-verify');
+    expect(displayChain('bug-lon')).not.toContain('reviewer');
+  });
+});
+
+describe('required builder artifacts leave a row', () => {
+  test('red-test without a manager-verifiable witness is recorded as skipped', async () => {
+    const { ctx } = harness({ envelope: envelope({ lane: 'bug-nho' }) });
+    const chain = await runVerifyChain(ctx);
+    const report = chain.reports.find((row) => row.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('pre-fix failing output capture is not implemented');
   });
 });
 

@@ -14,20 +14,7 @@
  */
 
 import type { Lane, TaskEnvelope, TaskSource } from '../types';
-
-export const ORACLE_CHAIN: Record<Lane, string[]> = {
-  trivial: ['hook(lint/tsc)'],
-  'bug-nho': ['hook(lint/tsc)', 'red test', 'B8-assert'],
-  'bug-lon': ['hook(lint/tsc)', 'red test', 'B8-assert', 'B8-judge', 'spec-check', 'reviewer'],
-  feature: [
-    'hook(lint/tsc)',
-    'acceptance test',
-    'B8-assert + design-verify',
-    'spec-check',
-    'tech-review + impact-review',
-    'reviewer',
-  ],
-};
+import { displayChain } from './oracle-chain';
 
 const VERDICT_CONTRACT = `Answer in prose, then close with ONE fenced json block:
 \`\`\`json
@@ -68,7 +55,7 @@ The manager gets test and check oracles from the project registry. Do not guess 
 }
 
 export function executePrompt(envelope: TaskEnvelope, attempt: number, priorFailure: string): string {
-  const chain = ORACLE_CHAIN[envelope.lane].join(' -> ');
+  const chain = displayChain(envelope.lane);
   const retryNote =
     attempt > 1
       ? `\nThis is attempt ${attempt}. The previous attempt failed verification: ${priorFailure}\nDo not repeat the same fix. Prove why it failed before changing anything.\n`
@@ -82,7 +69,7 @@ ${retryNote}
 Rules for this lane:
 ${laneRules(envelope.lane)}
 
-The manager runs B8-assert, B8-judge, spec-check and the reviewers itself after you finish. Do not claim those gates in your verdict and do not run the project's full test suite as proof of them — report only what you actually ran yourself.
+The manager runs every manager-dispatch gate in the oracle chain itself after you finish. Do not claim those gates in your verdict and do not run the project's full test suite as proof of them — report only what you actually ran yourself.
 
 Stage your work. Do not commit, do not push, do not deploy.
 
@@ -142,7 +129,7 @@ Report this as gate "B8-judge".
 ${VERDICT_CONTRACT}`;
 }
 
-/** `design-verify` (§7.2 feature lane) — design-eye §B, judged in a real browser. */
+/** `design-judge` (§7.2 feature lane) — design-eye §B, judged in a real browser. */
 export function designJudgePrompt(envelope: TaskEnvelope): string {
   return `Judge the new UI for issue "${envelope.issue}" in project "${envelope.project}".
 

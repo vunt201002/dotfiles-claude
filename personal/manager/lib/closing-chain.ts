@@ -5,15 +5,15 @@
  * chain per lane is §7.2:
  *
  *   trivial   hook
- *   bug-nho   hook -> red test -> B8-assert
- *   bug-lon   hook -> red test -> B8-assert -> B8-judge -> spec-check -> reviewer
- *   feature   hook -> acceptance test -> B8-assert + design-verify -> spec-check
- *             -> tech+impact -> reviewer
+ *   bug-nho   hook -> red-test -> B8-assert -> spec-check
+ *   bug-lon   hook -> red-test -> B8-assert -> B8-judge -> spec-check -> tech-review
+ *   feature   hook -> B8-assert -> design-judge -> spec-check -> tech-review
+ *             -> impact-review
  *
  * Two of those steps are already recorded by the time this file runs. The hook
  * gates are written into the gate log by the harness itself while the agent
  * works, so they are READ here rather than re-run — that is the whole reason
- * they count as independent evidence. The red test is the agent's own work
+ * they count as independent evidence. The red-test is the agent's own work
  * inside RUNNING; the manager cannot witness which test is the red one, and
  * says so rather than pretending.
  *
@@ -41,6 +41,15 @@ import type { DiffResult } from './git';
 import { logGate, readEntries } from './gate-log-port';
 import { workOnly } from './gate-log';
 import {
+  builderArtifacts,
+  managerChain,
+  managerGates,
+  ORACLE_CHAIN,
+  type BuilderArtifactGate,
+  type HookGate,
+  type ManagerDispatchGate,
+} from './oracle-chain';
+import {
   designJudgePrompt,
   impactReviewPrompt,
   judgePrompt,
@@ -52,26 +61,42 @@ import { transportFailed } from './spawn';
 import { parseVerdictCandidates, type AgentVerdict, type GateReport } from './verdict';
 import { taskDiff, type TaskWorkdir } from './worktrees';
 
-export type ChainGate = 'B8-assert' | 'B8-judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
+export type ChainGate = ManagerDispatchGate;
+export type ManagerDispatchKind = 'assert' | 'judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
+
+export function managerDispatchKind(gate: ChainGate): ManagerDispatchKind {
+  switch (gate) {
+    case 'B8-assert':
+      return 'assert';
+    case 'B8-judge':
+      return 'judge';
+    case 'design-judge':
+      return 'design-judge';
+    case 'spec-check':
+      return 'spec-check';
+    case 'tech-review':
+      return 'tech-review';
+    case 'impact-review':
+      return 'impact-review';
+    default: {
+      const neverGate: never = gate;
+      throw new Error(`manager gate has no dispatcher: ${neverGate}`);
+    }
+  }
+}
 
 /** Gates run in the VERIFYING phase. */
-export const VERIFY_CHAIN: Record<Lane, ChainGate[]> = {
-  trivial: [],
-  'bug-nho': ['B8-assert'],
-  'bug-lon': ['B8-assert', 'B8-judge'],
-  feature: ['B8-assert', 'design-judge'],
-};
+export const VERIFY_CHAIN: Record<Lane, ChainGate[]> = Object.fromEntries(
+  (Object.keys(ORACLE_CHAIN) as Lane[]).map((lane) => [lane, managerChain(lane, 'verify')]),
+) as Record<Lane, ChainGate[]>;
 
 /** Gates run in the REVIEW phase. */
-export const REVIEW_CHAIN: Record<Lane, ChainGate[]> = {
-  trivial: [],
-  'bug-nho': [],
-  'bug-lon': ['spec-check', 'tech-review'],
-  feature: ['spec-check', 'tech-review', 'impact-review'],
-};
+export const REVIEW_CHAIN: Record<Lane, ChainGate[]> = Object.fromEntries(
+  (Object.keys(ORACLE_CHAIN) as Lane[]).map((lane) => [lane, managerChain(lane, 'review')]),
+) as Record<Lane, ChainGate[]>;
 
 /** The only gates that need the single real Chrome (§6.3, §7.4). */
-export const BROWSER_GATES: readonly ChainGate[] = ['B8-judge', 'design-judge'];
+export const BROWSER_GATES: readonly ChainGate[] = managerGates('real-browser-oracle');
 
 /**
  * Gates the manager runs itself. An agent claiming one of these in its own
@@ -79,14 +104,7 @@ export const BROWSER_GATES: readonly ChainGate[] = ['B8-judge', 'design-judge'];
  * rather than logged — the whole reason these moved out of the agent's JSON
  * (§7.3b lesson 2) was that a self-reported gate is testimony, not evidence.
  */
-export const MANAGER_OWNED_GATES: readonly string[] = [
-  'B8-assert',
-  'B8-judge',
-  'design-judge',
-  'spec-check',
-  'tech-review',
-  'impact-review',
-];
+export const MANAGER_OWNED_GATES: readonly string[] = managerGates();
 
 export function needsBrowserToken(gates: readonly ChainGate[]): boolean {
   return gates.some((gate) => BROWSER_GATES.includes(gate));
@@ -126,7 +144,7 @@ export interface GateSpawnResult {
 export type GateSpawn = (req: GateSpawnRequest) => Promise<GateSpawnResult>;
 
 export interface ChainGateRun {
-  gate: ChainGate;
+  gate: ChainGate | BuilderArtifactGate;
   /** One per gate for llm gates; one per COMMAND for B8-assert. */
   reports: GateReport[];
   /** Present for llm gates: the full parsed verdict, for questions/irreversible. */
@@ -203,7 +221,18 @@ export interface ChainContext {
  * agent cannot reach. Reading them here is what puts the hook step of the
  * chain into the ensemble instead of leaving it as a line in a diagram.
  */
-export const HOOK_GATES: readonly string[] = ['guard', 'lint', 'tsc', 'test'];
+export function hookEvidenceGates(gate: HookGate): readonly string[] {
+  switch (gate) {
+    case 'hook':
+      return ['guard', 'lint', 'tsc', 'test'];
+    default: {
+      const neverGate: never = gate;
+      throw new Error(`hook gate has no evidence reader: ${neverGate}`);
+    }
+  }
+}
+
+export const HOOK_GATES: readonly string[] = hookEvidenceGates('hook');
 
 /**
  * Which hook rows are allowed to block.
@@ -401,6 +430,25 @@ function skipped(ctx: ChainContext, gate: ChainGate, why: string): ChainGateRun 
   return { gate, reports: [report], verdict: null, assert: null, costUsd: 0 };
 }
 
+function missingBuilderArtifact(ctx: ChainContext, gate: BuilderArtifactGate): ChainGateRun {
+  switch (gate) {
+    case 'red-test':
+      break;
+    default: {
+      const neverGate: never = gate;
+      throw new Error(`builder artifact has no recorder: ${neverGate}`);
+    }
+  }
+  const report: GateReport = {
+    gate,
+    gate_family: 'deterministic',
+    verdict: 'skipped',
+    caught: `${gate} has no manager-verifiable witness: pre-fix failing output capture is not implemented`,
+  };
+  write(ctx, report, NOTHING_SPENT);
+  return { gate, reports: [report], verdict: null, assert: null, costUsd: 0 };
+}
+
 /**
  * A gate with no tree to look at.
  *
@@ -414,7 +462,8 @@ function noTree(ctx: ChainContext, gate: ChainGate, why: string): ChainGateRun {
 }
 
 async function runVerifyGate(ctx: ChainContext, gate: ChainGate): Promise<ChainGateRun> {
-  if (gate === 'B8-assert') {
+  const dispatch = managerDispatchKind(gate);
+  if (dispatch === 'assert') {
     if (ctx.workdir.reason) return noTree(ctx, gate, ctx.workdir.reason);
     const result = await runAssertGate({
       project: ctx.project,
@@ -433,7 +482,10 @@ async function runVerifyGate(ctx: ChainContext, gate: ChainGate): Promise<ChainG
       `lane ${ctx.envelope.lane} asks for ${gate} but this task has no real-browser oracle (oracle_kind: ${ctx.envelope.oracle_kind.join(', ') || 'none'})`,
     );
   }
-  const prompt = gate === 'design-judge' ? designJudgePrompt(ctx.envelope) : judgePrompt(ctx.envelope);
+  if (dispatch !== 'judge' && dispatch !== 'design-judge') {
+    throw new Error(`review gate ${gate} was dispatched during verify`);
+  }
+  const prompt = dispatch === 'design-judge' ? designJudgePrompt(ctx.envelope) : judgePrompt(ctx.envelope);
   return runLlmGate(ctx, gate, prompt);
 }
 
@@ -483,6 +535,9 @@ export async function runVerifyChain(
       if (!run.assert.summary.proven) break;
     }
   }
+  if (gates.length === 0 || gates.includes('B8-assert')) {
+    for (const gate of builderArtifacts(ctx.envelope.lane, 'verify')) runs.push(missingBuilderArtifact(ctx, gate));
+  }
   return assemble(runs, lines);
 }
 
@@ -518,24 +573,28 @@ export async function runReviewChain(ctx: ChainContext): Promise<ChainRun> {
 
   const intent = `${ctx.envelope.title} — ${ctx.envelope.why}`;
   for (const gate of gates) {
-    const prompt =
-      gate === 'spec-check'
-        ? specCheckPrompt(specCheckInput(ctx, diff))
-        : gate === 'impact-review'
-          ? impactReviewPrompt({
-              project: ctx.project,
-              issue: ctx.issue,
-              intent,
-              diff: diff.text,
-              diffTruncated: diff.truncated,
-            })
-          : techReviewPrompt({
-              project: ctx.project,
-              issue: ctx.issue,
-              intent,
-              diff: diff.text,
-              diffTruncated: diff.truncated,
-            });
+    const dispatch = managerDispatchKind(gate);
+    const input = {
+      project: ctx.project,
+      issue: ctx.issue,
+      intent,
+      diff: diff.text,
+      diffTruncated: diff.truncated,
+    };
+    let prompt: string;
+    switch (dispatch) {
+      case 'spec-check':
+        prompt = specCheckPrompt(specCheckInput(ctx, diff));
+        break;
+      case 'tech-review':
+        prompt = techReviewPrompt(input);
+        break;
+      case 'impact-review':
+        prompt = impactReviewPrompt(input);
+        break;
+      default:
+        throw new Error(`verify gate ${gate} was dispatched during review`);
+    }
     runs.push(await runLlmGate(ctx, gate, prompt));
   }
   return assemble(runs, lines);

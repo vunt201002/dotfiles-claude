@@ -951,11 +951,7 @@ describe('findings and the ensemble rule', () => {
     expect(loadTask(taskId)?.failure_reason).toContain('deterministic gate failed');
   });
 
-  // "Nothing was caught" and "nothing was checked" produce the same empty
-  // finding list. A bug-nho task runs no review gate at all, so its only
-  // evidence is the assert the manager ran — and if passes were not carried,
-  // every one of them would close reporting UNMEASURED.
-  test('a lane with no review gate still counts as measured by its assert', async () => {
+  test('bug-nho runs spec-check and still counts as measured by its assert', async () => {
     const { port, calls } = makePort((phase) => (phase === 'size' ? envelopeJson({ lane: 'bug-nho' }) : PASS_VERDICT));
     const manager = newOrchestrator(port);
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
@@ -963,9 +959,10 @@ describe('findings and the ensemble rule', () => {
 
     const task = loadTask(taskId);
     expect(task?.state).toBe('REPORTED');
-    expect(calls.map((c) => c.phase)).toEqual(['size', 'execute']);
+    expect(calls.map((c) => c.phase)).toEqual(['size', 'execute', 'spec-check']);
     expect(task?.report_lines.join(' ')).not.toContain('UNMEASURED');
     expect(task?.gate_reports.some((r) => r.gate === 'B8-assert' && r.verdict === 'pass')).toBe(true);
+    expect(task?.gate_reports.some((r) => r.gate === 'red-test' && r.verdict === 'skipped')).toBe(true);
   });
 
   test('a re-run gate supersedes what it said before, within the same attempt', async () => {
