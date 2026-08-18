@@ -16,7 +16,7 @@
 | `stop-full-check.sh` | Stop | Full tsc/test — 1 lần cuối turn | exit 2 = turn KHÔNG kết thúc được khi chưa pass; Claude đọc lỗi tự sửa |
 | `session-start-inject.sh` | SessionStart (startup·resume·**compact**) | Re-inject iron laws — sống sót qua compact | exit 0 + stdout = inject context |
 | `harness-check.sh` | SessionStart (startup·resume) | Audit chính harness: skill/command/rules chưa link, symlink chết, CLAUDE.md drift, hook trỏ file không có | exit 0 + stdout; **im lặng khi mọi thứ ổn** |
-| `statusline.cjs` | *(không phải hook — key `statusLine`)* | Hiện model·effort · dir · branch (+ahead/behind/dirty) · **% context đã dùng** (xanh/vàng/đỏ) · rate-limit **còn bao lâu tới reset** + 7d, **tự co theo bề ngang pane** | stdin JSON → in 1 dòng |
+| `statusline.cjs` | *(không phải hook — key `statusLine`)* | Hiện model·effort · **tên session** · branch (+worktree/detached/ahead/behind/dirty, **cảnh báo MERGE·REBASE đang dở**) · **% context đã dùng** (xanh/vàng/đỏ) · rate-limit **còn bao lâu tới reset** + 7d, **tự co theo bề ngang pane** | stdin JSON → in 1 dòng |
 
 **Vì sao có `harness-check.sh`:** skill `fix-bug-loop` viết 20/07/2026 nhưng không ai
 symlink — chết 2 tuần không một tín hiệu. `/sync-skills` sửa được nhưng chỉ chạy khi
@@ -65,7 +65,8 @@ thư mục không phải git repo.)
 | khoảng trắng quanh `·` của rate-limit | `5h 42% · 7d 95%` → `5h42% 7d95%`, mất 6 ký tự |
 | tên model + effort | giống hệt nhau ở mọi pane, và không đổi theo thời gian |
 | bar hoàn toàn | `45%` vẫn còn, vẫn còn màu |
-| tên thư mục | branch phân biệt pane tốt hơn dir khi nhiều pane cùng repo |
+| branch (giữ lại dấu ahead/behind/dirty) | khi đã có `session_name` thì branch không còn là thứ phân biệt pane |
+| cắt ngắn `session_name` | tới 12 ký tự vẫn còn đọc được |
 
 **% context và hai con rate-limit không nằm trong bảng này** — chúng không bao giờ bị bỏ.
 
@@ -82,6 +83,64 @@ sửa. Sàn giả đã bỏ; `clampVisible` lo phần cực hẹp và cắt an t
 Đo lại sau khi sửa: 0 tràn trên toàn dải 4–200 cột, và 43 ms/run — bằng đúng bản cũ
 (chi phí nằm ở spawn node, không nằm ở vòng fit). Đặt `STATUSLINE_COLUMNS` để ép bề
 ngang khi test.
+
+### Định danh pane là `session_name`, không phải tên thư mục
+
+Dump 10 pane đang chạy thật rồi đếm xem field nào phân biệt được chúng:
+
+| Field | Số giá trị khác nhau trên 10 pane |
+|---|---|
+| `session_name` | **10/10** — `MR109 review brief`, `Brief MR84 re-review`, `Deploy merged wishlist feature tag`… |
+| tên thư mục | **6/10** — bốn pane wishlist trùng nhau y hệt |
+
+Bốn pane cùng in `wishlist ⎇ fix/w…ct-page ●6` thì dòng status không còn tác dụng gì.
+`session_name` do Claude Code tự đặt theo nội dung hội thoại, và là field duy nhất unique
+tuyệt đối. Nên nó **thay** tên thư mục ở vai trò định danh chứ không đứng cạnh — đứng cạnh
+thì tốn gấp đôi chỗ để nói cùng một việc. Thiếu `session_name` (đầu session, trước khi
+Claude Code kịp đặt tên) thì rơi về tên thư mục như cũ.
+
+`session_name` là chuỗi tự do nên phải **strip control character trước khi in**: hợp đồng
+của `statusLine` là đúng một dòng, một ký tự `\n` lọt vào là vỡ. Escape ANSI cũng bị strip
+— nếu không, một cái tên chứa `ESC[31m` sẽ cướp màu của cả phần còn lại. Tám case đã test:
+xuống dòng, ANSI injection, tab/CR, 200 ký tự, emoji, rỗng, toàn khoảng trắng, không phải
+string.
+
+### Worktree · detached · MERGE đang dở — đọc đĩa, không gọi git
+
+Repo ở máy này có **10 worktree mỗi repo** (wishlist 10, dotfiles-claude 10), và 8/10
+worktree wishlist đang detached. Trước đây detached in ra SHA trần, nhìn y hệt một tên
+branch. Ba thứ này lấy được mà không tốn thêm một subprocess nào:
+
+| Hiện | Nghĩa |
+|---|---|
+| `⎇ main` | branch, worktree chính |
+| `⎇+ fix/abc` | branch, **worktree phụ** |
+| `@a8ff8ab1` | **detached**, worktree chính |
+| `@+a8ff8ab1` | detached, worktree phụ |
+| `MERGE` `REBASE` `PICK` `REVERT` `BISECT` (đỏ) | đang dở một thao tác git |
+
+`git rev-parse --git-dir` tốn **~16 ms** một lần, mà script chạy lại mỗi 15s ở mọi pane.
+Đọc thẳng đĩa thì **0.024 ms**: `.git` là thư mục → worktree chính, là file → worktree phụ
+và trong đó có đường dẫn gitdir thật; thao tác đang dở thì `stat` mấy file mốc trong gitdir
+(`MERGE_HEAD`, `rebase-merge`…). Rẻ hơn 700 lần, cùng một câu trả lời.
+
+**Cảnh báo thao tác dở không bao giờ bị hy sinh** — nó nằm ngoài `PROFILES`. Ở pane 46 cột
+vẫn còn: `Merge maste… ●1 MERGE │ 45% 5h42% 7d95%`. Quên mình đang kẹt giữa conflict là
+rủi ro thật khi chạy nhiều `/merge-master` và `/merge-branch` song song, nên nó phải sống
+sót ở mọi bề ngang.
+
+### Đã cân nhắc rồi loại
+
+Đo trên cùng 10 pane đó, những field này **giống hệt nhau ở cả 10** nên không mang một bit
+thông tin nào: `thinking.enabled`, `output_style.name`, `workspace.added_dirs`,
+`CLAUDE_CODE_CHILD_SESSION`, `version`.
+
+Phân biệt được nhưng không đổi hành vi, nên cũng loại: `cost.total_cost_usd` (0.77–55.55
+USD giữa các pane, nhưng rate-limit đã trả lời "sắp bị khoá chưa" — thứ thật sự chặn tay),
+`total_lines_added/removed` (`●6` đã nói có việc chưa commit, độ lớn không đổi quyết định),
+thời lượng session (có pane 867 phút — ấn tượng, không actionable), `git stash list` (tốn
+16 ms subprocess cho tín hiệu thấp), branch chưa có upstream (miễn phí nhưng tín hiệu yếu
+nhất trong nhóm, đã cân nhắc và bỏ).
 
 ### rate_limits là ảnh chụp per-session, không phải giá trị live
 
