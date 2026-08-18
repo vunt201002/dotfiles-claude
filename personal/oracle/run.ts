@@ -16,7 +16,8 @@
  * Exit codes: 0 clean, 1 a fixture does not demonstrate its bug, a gate could
  * not run, the baseline contradicts itself, the fixture corpus moved since the
  * baseline was frozen, or this run is unfit to freeze, 2 a regression against
- * the baseline or a measurement lost without the operator asking for it.
+ * the baseline or a measurement lost without the operator asking for it, 3 a
+ * measurement that the baseline has never frozen.
  */
 
 import { ORACLE_ROOT_OVERRIDE, corpusFingerprint, loadCases, loadGuardFpProbes } from './lib/cases';

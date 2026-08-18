@@ -191,8 +191,10 @@ export interface BaselineDiff {
   /** The measured set shrank without the operator asking for it. An alarm, not an advisory. */
   lostMeasurements: string[];
   improvements: string[];
-  /** The measured set grew: a number that did not exist before, or one now scored over more fixtures. */
+  /** An existing metric is now scored over more fixtures, so its old and new numbers have different ground. */
   firstMeasurements: string[];
+  /** A metric produced a number that the baseline has never frozen, leaving this and later runs incomparable. */
+  unfrozenMeasurements: string[];
   /**
    * A gate that scored nothing at all, that the operator switched off, and that
    * reports itself unavailable. All three are required: a gate cannot excuse
@@ -210,7 +212,7 @@ function emptyDiff(hasBaseline: boolean): BaselineDiff {
   return {
     hasBaseline,
     corruption: [], corpusChanged: [], regressions: [], lostMeasurements: [], improvements: [],
-    firstMeasurements: [], acknowledgedAbsences: [], baselineCaveats: [],
+    firstMeasurements: [], unfrozenMeasurements: [], acknowledgedAbsences: [], baselineCaveats: [],
     newCases: [], droppedCases: [],
   };
 }
@@ -274,6 +276,7 @@ export function unfitToFreeze(
 export function exitCodeFor(diff: BaselineDiff): number {
   if (diff.corruption.length > 0 || diff.corpusChanged.length > 0) return 1;
   if (diff.regressions.length > 0 || diff.lostMeasurements.length > 0) return 2;
+  if (diff.unfrozenMeasurements.length > 0) return 3;
   return 0;
 }
 
@@ -477,7 +480,14 @@ export function diffAgainstBaseline(
 
   for (const [key, now] of after) {
     if (before.has(key)) continue;
-    diff.firstMeasurements.push(`${now.gate}: ${now.metric} scored for the first time — ${metricText(now)}${incompleteSuffix(now)}`);
+    const paid = nowGates.get(now.gate)?.family === 'llm';
+    const command = `${paid ? 'ORACLE_LLM=1 ' : ''}bun personal/oracle/run.ts --write-baseline`;
+    diff.unfrozenMeasurements.push(
+      `${now.gate}: ${now.metric} first produced a number — ${metricText(now)}${incompleteSuffix(now)}. `
+      + `The baseline holds no number for this metric, so the next${paid ? ' paid' : ''} run cannot be compared `
+      + `with it: even 0/${now.denominator} would print UNFROZEN again. `
+      + `Freeze it now, in the run that measured it — ${command}`,
+    );
   }
 
   for (const g of base.gates) {
@@ -637,7 +647,7 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
     lines.push('no baseline on disk — run with --write-baseline to freeze this run');
   } else {
     const said = diff.corruption.length + diff.corpusChanged.length + diff.regressions.length + diff.lostMeasurements.length
-      + diff.improvements.length + diff.firstMeasurements.length + diff.acknowledgedAbsences.length
+      + diff.improvements.length + diff.unfrozenMeasurements.length + diff.firstMeasurements.length + diff.acknowledgedAbsences.length
       + diff.baselineCaveats.length + diff.newCases.length + diff.droppedCases.length;
     if (said === 0) lines.push('baseline: no change');
     for (const c of diff.corruption) lines.push(`CORRUPT     ${c}`);
@@ -645,6 +655,7 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
     for (const l of diff.lostMeasurements) lines.push(`LOST        ${l}`);
     for (const r of diff.regressions) lines.push(`REGRESSION  ${r}`);
     for (const i of diff.improvements) lines.push(`improved    ${i}`);
+    for (const u of diff.unfrozenMeasurements) lines.push(`UNFROZEN    ${u}`);
     for (const f of diff.firstMeasurements) lines.push(`MEASURED    ${f}`);
     for (const a of diff.acknowledgedAbsences) lines.push(`not run     ${a}`);
     for (const b of diff.baselineCaveats) lines.push(`caveat      ${b}`);

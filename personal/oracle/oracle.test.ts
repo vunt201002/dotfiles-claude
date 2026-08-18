@@ -811,7 +811,7 @@ describe('baseline diff: what the measured set did', () => {
   // The 2026-08-13 paid run exited 2 on "REGRESSION spec-check: false positives
   // 0 -> 13". The baseline's 0 was never a measurement: ORACLE_LLM was off when
   // it was frozen, so the gate had never run. A first number is not a fall.
-  test('a gate the baseline never scored is a first measurement, not a regression', () => {
+  test('a paid metric the baseline never froze is unfrozen and exits 3', () => {
     const base = reportWith([SPEC_CHECK_NEVER_SCORED]);
     const now = reportWith([SPEC_CHECK_SCORED]);
 
@@ -819,10 +819,43 @@ describe('baseline diff: what the measured set did', () => {
 
     expect(diff.regressions).toEqual([]);
     expect(diff.improvements).toEqual([]);
-    expect(diff.firstMeasurements).toEqual([
-      'spec-check: detection scored for the first time — 17/19 (0.895)',
-      'spec-check: false positives scored for the first time — 13/19 (0.684)',
+    expect(diff.firstMeasurements).toEqual([]);
+    expect(diff.unfrozenMeasurements).toEqual([
+      'spec-check: detection first produced a number — 17/19 (0.895). The baseline holds no number for this metric, so the next paid run cannot be compared with it: even 0/19 would print UNFROZEN again. Freeze it now, in the run that measured it — ORACLE_LLM=1 bun personal/oracle/run.ts --write-baseline',
+      'spec-check: false positives first produced a number — 13/19 (0.684). The baseline holds no number for this metric, so the next paid run cannot be compared with it: even 0/19 would print UNFROZEN again. Freeze it now, in the run that measured it — ORACLE_LLM=1 bun personal/oracle/run.ts --write-baseline',
     ]);
+    expect(exitCodeFor(diff)).toBe(3);
+  });
+
+  test('a paid detection frozen at 17/19 and later falling to 0/19 is a regression and exits 2', () => {
+    const base = reportWith([SPEC_CHECK_SCORED]);
+    const now = reportWith([{ ...SPEC_CHECK_SCORED, caught: 0, missed: 19, detection_rate: 0 }]);
+
+    const diff = diffAgainstBaseline(now, base);
+
+    expect(diff.regressions).toContain('spec-check: detection 17/19 (0.895) -> 0/19 (0)');
+    expect(diff.unfrozenMeasurements).toEqual([]);
+    expect(exitCodeFor(diff)).toBe(2);
+  });
+
+  test('a paid detection frozen at 17/19 and still at 17/19 exits clean', () => {
+    const base = reportWith([SPEC_CHECK_SCORED]);
+    const now = reportWith([SPEC_CHECK_SCORED]);
+
+    const diff = diffAgainstBaseline(now, base);
+
+    expect(diff.regressions).toEqual([]);
+    expect(diff.unfrozenMeasurements).toEqual([]);
+    expect(exitCodeFor(diff)).toBe(0);
+  });
+
+  test('an everyday free run leaves paid metrics unfrozen-free and exits clean', () => {
+    const base = reportWith([SPEC_CHECK_NEVER_SCORED, REVIEWER_NEVER_SCORED]);
+    const now = reportWith([SPEC_CHECK_NEVER_SCORED, REVIEWER_NEVER_SCORED]);
+
+    const diff = diffAgainstBaseline(now, base, PAID_GATES_OFF);
+
+    expect(diff.unfrozenMeasurements).toEqual([]);
     expect(exitCodeFor(diff)).toBe(0);
   });
 
@@ -839,8 +872,11 @@ describe('baseline diff: what the measured set did', () => {
 
     const diff = diffAgainstBaseline(now, base);
 
-    expect(diff.firstMeasurements).toEqual(['guard: detection scored for the first time — 1/2 (0.5)']);
-    expect(exitCodeFor(diff)).toBe(0);
+    expect(diff.firstMeasurements).toEqual([]);
+    expect(diff.unfrozenMeasurements).toEqual([
+      'guard: detection first produced a number — 1/2 (0.5). The baseline holds no number for this metric, so the next run cannot be compared with it: even 0/2 would print UNFROZEN again. Freeze it now, in the run that measured it — bun personal/oracle/run.ts --write-baseline',
+    ]);
+    expect(exitCodeFor(diff)).toBe(3);
   });
 
   // Round 2's headline: red-test erroring on 18 of 19 raised 18 regressions,
@@ -964,6 +1000,7 @@ describe('baseline diff: what the measured set did', () => {
     expect(diff.firstMeasurements).toContain(
       'reviewer: detection denominator 18 -> 19 — 13/18 (0.722) -> 13/19 (0.684)',
     );
+    expect(diff.unfrozenMeasurements).toEqual([]);
     expect(exitCodeFor(diff)).toBe(0);
   });
 
@@ -1140,7 +1177,7 @@ describe('baseline diff: what the measured set did', () => {
 
   // A gate with no baseline cannot regress against one. It is loud in the report
   // and it does not turn the ratchet red, because every gate addition would.
-  test('a gate added to the harness is a first measurement even when it scores badly', () => {
+  test('a gate added to the harness is unfrozen even when it scores badly', () => {
     const uselessNewGate: GateStats = {
       gate: 'newgate',
       family: 'deterministic',
@@ -1154,12 +1191,13 @@ describe('baseline diff: what the measured set did', () => {
 
     const diff = diffAgainstBaseline(now, base);
 
-    expect(diff.firstMeasurements).toEqual([
-      'newgate: detection scored for the first time — 0/19 (0)',
-      'newgate: false positives scored for the first time — 12/19 (0.632)',
+    expect(diff.unfrozenMeasurements).toEqual([
+      'newgate: detection first produced a number — 0/19 (0). The baseline holds no number for this metric, so the next run cannot be compared with it: even 0/19 would print UNFROZEN again. Freeze it now, in the run that measured it — bun personal/oracle/run.ts --write-baseline',
+      'newgate: false positives first produced a number — 12/19 (0.632). The baseline holds no number for this metric, so the next run cannot be compared with it: even 0/19 would print UNFROZEN again. Freeze it now, in the run that measured it — bun personal/oracle/run.ts --write-baseline',
     ]);
+    expect(diff.firstMeasurements).toEqual([]);
     expect(diff.regressions).toEqual([]);
-    expect(exitCodeFor(diff)).toBe(0);
+    expect(exitCodeFor(diff)).toBe(3);
   });
 
   // Nulling one rate in baseline.json used to read as "never measured" and
@@ -1259,8 +1297,8 @@ describe('baseline diff: what the measured set did', () => {
     expect(diff.baselineCaveats).toEqual([
       'red-test: the baseline recorded no number for this gate from a run where 19/19 fixtures errored',
     ]);
-    expect(diff.firstMeasurements).toHaveLength(2);
-    expect(exitCodeFor(diff)).toBe(0);
+    expect(diff.unfrozenMeasurements).toHaveLength(2);
+    expect(exitCodeFor(diff)).toBe(3);
   });
 
   // The everyday free baseline records error 19 on both paid gates by design. A
@@ -1276,15 +1314,15 @@ describe('baseline diff: what the measured set did', () => {
     expect(exitCodeFor(diff)).toBe(0);
   });
 
-  test('a first measurement taken from a broken run declares how much of it errored', () => {
+  test('an unfrozen measurement taken from a broken run declares how much of it errored', () => {
     const base = reportWith([REVIEWER_NEVER_SCORED]);
     const now = reportWith([REVIEWER_QUOTA_DIED_AFTER_TWO]);
 
     const diff = diffAgainstBaseline(now, base);
 
-    expect(diff.firstMeasurements[0]).toContain('detection scored for the first time — 2/2 (1)');
-    expect(diff.firstMeasurements[0]).toContain('INCOMPLETE, 17/19 fixtures errored');
-    expect(exitCodeFor(diff)).toBe(0);
+    expect(diff.unfrozenMeasurements[0]).toContain('detection first produced a number — 2/2 (1)');
+    expect(diff.unfrozenMeasurements[0]).toContain('INCOMPLETE, 17/19 fixtures errored');
+    expect(exitCodeFor(diff)).toBe(3);
   });
 
   // A fixture the gate used to catch and now cannot even judge is the single
@@ -1352,10 +1390,10 @@ describe('baseline diff: what the measured set did', () => {
 
     const diff = diffAgainstBaseline(now, base);
 
-    expect(diff.firstMeasurements).toHaveLength(2);
+    expect(diff.unfrozenMeasurements).toHaveLength(2);
     expect(diff.regressions).toEqual([]);
     expect(diff.improvements).toEqual([]);
-    expect(exitCodeFor(diff)).toBe(0);
+    expect(exitCodeFor(diff)).toBe(3);
   });
 
   test('an unchanged run against an unchanged baseline says nothing and exits clean', () => {
@@ -1376,16 +1414,19 @@ describe('baseline diff: what the measured set did', () => {
 // category that exists in the diff and not in the printout is invisible in
 // exactly the place it was added to be visible.
 describe('baseline diff reaches the printed report', () => {
-  test('a first measurement is printed, not just recorded', () => {
+  test('an unfrozen measurement prints its consequence and immediate freeze command', () => {
     const base = reportWith([SPEC_CHECK_NEVER_SCORED]);
     const now = reportWith([SPEC_CHECK_SCORED]);
 
     const diff = diffAgainstBaseline(now, base, PAID_GATES_OFF);
     const out = render(now, diff);
 
-    expect(out).toContain('MEASURED    spec-check: detection scored for the first time — 17/19 (0.895)');
+    expect(out).toContain('UNFROZEN    spec-check: detection first produced a number — 17/19 (0.895)');
+    expect(out).toContain('The baseline holds no number for this metric');
+    expect(out).toContain('even 0/19 would print UNFROZEN again');
+    expect(out).toContain('ORACLE_LLM=1 bun personal/oracle/run.ts --write-baseline');
     expect(out).not.toContain('baseline: no change');
-    expect(exitCodeFor(diff)).toBe(0);
+    expect(exitCodeFor(diff)).toBe(3);
   });
 
   test('a lost measurement is printed under its own alarm word', () => {
@@ -1488,15 +1529,18 @@ describe('baseline diff reaches the printed report', () => {
     const diff = diffAgainstBaseline(now, base, PAID_GATES_OFF);
     diff.corruption.push('a corrupt line');
     diff.improvements.push('an improved line');
+    diff.unfrozenMeasurements.push('spec-check: an unfrozen line');
+    diff.firstMeasurements.push('a measured line');
     diff.baselineCaveats.push('a caveat line');
     diff.newCases.push('a-new-fixture');
     diff.droppedCases.push('a-dropped-fixture');
 
-    const verdictLines = render(now, diff)
-      .split('\n')
-      .filter(l => /^(CORRUPT|LOST|REGRESSION|improved|MEASURED|not run|caveat|new fixture|DROPPED) /.test(l));
+    const out = render(now, diff);
+    const verdictLines = out.split('\n')
+      .filter(l => /^(CORRUPT|LOST|REGRESSION|improved|UNFROZEN|MEASURED|not run|caveat|new fixture|DROPPED) /.test(l));
 
     expect(exitCodeFor(diff)).toBe(1);
+    expect(out.indexOf('\nUNFROZEN')).toBeLessThan(out.indexOf('\nMEASURED'));
     expect(verdictLines.length).toBeGreaterThan(6);
     for (const line of verdictLines) expect(line[11]).toBe(' ');
     for (const line of verdictLines) expect(line[12]).not.toBe(' ');

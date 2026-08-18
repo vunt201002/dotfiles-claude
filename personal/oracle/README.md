@@ -45,7 +45,8 @@ ORACLE_LLM=1 bun test personal/oracle/   # thêm cổng LLM, TỐN TIỀN
 ```
 
 **Exit code:** `0` sạch · `1` có fixture không chứng minh được bug của nó, hoặc một
-cổng deterministic không chạy được · `2` tụt so với baseline.
+cổng deterministic không chạy được · `2` tụt so với baseline · `3` sinh ra phép đo
+mà baseline chưa đóng băng nên không có số đối chiếu.
 
 > `personal/oracle/` **chưa** nằm trong script `test` của `package.json`. Muốn nó chạy
 > cùng `bun run test` thì thêm `personal/oracle/` vào danh sách đường dẫn ở đó — một
@@ -230,12 +231,13 @@ ngược là tự dựng số.
 |---|---|---:|
 | co lại (mất metric, hoặc mẫu số tụt) | `LOST` | **2** |
 | co lại, và **cả ba kênh** đồng ý là cố ý | `not run` | 0 |
-| nở ra (có metric mới, hoặc mẫu số tăng) | `MEASURED` | 0 |
+| có metric baseline chưa từng đóng băng | `UNFROZEN` | **3** |
+| mẫu số tăng cho metric đã đóng băng | `MEASURED` | 0 |
 | giữ nguyên → so tỉ lệ bình thường | `REGRESSION` / `improved` | 2 / 0 |
 | hai phía tự mâu thuẫn | `CORRUPT` | **1** |
 
 Ngoài ra: `caveat` (baseline này đóng băng từ một lượt phần lớn fixture lỗi),
-`new fixture` / `DROPPED`. Chín nhãn đều rộng đúng 12 ký tự, có test ghim cột.
+`new fixture` / `DROPPED`. Mười nhãn đều rộng đúng 12 ký tự, có test ghim cột.
 
 `exitCodeFor()` là luật **duy nhất**; `run.ts` và mọi test đều đọc nó, không bản sao nào
 trôi được.
