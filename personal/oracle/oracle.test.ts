@@ -9,6 +9,7 @@ import {
 } from './lib/cases';
 import { verifyFixtures, runRedTestGate, runGuardGate, runLintGate, runTscGate, runTscRatchet, type Verdict } from './lib/gates';
 import { backendLabel, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skippedLlmGate } from './lib/llm-gates';
+import type { Backend } from './lib/llm-backends';
 import {
   summarize, diffBaseline, diffAgainstBaseline, buildReport, render, exitCodeFor, unfitToFreeze, writeBaseline, BASELINE_PATH,
   type GateStats, type OracleReport, type DiffContext,
@@ -1610,6 +1611,106 @@ describe.skipIf(!slowGates)('oracle deterministic gates (ORACLE=1)', () => {
       expect(exitCodeFor(diff)).toBe(1);
     }
   }, 900_000);
+});
+
+describe('oracle llm gate canaries', () => {
+  const runners = [
+    ['spec-check', runSpecCheckGate],
+    ['reviewer', runReviewerGate],
+  ] as const;
+
+  function backend(call: (prompt: string) => unknown): Backend {
+    return {
+      name: 'codex',
+      family: 'openai',
+      available: () => ({ ok: true, reason: '' }),
+      callJson: async <T>(prompt: string) => call(prompt) as T,
+    };
+  }
+
+  test('a tripped and correctly attributed canary preserves availability without entering metrics', async () => {
+    const cases = await loadCases();
+    for (const [name, run] of runners) {
+      const producerPrompts: string[] = [];
+      const judgePrompts: string[] = [];
+      const outcome = await run(cases, {
+        gate: backend(prompt => {
+          producerPrompts.push(prompt);
+          return { findings: [{ title: 'Unauthenticated bulk deletion', why_it_matters: 'Any caller can erase all customer data.', evidence: 'database.customers.deleteMany({}) ignores requestingUser' }] };
+        }),
+        judge: backend(prompt => {
+          judgePrompts.push(prompt);
+          const id = prompt.includes('llm-canary-unauthenticated-delete-all-customers')
+            ? 'llm-canary-unauthenticated-delete-all-customers'
+            : cases.find(c => prompt.includes(c.bug.id))?.bug.id;
+          return { detected: id ? [id] : [], reasoning: 'The report identifies the named defect.' };
+        }),
+      });
+
+      expect(outcome.available).toBe(true);
+      expect(outcome.unavailable_reason).toBe('');
+      expect(Object.keys(outcome.cells)).toEqual(cases.map(c => c.bug.id));
+      expect(outcome.cells['llm-canary-unauthenticated-delete-all-customers']).toBeUndefined();
+      expect(outcome.fp_denominator).toBe(cases.length);
+      expect(producerPrompts).toHaveLength(1 + cases.length * 2);
+      expect(judgePrompts).toHaveLength(1 + cases.length * 2);
+      expect(producerPrompts[0]).toContain('deleteAllCustomers');
+      expect(judgePrompts[0]).toContain('llm-canary-unauthenticated-delete-all-customers');
+      expect(name).toBe(outcome.gate);
+    }
+  });
+
+  test('a silent canary makes the gate unavailable before any fixture runs', async () => {
+    const cases = await loadCases();
+    for (const [name, run] of runners) {
+      let producerCalls = 0;
+      let judgeCalls = 0;
+      const outcome = await run(cases, {
+        gate: backend(() => {
+          producerCalls++;
+          return { findings: [] };
+        }),
+        judge: backend(() => {
+          judgeCalls++;
+          return { detected: [], reasoning: 'No defect reported.' };
+        }),
+      });
+
+      expect(outcome.available).toBe(false);
+      expect(outcome.unavailable_reason).toContain(`canary did not trip: ${name}`);
+      expect(Object.values(outcome.cells).every(cell => cell.verdict === 'error')).toBe(true);
+      expect(outcome.fp_denominator).toBe(0);
+      expect(outcome.false_positives).toEqual([]);
+      expect(producerCalls).toBe(1);
+      expect(judgeCalls).toBe(1);
+    }
+  });
+
+  test('a finding attributed to the wrong id makes the gate unavailable before fixtures run', async () => {
+    const cases = await loadCases();
+    for (const [, run] of runners) {
+      let producerCalls = 0;
+      let judgeCalls = 0;
+      const outcome = await run(cases, {
+        gate: backend(() => {
+          producerCalls++;
+          return { findings: [{ title: 'Bulk deletion', why_it_matters: 'All data is lost.', evidence: 'deleteMany({})' }] };
+        }),
+        judge: backend(() => {
+          judgeCalls++;
+          return { detected: ['some-other-bug'], reasoning: 'Attributed elsewhere.' };
+        }),
+      });
+
+      expect(outcome.available).toBe(false);
+      expect(outcome.unavailable_reason).toContain('canary attribution failed');
+      expect(outcome.unavailable_reason).toContain('llm-canary-unauthenticated-delete-all-customers');
+      expect(Object.values(outcome.cells).every(cell => cell.verdict === 'error')).toBe(true);
+      expect(outcome.fp_denominator).toBe(0);
+      expect(producerCalls).toBe(1);
+      expect(judgeCalls).toBe(1);
+    }
+  });
 });
 
 describe.skipIf(!llm.enabled)('oracle llm gates (ORACLE_LLM=1)', () => {

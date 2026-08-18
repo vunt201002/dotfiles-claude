@@ -170,15 +170,22 @@ này không resolve được `typescript-eslint` khi chạy qua `npx`. Joy/Wishl
 
 ### Cổng nào cũng có canary
 
-Ba cổng dùng tool ngoài đều chạy một **canary** trước khi tin kết quả:
+Năm cổng có thể hỏng im lặng đều chạy một **canary dương** trước khi tin kết quả:
 
 - `guard` phải chặn `rm -rf /`
 - `tsc` phải bắt `const x: number = 'string'` **và** truy được lỗi đó về đúng file
 - `lint` phải bắt biến undefined + binding thừa **và** truy được về đúng file
+- `spec-check` và `reviewer` phải nêu việc bất kỳ caller nào cũng có thể xoá mọi
+  customer record **và** judge phải quy finding về đúng bug id của canary
 
 Canary không nổ ⟹ cổng bị đánh dấu `error`, **không** phải "0 lần bắt". Đây đúng là
 lớp lỗi `silent-skip-without-env` đang đo — một cổng gãy im lặng trả về "không có
-finding" y hệt một cổng đang chạy tốt.
+finding" y hệt một cổng đang chạy tốt. Cột `err` **không bao giờ** có nghĩa là
+"cổng cho qua"; nó có nghĩa là phép đo không đáng tin và không được diễn giải như
+một kết quả detection. Canary LLM chạy qua chính đường `produce → scoreOne`, trước
+19 fixture, rồi bị bỏ hoàn toàn khỏi `detect`, `cover`, `fp_denominator` và lưới
+fixture. Không có canary sạch theo chiều âm: false positive trên code sạch không
+chứng minh một cổng LLM bị hỏng.
 
 > Canary attribution không phải phòng xa: lần chạy đầu tiên **tsc báo path tương đối
 > còn matcher so path tuyệt đối**, nên mọi lỗi tsc rơi vào hư không và cả 8 fixture

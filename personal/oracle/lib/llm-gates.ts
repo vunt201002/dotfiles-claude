@@ -16,6 +16,34 @@ import type { FixtureCase } from './cases';
 import type { GateOutcome } from './gates';
 import { resolveBackends, type Backend } from './llm-backends';
 
+type ReviewCase = Pick<FixtureCase, 'bug' | 'entryName'>;
+
+export interface LlmGateBackends {
+  gate: Backend;
+  judge: Backend;
+}
+
+const CANARY_ID = 'llm-canary-unauthenticated-delete-all-customers';
+const CANARY_CODE = `export async function deleteAllCustomers(requestingUser: string) {
+  if (requestingUser === 'admin' || requestingUser !== 'admin') {
+    return database.customers.deleteMany({});
+  }
+}`;
+const CANARY_CASE: ReviewCase = {
+  entryName: 'canary.ts',
+  bug: {
+    id: CANARY_ID,
+    category: 'authorization',
+    severity: 'critical',
+    description: 'A tautological authorization condition lets every caller irreversibly delete every customer record.',
+    detection_hint: 'delete all customers|deleteMany|tautology|authorization|any caller|requestingUser|data loss',
+    source: 'oracle instrument canary',
+    bug_class: 'unconditional destructive operation without authorization',
+    lang: 'ts',
+    spec: 'Only an authenticated administrator may delete one explicitly selected customer. Never provide a bulk delete-all operation.',
+  },
+};
+
 /**
  * Still opt-in, still off by default — the cost just moved. It is no longer a
  * metered API key but the machine's own CLI quota, which is finite in a way a
@@ -56,7 +84,7 @@ function renderReport(r: FindingsReport): string {
     .join('\n');
 }
 
-async function specCheckReport(c: FixtureCase, code: string, gate: Backend): Promise<string> {
+async function specCheckReport(c: ReviewCase, code: string, gate: Backend): Promise<string> {
   const out = await gate.callJson<FindingsReport>(
     `You are a fresh reviewer. You did not write this change and you have not seen the reasoning behind it. You get two things: the spec that was agreed, and the change that was produced.
 
@@ -77,7 +105,7 @@ Return an empty findings array if the change matches the spec.`);
   return renderReport(out);
 }
 
-async function reviewerReport(c: FixtureCase, code: string, gate: Backend): Promise<string> {
+async function reviewerReport(c: ReviewCase, code: string, gate: Backend): Promise<string> {
   const out = await gate.callJson<FindingsReport>(
     `You are reviewing a change before it lands. You get the code and nothing else — no spec, no author notes. Report defects that would hurt in production: correctness, data loss, concurrency, boundary behaviour, and checks that cannot fail.
 
@@ -93,7 +121,7 @@ Return an empty findings array if you would approve this as is.`);
   return renderReport(out);
 }
 
-async function scoreOne(c: FixtureCase, report: string, judge: Backend) {
+async function scoreOne(c: ReviewCase, report: string, judge: Backend) {
   const groundTruth = {
     total_bugs: 1,
     bugs: [{
@@ -110,9 +138,10 @@ async function scoreOne(c: FixtureCase, report: string, judge: Backend) {
 async function runLlmGate(
   gate: 'spec-check' | 'reviewer',
   cases: FixtureCase[],
-  produce: (c: FixtureCase, code: string, gate: Backend) => Promise<string>,
+  produce: (c: ReviewCase, code: string, gate: Backend) => Promise<string>,
+  backends: LlmGateBackends,
 ): Promise<GateOutcome> {
-  const { gate: gateBackend, judge: judgeBackend } = resolveBackends();
+  const { gate: gateBackend, judge: judgeBackend } = backends;
   const out: GateOutcome = {
     gate,
     family: 'llm',
@@ -122,6 +151,30 @@ async function runLlmGate(
     false_positives: [],
     fp_denominator: 0,
   };
+
+  let canaryReport: string;
+  let canaryScore: { detected: string[]; reasoning: string };
+  try {
+    canaryReport = await produce(CANARY_CASE, CANARY_CODE, gateBackend);
+    canaryScore = await scoreOne(CANARY_CASE, canaryReport, judgeBackend);
+  } catch (err: any) {
+    out.available = false;
+    out.unavailable_reason = `canary could not run through produce → scoreOne: ${err?.message ?? err}. Every "missed" would be indistinguishable from a broken LLM pipeline.`;
+    for (const c of cases) out.cells[c.bug.id] = { verdict: 'error', detail: out.unavailable_reason };
+    return out;
+  }
+  if (canaryReport === 'No findings.') {
+    out.available = false;
+    out.unavailable_reason = `canary did not trip: ${gate} did not report an unconditional unauthenticated delete of every customer record. Every "missed" would be indistinguishable from an LLM gate that could no longer see defects.`;
+    for (const c of cases) out.cells[c.bug.id] = { verdict: 'error', detail: out.unavailable_reason };
+    return out;
+  }
+  if (!canaryScore.detected.includes(CANARY_ID)) {
+    out.available = false;
+    out.unavailable_reason = `canary attribution failed: the outcome judge did not trace ${gate}'s finding back to bug id "${CANARY_ID}". A finding that cannot be assigned to the defect it names cannot support fixture-level detection numbers.`;
+    for (const c of cases) out.cells[c.bug.id] = { verdict: 'error', detail: out.unavailable_reason };
+    return out;
+  }
 
   for (const c of cases) {
     try {
@@ -150,12 +203,12 @@ async function runLlmGate(
   return out;
 }
 
-export async function runSpecCheckGate(cases: FixtureCase[]): Promise<GateOutcome> {
-  return runLlmGate('spec-check', cases, specCheckReport);
+export async function runSpecCheckGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends()): Promise<GateOutcome> {
+  return runLlmGate('spec-check', cases, specCheckReport, backends);
 }
 
-export async function runReviewerGate(cases: FixtureCase[]): Promise<GateOutcome> {
-  return runLlmGate('reviewer', cases, reviewerReport);
+export async function runReviewerGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends()): Promise<GateOutcome> {
+  return runLlmGate('reviewer', cases, reviewerReport, backends);
 }
 
 export function skippedLlmGate(gate: 'spec-check' | 'reviewer', cases: FixtureCase[], reason: string): GateOutcome {
