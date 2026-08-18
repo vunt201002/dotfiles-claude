@@ -16,7 +16,7 @@
 | `stop-full-check.sh` | Stop | Full tsc/test — 1 lần cuối turn | exit 2 = turn KHÔNG kết thúc được khi chưa pass; Claude đọc lỗi tự sửa |
 | `session-start-inject.sh` | SessionStart (startup·resume·**compact**) | Re-inject iron laws — sống sót qua compact | exit 0 + stdout = inject context |
 | `harness-check.sh` | SessionStart (startup·resume) | Audit chính harness: skill/command/rules chưa link, symlink chết, CLAUDE.md drift, hook trỏ file không có | exit 0 + stdout; **im lặng khi mọi thứ ổn** |
-| `statusline.cjs` | *(không phải hook — key `statusLine`)* | Hiện model·effort · dir · branch (+ahead/behind/dirty) · **% context đã dùng** (xanh/vàng/đỏ) · rate-limit **còn bao lâu tới reset** + 7d | stdin JSON → in 1 dòng |
+| `statusline.cjs` | *(không phải hook — key `statusLine`)* | Hiện model·effort · dir · branch (+ahead/behind/dirty) · **% context đã dùng** (xanh/vàng/đỏ) · rate-limit **còn bao lâu tới reset** + 7d, **tự co theo bề ngang pane** | stdin JSON → in 1 dòng |
 
 **Vì sao có `harness-check.sh`:** skill `fix-bug-loop` viết 20/07/2026 nhưng không ai
 symlink — chết 2 tuần không một tín hiệu. `/sync-skills` sửa được nhưng chỉ chạy khi
@@ -35,6 +35,53 @@ thiếu hoặc đã qua. Đếm ngược làm tròn xuống (`3h09m` = còn 3h09
 
 Phần trăm **làm tròn, không cắt cụt** — `Math.floor` biến 2.9% thành 2%, lệch 1 điểm so
 với `/usage`. Script không tự tính phần trăm nào, lấy nguyên từ payload.
+
+### Dòng tự co theo bề ngang pane, không để terminal cắt hộ
+
+Mở nhiều pane thì mỗi pane hẹp lại, mà dòng status thì vẫn dài ~117 ký tự. Claude Code
+cắt phần thừa ở **cuối dòng** — đúng chỗ đang để % context và rate-limit. Đo thật, 3 pane
+cùng lúc trên máy này: `COLUMNS` = **189 / 94 / 46**. Ở pane 46 cột, cái còn nhìn thấy là
+`Opus 5 (1M context)·max wishlist ⎇ fix/wis…` — nghĩa là toàn bộ phần đáng xem đã chết,
+chỉ còn lại phần vô dụng nhất (tên model thì pane nào cũng giống nhau và không bao giờ đổi).
+
+Claude Code **có** export `COLUMNS`/`LINES` riêng cho từng pane vào env của script
+(payload JSON thì không có trường nào về bề ngang). Nên script tự cắt lấy: dựng dòng ở
+mức chi tiết giàu nhất mà vẫn vừa, chứ không in tràn rồi phó mặc.
+
+**Chỗ thật sự dùng được là `COLUMNS - 3`, không phải `COLUMNS`.** Đếm ký tự hiện trên
+màn hình ở 3 pane, 2 bề ngang, 2 lần chụp khác nhau: 43/46, 43/46, 91/94 — hụt đúng 3
+cả ba lần. Đặt reserve = 2 thì mọi dòng vừa khít đều mất 1 ký tự cuối, và ký tự cuối là
+chữ số của `7d 95%`. Một cột sai = đúng cái bug đang sửa, chỉ nhỏ hơn. (Chưa tách được
+"Claude Code chừa 3" với "chừa 2 nhưng `⎇` render 2 ô trong font này" — mọi mẫu đo đều
+có đúng một `⎇`. Reserve = 3 đúng cho cả hai giả thuyết, xấu nhất là phí 1 cột khi ở
+thư mục không phải git repo.)
+
+`PROFILES` là **thứ tự hy sinh**, giàu → nghèo, cái nào đứng trước thì mất trước:
+
+| Bỏ | Vì |
+|---|---|
+| `(1M context)` trong tên model | trùng với marker `1M` cạnh thanh bar, mất 13 ký tự mà không mất tin |
+| bar 10 ô → 6 ô, rồi bỏ marker `1M` | bar là trang trí, con số `45%` mới là tin |
+| khoảng trắng quanh `·` của rate-limit | `5h 42% · 7d 95%` → `5h42% 7d95%`, mất 6 ký tự |
+| tên model + effort | giống hệt nhau ở mọi pane, và không đổi theo thời gian |
+| bar hoàn toàn | `45%` vẫn còn, vẫn còn màu |
+| tên thư mục | branch phân biệt pane tốt hơn dir khi nhiều pane cùng repo |
+
+**% context và hai con rate-limit không nằm trong bảng này** — chúng không bao giờ bị bỏ.
+
+Branch là biến **đàn hồi**: nó ăn hết chỗ còn thừa của profile giàu nhất còn vừa (binary
+search trên bề rộng đã render, nên không phải cộng tay chi phí separator — sai một ký tự
+là tràn). Cắt ở **giữa** chứ không cắt đuôi: `fix/wishlis…n-product-page` giữ cả loại
+nhánh lẫn phần phân biệt, `fix/wishlist-car…` thì vứt mất phần phân biệt. Dưới 12 ký tự
+thì bỏ hẳn branch — `⎇ f…` không nói được gì mà vẫn tốn chỗ.
+
+Sàn budget từng viết là `Math.max(16, COLUMNS - reserve)`. Fuzz 4→200 cột bắt được: ở
+pane 16–17 cột nó cho budget **lớn hơn** chỗ thật sự có, tức cũng là tự gây lại bug đang
+sửa. Sàn giả đã bỏ; `clampVisible` lo phần cực hẹp và cắt an toàn qua escape ANSI.
+
+Đo lại sau khi sửa: 0 tràn trên toàn dải 4–200 cột, và 43 ms/run — bằng đúng bản cũ
+(chi phí nằm ở spawn node, không nằm ở vòng fit). Đặt `STATUSLINE_COLUMNS` để ép bề
+ngang khi test.
 
 ### rate_limits là ảnh chụp per-session, không phải giá trị live
 
