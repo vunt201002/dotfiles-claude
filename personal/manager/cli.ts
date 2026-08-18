@@ -10,6 +10,7 @@
  *   manager cost [--today]
  *   manager fleet [--json]
  *   manager worktrees
+ *   manager review-sample [<task-id>]
  *
  * Commands that change something go through the running daemon, so there is
  * exactly one writer of state.json. Read-only commands fall back to reading
@@ -33,11 +34,17 @@ import {
 } from './lib/paths';
 import { fleetReport, renderFleet } from './lib/fleet-view';
 import { reconcile } from './lib/reconcile';
-import { isDirty, listWorktrees } from './lib/worktrees';
+import { isDirty, listWorktrees, resolveTaskWorkdir, taskDiff } from './lib/worktrees';
 import { cmuxAvailable } from './lib/cmux-control';
 import { guardIsWired } from './lib/cmux-spawn';
 import { configureGlobalAgentCap, resolveSpawnRunner } from './lib/spawn';
-import { listTasks } from './lib/store';
+import { listTasks, loadTask } from './lib/store';
+import {
+  listTaskGateRows,
+  readBlindSampleReviews,
+  recordBlindSampleReview,
+  unreviewedBlindSamples,
+} from './lib/blind-sample-review';
 import { readToken, startServer } from './server';
 import type { TaskRecord } from './types';
 
@@ -412,6 +419,138 @@ function cmdWorktrees(): number {
   return 0;
 }
 
+interface ReviewSampleArgs {
+  falsePositiveLines: number[] | null;
+  humanFixed: boolean | null;
+  note: string;
+  error: string;
+}
+
+function parseReviewSampleArgs(args: string[]): ReviewSampleArgs {
+  let falsePositiveLines: number[] | null = null;
+  let humanFixed: boolean | null = null;
+  let note = '';
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    const value = args[i + 1];
+    if (!['--fp', '--human-fixed', '--note'].includes(flag)) {
+      return { falsePositiveLines, humanFixed, note, error: `unknown option ${flag}` };
+    }
+    if (value === undefined || value.startsWith('--')) {
+      return { falsePositiveLines, humanFixed, note, error: `${flag} needs a value` };
+    }
+    i++;
+    if (flag === '--note') {
+      note = value;
+      continue;
+    }
+    if (flag === '--human-fixed') {
+      if (value !== 'yes' && value !== 'no') {
+        return { falsePositiveLines, humanFixed, note, error: '--human-fixed must be yes or no' };
+      }
+      humanFixed = value === 'yes';
+      continue;
+    }
+    if (value === 'none') {
+      falsePositiveLines = [];
+      continue;
+    }
+    const numbers = value.split(',').map(Number);
+    if (numbers.length === 0 || numbers.some((n) => !Number.isInteger(n) || n < 1)) {
+      return { falsePositiveLines, humanFixed, note, error: '--fp must be none or comma-separated positive line numbers' };
+    }
+    falsePositiveLines = [...new Set(numbers)];
+  }
+  return { falsePositiveLines, humanFixed, note, error: '' };
+}
+
+function listBlindSamples(): number {
+  const tasks = unreviewedBlindSamples();
+  line(`blind samples awaiting human review: ${tasks.length}`);
+  if (tasks.length === 0) return 0;
+  line('');
+  for (const task of tasks) {
+    line(`${task.id}  ${task.project}/${task.issue}  UNREVIEWED  reported ${task.updated_at}`);
+    line(`  open: manager review-sample ${task.id}`);
+  }
+  return 0;
+}
+
+function showBlindSample(task: TaskRecord): number {
+  const prior = readBlindSampleReviews().find((review) => review.task_id === task.id);
+  if (prior) {
+    line(`${task.id}  REVIEWED ${prior.reviewed_at}  fp=${prior.false_positive_lines.length}  human_fixed=${prior.human_fixed ? 'yes' : 'no'}`);
+    return 0;
+  }
+  if (task.state !== 'REPORTED' || task.blind_sample !== true) {
+    line(`error: ${task.id} is not a REPORTED blind sample`);
+    return 1;
+  }
+
+  line(`${task.id}  ${task.project}/${task.issue}  UNREVIEWED`);
+  line('');
+  line('DIFF');
+  const diff = taskDiff(resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined));
+  if (diff.ok) process.stdout.write(`${diff.text.trimEnd()}\n`);
+  else line(`  UNAVAILABLE: ${diff.error}`);
+
+  line('');
+  line('GATE LOG ROWS');
+  const rows = listTaskGateRows(task);
+  if (rows.stdout) process.stdout.write(rows.stdout);
+  if (!rows.ok) line(`  UNAVAILABLE: ${rows.stderr.trim()}`);
+
+  line('');
+  line('GATE VERDICTS');
+  const reports = task.gate_reports ?? [];
+  if (reports.length === 0) line('  (none recorded)');
+  for (const report of reports) {
+    line(`  ${report.gate} [${report.gate_family}] attempt=${report.attempt} verdict=${report.verdict}${report.caught ? ` — ${report.caught}` : ''}`);
+  }
+
+  line('');
+  line('FINDINGS');
+  if (task.findings.length === 0) line('  (none)');
+  for (const finding of task.findings) line(`  ${finding.gate} [${finding.gate_family}] ${finding.text}`);
+  line('');
+  line('ADVISORIES');
+  if ((task.advisories ?? []).length === 0) line('  (none)');
+  for (const advisory of task.advisories ?? []) line(`  ${advisory}`);
+
+  line('');
+  line('Human verdict is still required; UNREVIEWED does not mean clean.');
+  line(`  no false positives: manager review-sample ${task.id} --fp none --human-fixed no --note "review note"`);
+  line(`  mark false positives: manager review-sample ${task.id} --fp 1,3 --human-fixed yes --note "why the gates were wrong"`);
+  return diff.ok && rows.ok ? 0 : 1;
+}
+
+function cmdReviewSample(args: string[]): number {
+  if (args.length === 0) return listBlindSamples();
+  const task = loadTask(args[0]);
+  if (!task) {
+    line(`error: no such task ${args[0]}`);
+    return 1;
+  }
+  if (args.length === 1) return showBlindSample(task);
+  const parsed = parseReviewSampleArgs(args.slice(1));
+  if (parsed.error) {
+    line(`error: ${parsed.error}`);
+    return 1;
+  }
+  if (parsed.falsePositiveLines === null || parsed.humanFixed === null) {
+    line('error: adjudication requires both --fp none|N,... and --human-fixed yes|no');
+    return 1;
+  }
+  const result = recordBlindSampleReview(task, parsed.falsePositiveLines, parsed.humanFixed, parsed.note);
+  if (!result.ok) {
+    line(`error: ${result.stderr.trim()}`);
+    return 1;
+  }
+  if (result.stdout) process.stdout.write(result.stdout);
+  line(`reviewed ${task.id}: false_positive=${parsed.falsePositiveLines.length}, human_fixed=${parsed.humanFixed ? 'yes' : 'no'}`);
+  return 0;
+}
+
 function usage(): number {
   line('usage: manager <command>');
   line('  register <name> <path>     register a repo the manager may work in');
@@ -428,6 +567,7 @@ function usage(): number {
   line('  cost [--today]             spend breakdown');
   line('  fleet [--json]             every agent on this machine, yours included');
   line('  worktrees                  per-task checkouts the manager created');
+  line('  review-sample [<task-id>]  adjudicate REPORTED blind samples');
   return 1;
 }
 
@@ -469,6 +609,8 @@ export async function main(argv: string[]): Promise<number> {
       return cmdFleet(rest.includes('--json'));
     case 'worktrees':
       return cmdWorktrees();
+    case 'review-sample':
+      return cmdReviewSample(rest);
     default:
       return usage();
   }

@@ -71,6 +71,10 @@ export function projectsFile(): string {
   return path.join(managerDir(), 'projects.json');
 }
 
+export function blindSampleReviewsFile(): string {
+  return path.join(managerDir(), 'blind-sample-reviews.jsonl');
+}
+
 /**
  * Assert commands a human has said yes to. Sits beside projects.json on
  * purpose — it is the same trust level, not a stronger one. Read

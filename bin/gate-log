@@ -42,14 +42,15 @@ import {
   type GateOrigin,
   type Verdict,
 } from '../personal/manager/lib/gate-log';
+import { readBlindSampleReviews, unreviewedBlindSamples } from '../personal/manager/lib/blind-sample-review';
 
 const USAGE = `gate-log append --project X --gate Y --family deterministic|llm --verdict ${VERDICTS.join('|')}
                  [--issue I] [--lane L] [--attempt N] [--cost-usd N] [--caught "..."]
                  [--review-depth summary|full-diff] [--human-intervened [true|false]] [--ts ISO]
                  [--origin ${GATE_ORIGINS.join('|')}]   default work, or $GSTACK_GATE_LOG_ORIGIN
 gate-log append --json '{...}'
-gate-log read   [--project X] [--gate Y] [--since 7d] [--origin O] [--raw] [--json]
-gate-log recent [--project X] [--gate Y] [--verdict V] [--since 7d] [--origin O] [--limit N] [--json]
+gate-log read   [--project X] [--issue I] [--gate Y] [--since 7d] [--origin O] [--raw] [--json]
+gate-log recent [--project X] [--issue I] [--gate Y] [--verdict V] [--since 7d] [--origin O] [--limit N] [--json]
 gate-log fp <N> [--note "..."]                      mark line N of the last listing
 gate-log fp --all-matching <regex> --note "..." [--project X] [--gate Y] [--dry-run]
 gate-log reclassify <N> --verdict ${VERDICTS.join('|')} [--note "..."]
@@ -190,6 +191,9 @@ function selectEntries(
   const gate = str(flags, 'gate');
   if (gate) entries = entries.filter((e) => e.gate === gate);
 
+  const issue = str(flags, 'issue');
+  if (issue) entries = entries.filter((e) => e.issue === issue);
+
   const verdict = str(flags, 'verdict');
   if (verdict) entries = entries.filter((e) => e.verdict === verdict);
 
@@ -233,6 +237,7 @@ function cmdRead(args: string[]): void {
 interface ListedLine {
   n: number;
   project: string;
+  issue?: string;
   ref: string;
   entry_ts: string;
   gate: string;
@@ -291,13 +296,14 @@ function cmdRecent(args: string[]): void {
   if (!Number.isFinite(limit) || limit < 1) fail('--limit must be a positive number');
 
   const newestFirst = selectEntries(flags).slice().reverse().slice(0, limit);
-  const scope = [str(flags, 'project') ?? '(all projects)', str(flags, 'gate'), str(flags, 'verdict')]
+  const scope = [str(flags, 'project') ?? '(all projects)', str(flags, 'issue'), str(flags, 'gate'), str(flags, 'verdict')]
     .filter(Boolean)
     .join(' · ');
 
   const lines: ListedLine[] = newestFirst.map((e, i) => ({
     n: i + 1,
     project: e.project,
+    issue: e.issue,
     ref: refOf(e).ref,
     entry_ts: e.ts,
     gate: e.gate,
@@ -420,6 +426,11 @@ function pct(n: number, d: number): string {
 function cmdStats(args: string[]): void {
   const flags = parseFlags(args);
   const originWanted = originScope(flags, 'work');
+  const projectScope = str(flags, 'project');
+  const pendingSamples = unreviewedBlindSamples(projectScope);
+  const completedReviews = readBlindSampleReviews().filter((review) => projectScope === undefined || review.project === projectScope);
+  const reviewHumanTouches = completedReviews.reduce((sum, review) => sum + review.human_touches, 0);
+  const precisionPending = pendingSamples.length > 0;
 
   const withoutOrigin: Flags = { ...flags };
   delete withoutOrigin.origin;
@@ -474,7 +485,20 @@ function cmdStats(args: string[]): void {
           unstamped: unstamped,
           corrections: corrections.length,
           overall,
-          by_gate: Object.fromEntries([...byGate].map(([g, c]) => [g, { ...c, precision: precision.get(g) ?? null }])),
+          blind_samples_unreviewed: pendingSamples.length,
+          blind_samples_reviewed: completedReviews.length,
+          blind_sample_human_touches: reviewHumanTouches,
+          precision_denominator: overall.caught + overall['false-positive'],
+          by_gate: Object.fromEntries(
+            [...byGate].map(([g, c]) => [
+              g,
+              {
+                ...c,
+                precision: precisionPending ? null : precision.get(g) ?? null,
+                precision_status: precisionPending ? 'pending-human-review' : 'measured',
+              },
+            ]),
+          ),
           by_gate_family: Object.fromEntries(
             [...byFamily].map(([k, c]) => [
               k,
@@ -510,31 +534,41 @@ function cmdStats(args: string[]): void {
       `${unstamped} line${unstamped === 1 ? '' : 's'} predate the origin field and are counted as work — provenance assumed, not measured\n`,
     );
   }
+  process.stdout.write(`blind samples awaiting human review = ${pendingSamples.length}\n`);
+  process.stdout.write(`blind samples reviewed = ${completedReviews.length}; human_touches = ${reviewHumanTouches}\n`);
   process.stdout.write('\n');
   if (entries.length === 0) return;
 
   const showPrecision = (gate: string): string => {
+    if (precisionPending) return 'pending review';
     const p = precision.get(gate);
     return p === null || p === undefined ? '    n/a' : `${(p * 100).toFixed(1).padStart(6)}%`;
   };
 
   const gateWidth = Math.max(14, ...[...byGate.keys()].map((g) => g.length));
-  const head = `${'gate'.padEnd(gateWidth)}  ${'pass'.padStart(6)}${'caught'.padStart(8)}${'false-pos'.padStart(11)}${'skipped'.padStart(9)}${'error'.padStart(7)}${'total'.padStart(7)}${'precision'.padStart(11)}`;
+  const head = `${'gate'.padEnd(gateWidth)}  ${'pass'.padStart(6)}${'caught'.padStart(8)}${'false-pos'.padStart(11)}${'skipped'.padStart(9)}${'error'.padStart(7)}${'total'.padStart(7)}${'precision'.padStart(15)}`;
   process.stdout.write(`${head}\n${'-'.repeat(head.length)}\n`);
   for (const [gate, c] of [...byGate].sort((a, b) => b[1].total - a[1].total)) {
     process.stdout.write(
-      `${gate.padEnd(gateWidth)}  ${String(c.pass).padStart(6)}${String(c.caught).padStart(8)}${String(c['false-positive']).padStart(11)}${String(c.skipped).padStart(9)}${String(c.error).padStart(7)}${String(c.total).padStart(7)}${showPrecision(gate).padStart(11)}\n`,
+      `${gate.padEnd(gateWidth)}  ${String(c.pass).padStart(6)}${String(c.caught).padStart(8)}${String(c['false-positive']).padStart(11)}${String(c.skipped).padStart(9)}${String(c.error).padStart(7)}${String(c.total).padStart(7)}${showPrecision(gate).padStart(15)}\n`,
     );
   }
   process.stdout.write(`${'-'.repeat(head.length)}\n`);
   const overallPrecision =
-    overall.caught + overall['false-positive'] === 0
+    precisionPending
+      ? 'pending review'
+      : overall.caught + overall['false-positive'] === 0
       ? '    n/a'
       : `${((overall.caught / (overall.caught + overall['false-positive'])) * 100).toFixed(1).padStart(6)}%`;
   process.stdout.write(
-    `${'TOTAL'.padEnd(gateWidth)}  ${String(overall.pass).padStart(6)}${String(overall.caught).padStart(8)}${String(overall['false-positive']).padStart(11)}${String(overall.skipped).padStart(9)}${String(overall.error).padStart(7)}${String(overall.total).padStart(7)}${overallPrecision.padStart(11)}\n`,
+    `${'TOTAL'.padEnd(gateWidth)}  ${String(overall.pass).padStart(6)}${String(overall.caught).padStart(8)}${String(overall['false-positive']).padStart(11)}${String(overall.skipped).padStart(9)}${String(overall.error).padStart(7)}${String(overall.total).padStart(7)}${overallPrecision.padStart(15)}\n`,
   );
-  process.stdout.write('\nprecision = caught / (caught + false-positive) — P8 needs false-positive < 10%\n');
+  const denominator = overall.caught + overall['false-positive'];
+  process.stdout.write(`\nprecision = caught / (caught + false-positive); current overall denominator = ${denominator} rows\n`);
+  if (precisionPending) {
+    process.stdout.write('precision is withheld for this scope: UNREVIEWED is not evidence of no false positives\n');
+  }
+  process.stdout.write('P8 needs false-positive < 10%\n');
   process.stdout.write('a gate with low precision is a gate to tune; n/a means it never raised anything\n');
 
   process.stdout.write('\nwho catches — by gate_family (§7.3 ensemble; P8 needs deterministic share >= 20%)\n');

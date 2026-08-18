@@ -323,7 +323,7 @@ export function entryRef(entry: GateLogEntry): string {
   const canonical = Object.keys(entry)
     .filter((key) => key !== 'ref' && key !== 'reclassified')
     .sort()
-    .map((key) => [key, (entry as Record<string, unknown>)[key]]);
+    .map((key) => [key, (entry as unknown as Record<string, unknown>)[key]]);
   return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, REF_LENGTH);
 }
 

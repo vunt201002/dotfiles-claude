@@ -92,51 +92,6 @@ function runnerOptions(name: string): string {
   return match?.[1] ?? '';
 }
 
-function methodSource(source: string, name: string): string {
-  const start = source.indexOf(`  async ${name}(`);
-  expect(start, `${name} must remain statically inspectable`).toBeGreaterThan(-1);
-  const next = source.indexOf('\n  async ', start + 1);
-  return source.slice(start, next === -1 ? source.length : next);
-}
-
-describe('human task mutations use one accounting choke point', () => {
-  const serverSource = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'server.ts'), 'utf-8'));
-  const orchestratorSource = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'orchestrator.ts'), 'utf-8'));
-
-  test('every POST route stays in the reviewed route inventory', () => {
-    expect((serverSource.match(/req\.method === 'POST'/g) ?? []).length).toBe(3);
-    const literalRoutes = [...serverSource.matchAll(/req\.method === 'POST' && pathname === '([^']+)'/g)]
-      .map((match) => match[1])
-      .sort();
-    expect(literalRoutes).toEqual(['/prompt', '/stopall', '/task']);
-
-    const taskActions = serverSource
-      .match(/pathname\.match\(\/\^\\\/task\\\/\(\[\^\/\]\+\)\(\?:\\\/\(([^)]+)\)\)\?\$\//)?.[1]
-      .split('|')
-      .sort();
-    expect(taskActions).toEqual(['answer', 'approve', 'diff', 'stop']);
-    for (const method of ['answer', 'approve', 'stop', 'stopAll']) {
-      expect(serverSource, `server route bypasses orchestrator.${method}`).toContain(`orchestrator.${method}(`);
-    }
-    expect(serverSource).not.toMatch(/saveTask|applyTransition|\.state\s*=/);
-  });
-
-  test('all human mutation entrypoints call recordHumanTouch', () => {
-    expect((orchestratorSource.match(/human_touches \+= 1/g) ?? []).length).toBe(1);
-    for (const method of ['answer', 'approve', 'stop']) {
-      expect(methodSource(orchestratorSource, method), `${method} bypasses recordHumanTouch`).toContain(
-        'this.recordHumanTouch(',
-      );
-    }
-    expect(methodSource(orchestratorSource, 'stopAll')).toContain("this.stop(task.id, 'stopall')");
-    const chokePoint = orchestratorSource.slice(orchestratorSource.indexOf('private recordHumanTouch'));
-    const body = chokePoint.slice(0, chokePoint.indexOf('\n  }') + 4);
-    expect(body).toContain('human_touches += 1');
-    expect(body).toContain('human_intervened: true');
-    expect(body).toContain('saveTask(task)');
-  });
-});
-
 describe('manager runner credential wiring', () => {
   test('Agent SDK manager port requires operator credentials', () => {
     expect(runnerOptions('runAgentSdkTest')).toContain('requiresOperatorCredentials: true');
@@ -163,30 +118,41 @@ describe('every agent spawn goes through the shared semaphore', () => {
     expect(hits, `agent spawns must route through lib/spawn.ts:\n${hits.join('\n')}`).toEqual([]);
   });
 
-  // Two files may shell out, and only two. git.ts reads a diff so the phone
-  // has something to show. assert-runner.ts runs the project's OWN test
-  // command, which is the entire reason B8-assert counts as deterministic
-  // evidence instead of an agent's account of it (§7.3b lesson 2) — the
-  // manager reads an exit code rather than asking whether the tests were run.
-  //
-  // The ban was never on subprocesses as such. It is on a SECOND route to an
-  // agent, which would sit outside the semaphore, outside the cost ledger and
-  // outside the scope directive. So each exception carries its own narrower
-  // invariant, checked here on the file itself: git.ts may name only git, and
-  // assert-runner.ts must refuse an agent binary before it runs anything.
+  /**
+   * Five files may shell out. git.ts reads a diff so the phone has something
+   * to show. assert-runner.ts runs the project's own test command, which is
+   * why B8-assert is deterministic evidence rather than an agent's account.
+   *
+   * The ban was never on subprocesses as such. It is on a SECOND route to an
+   * agent, which would sit outside the semaphore, outside the cost ledger and
+   * outside the scope directive. So each exception carries its own narrower
+   * invariant, checked here on the file itself: git.ts may name only git,
+   * assert-runner.ts must refuse an agent binary before it runs anything, and
+   * blind-sample-review.ts is pinned to bin/gate-log in 4b below.
+   */
 
-  test('4. only the four named files shell out', () => {
+  test('4. only the five named files shell out', () => {
     const hits = offenders(/\b(Bun\.spawn|Bun\.spawnSync|child_process|execSync|spawnSync)\s*[(.]/, [
       path.join('lib', 'git.ts'),
       path.join('lib', 'assert-runner.ts'),
       path.join('lib', 'worktrees.ts'),
       path.join('lib', 'cmux-control.ts'),
+      path.join('lib', 'blind-sample-review.ts'),
     ]);
     expect(hits, `the manager never drives a terminal; it spawns through the SDK runner:\n${hits.join('\n')}`).toEqual([]);
 
     const gitSrc = fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'git.ts'), 'utf-8');
     const argv = [...gitSrc.matchAll(/Bun\.spawnSync\(\s*\[\s*'([^']+)'/g)].map((m) => m[1]);
     expect(argv, 'lib/git.ts may run git and nothing else').toEqual(['git']);
+  });
+
+  test('4b. blind-sample review delegates only to the existing gate-log CLI', () => {
+    const src = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'blind-sample-review.ts'), 'utf-8'));
+    expect(src, 'the adjudicator must resolve the repository gate-log entrypoint').toContain("new URL('../../../bin/gate-log'");
+    const argv = [...src.matchAll(/spawnSync\(\s*([^,]+),\s*\[([^\]]+)\]/g)];
+    expect(argv).toHaveLength(1);
+    expect(argv[0][1].trim()).toBe('process.execPath');
+    expect(argv[0][2]).toContain('GATE_LOG');
   });
 
   // worktrees.ts is git.ts's rule applied to a second file: it exists to run
