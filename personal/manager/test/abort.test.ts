@@ -31,6 +31,7 @@ function idleReply(): SpawnPort {
         model: 'sonnet',
         sessionId: '',
         durationMs: 1,
+        worktreeCreated: false,
       };
     },
   };

@@ -71,8 +71,8 @@ export interface SpawnResult {
   model: string;
   sessionId: string;
   durationMs: number;
-  /** Present only when this run observed a successfully created task worktree. */
-  worktreeCreated?: true;
+  /** Whether this run observed a successfully created task worktree. */
+  worktreeCreated: boolean;
 }
 
 /**
@@ -284,6 +284,7 @@ export const agentSdkSpawnPort: SpawnPort = {
       model: result.model,
       sessionId: sessionIdFromEvents(result),
       durationMs: result.durationMs,
+      worktreeCreated: false,
     };
   },
 };
@@ -315,6 +316,7 @@ export const cliSpawnPort: SpawnPort = {
       model: result.model,
       sessionId: '',
       durationMs: result.duration,
+      worktreeCreated: false,
     };
   },
 };
@@ -413,6 +415,7 @@ export const reviewPorts: Record<string, SpawnPort> = {
         model: 'codex',
         sessionId: result.sessionId ?? '',
         durationMs: result.durationMs,
+        worktreeCreated: false,
       };
     },
   },

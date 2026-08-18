@@ -417,6 +417,7 @@ function refusal(reason: string, detail: string): SpawnResult {
     model: 'cmux',
     sessionId: '',
     durationMs: 0,
+    worktreeCreated: false,
   };
 }
 

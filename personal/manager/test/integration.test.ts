@@ -171,6 +171,7 @@ function makePort(
         model: req.modelAlias,
         sessionId: `sess-${calls.length}`,
         durationMs: 5,
+        worktreeCreated: false,
       };
     },
   };
@@ -227,6 +228,17 @@ afterAll(() => {
 });
 
 describe('full lifecycle on a fixture repo with a mocked runner', () => {
+  test('a runner without isolation records that the task used the main checkout', async () => {
+    const { port } = makePort((phase) =>
+      phase === 'size' ? envelopeJson({ lane: 'trivial', size: 'S' }) : PASS_VERDICT,
+    );
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(loadTask(taskId)?.report_lines).toContain(`runner isolation: none; using main checkout ${REPO}`);
+  });
+
   test('a healthy trivial task advances while reporting verify as unmeasured', async () => {
     const { port, calls } = makePort((phase) =>
       phase === 'size' ? envelopeJson({ lane: 'trivial', size: 'S' }) : PASS_VERDICT,
@@ -1297,6 +1309,7 @@ describe('bad agent output', () => {
           model: req.modelAlias,
           sessionId: '',
           durationMs: 1,
+          worktreeCreated: false,
         };
       },
     };
@@ -1340,6 +1353,7 @@ describe('bad agent output', () => {
           model: req.modelAlias,
           sessionId: '',
           durationMs: 1,
+          worktreeCreated: false,
         };
       },
     };
@@ -1513,7 +1527,7 @@ describe('a review that did not run is not a review that found nothing', () => {
       async run() {
         return {
           output, outputs: [], exitReason, turnsUsed: 0, costUsd: 0, costKnown: false,
-          model: 'codex', sessionId: '', durationMs: 1,
+          model: 'codex', sessionId: '', durationMs: 1, worktreeCreated: false,
         };
       },
     };

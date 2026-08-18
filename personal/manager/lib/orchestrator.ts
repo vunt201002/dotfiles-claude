@@ -672,6 +672,10 @@ export class Orchestrator {
     current.cost_usd_actual = round6(current.cost_usd_actual + result.costUsd);
     if (!result.costKnown) current.cost_unmeasured_runs = unmeasuredRuns(current) + 1;
     if (result.worktreeCreated) current.worktree_created = true;
+    if (!result.worktreeCreated && !transportFailed(result.exitReason) && current.worktree_created === undefined) {
+      const isolationLine = `runner isolation: none; using main checkout ${path.resolve(req.scope)}`;
+      if (!current.report_lines.includes(isolationLine)) current.report_lines.push(isolationLine);
+    }
     saveTask(current);
     return result;
   }

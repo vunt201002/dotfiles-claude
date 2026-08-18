@@ -134,7 +134,7 @@ function workingPort(work: (record: WorktreeRecord) => void, lane: TaskEnvelope[
         model: req.modelAlias,
         sessionId: 's1',
         durationMs: 4,
-        worktreeCreated: gate === 'execute' ? true : undefined,
+        worktreeCreated: gate === 'execute',
       };
     },
   };

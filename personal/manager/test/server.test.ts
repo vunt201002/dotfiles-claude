@@ -62,6 +62,7 @@ const port: SpawnPort = {
       model: req.modelAlias,
       sessionId: 'sess',
       durationMs: 1,
+      worktreeCreated: false,
     };
   },
 };
