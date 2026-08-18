@@ -103,6 +103,8 @@ const APPROVAL_START = 'start this task';
 const APPROVAL_ORACLE = 'fix the oracle, then re-verify';
 const APPROVAL_ASSERT_CMD = 'run this test command';
 
+type HumanTouchKind = 'answer' | 'approve' | 'stop' | 'stopall' | 'budget-raise';
+
 function spawnFailureReason(phase: 'sizing' | 'execution', run: SpawnResult): string {
   const detail = run.output.trim();
   return `${phase} spawn failed (${run.exitReason})${detail ? `: ${detail}` : ''}`;
@@ -527,6 +529,25 @@ export class Orchestrator {
   // Human-facing operations
   // -------------------------------------------------------------------------
 
+  /** Records every human action that changes a task's trajectory. */
+  private recordHumanTouch(task: TaskRecord, kind: HumanTouchKind, detail: string): void {
+    task.human_touches += 1;
+    saveTask(task);
+    logGate({
+      project: task.project,
+      issue: task.issue,
+      lane: task.envelope?.lane ?? 'unsized',
+      gate: `human-${kind}`,
+      gate_family: 'deterministic',
+      verdict: 'caught',
+      attempt: task.attempt,
+      cost_usd: 0,
+      caught: detail.slice(0, 300),
+      review_depth: task.review_depth,
+      human_intervened: true,
+    });
+  }
+
   /**
    * The one place a human's yes turns into state. A yes to a parked test
    * command is also written into the approval book, so the same command never
@@ -536,12 +557,14 @@ export class Orchestrator {
     const task = loadTask(id);
     if (!task) return { ok: false, error: `no such task ${id}` };
     if (task.state !== 'APPROVAL') return { ok: false, error: `task ${id} is ${task.state}, not APPROVAL` };
+    const wasBudget = task.pending_action === APPROVAL_BUDGET;
+    const kind: HumanTouchKind = approved && wasBudget ? 'budget-raise' : 'approve';
+    this.recordHumanTouch(task, kind, `${approved ? 'approved' : 'rejected'} by human via ${source}`);
     if (!approved) {
       await this.terminate(task, 'REJECTED', `rejected by human via ${source}`);
       return { ok: true, error: '' };
     }
     task.pending_question = '';
-    const wasBudget = task.pending_action === APPROVAL_BUDGET;
     const approvedCommands = task.pending_action === APPROVAL_ASSERT_CMD ? task.pending_assert_cmds ?? [] : [];
     task.pending_action = '';
     task.pending_assert_cmds = [];
@@ -573,32 +596,14 @@ export class Orchestrator {
     return { ok: true, error: '' };
   }
 
-  /**
-   * A human answering a parked question is exactly the signal §3.2 wants
-   * counted: a gate did not catch what a human had to point out. It increments
-   * human_touches and lands in the gate log with human_intervened set.
-   */
+  /** A human answer changes the task even when it does not resume the driver. */
   async answer(id: string, text: string, source: TaskSource = 'cli'): Promise<{ ok: boolean; error: string }> {
     const task = loadTask(id);
     if (!task) return { ok: false, error: `no such task ${id}` };
     if (isTerminal(task.state)) return { ok: false, error: `task ${id} is ${task.state}` };
     task.answers.push(source === 'telegram' ? `[telegram] ${text}` : text);
-    task.human_touches += 1;
     task.pending_question = '';
-    saveTask(task);
-    logGate({
-      project: task.project,
-      issue: task.issue,
-      lane: task.envelope?.lane ?? 'unsized',
-      gate: 'human-answer',
-      gate_family: 'deterministic',
-      verdict: 'caught',
-      attempt: task.attempt,
-      cost_usd: 0,
-      caught: text.slice(0, 300),
-      review_depth: task.review_depth,
-      human_intervened: true,
-    });
+    this.recordHumanTouch(task, 'answer', text);
     return { ok: true, error: '' };
   }
 
@@ -608,11 +613,12 @@ export class Orchestrator {
    * phone that only relabels a task is not a kill switch, so the in-flight
    * query is aborted too.
    */
-  async stop(id: string): Promise<{ ok: boolean; error: string }> {
+  async stop(id: string, kind: 'stop' | 'stopall' = 'stop'): Promise<{ ok: boolean; error: string }> {
     const task = loadTask(id);
     if (!task) return { ok: false, error: `no such task ${id}` };
     abortTask(id);
     if (isTerminal(task.state)) return { ok: true, error: '' };
+    this.recordHumanTouch(task, kind, 'stopped by user');
     this.stopRequested.add(id);
     await this.terminate(task, 'FAILED', 'stopped by user');
     return { ok: true, error: '' };
@@ -621,7 +627,7 @@ export class Orchestrator {
   /** §6.8 kill switch. Reachable from a phone. */
   async stopAll(): Promise<number> {
     const live = listTasks().filter((t) => !isTerminal(t.state));
-    for (const task of live) await this.stop(task.id);
+    for (const task of live) await this.stop(task.id, 'stopall');
     return live.length;
   }
 

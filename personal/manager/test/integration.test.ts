@@ -538,6 +538,19 @@ describe('a test command runs only after a human has said yes', () => {
 });
 
 describe('approval gate', () => {
+  test('approval counts one human touch and records its kind', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'approve-touch', source: 'cli' });
+    await manager.settle(taskId);
+
+    await manager.approve(taskId, true);
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.human_touches).toBe(1);
+    const rows = readEntries().filter((entry) => entry.issue === 'approve-touch' && entry.human_intervened);
+    expect(rows.map((entry) => entry.gate)).toEqual(['human-approve']);
+  });
+
   test('needs_human parks at APPROVAL and releases the repo while it waits', async () => {
     const { port, calls } = makePort((phase) =>
       phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT,
@@ -675,6 +688,19 @@ describe('scarce resources', () => {
 });
 
 describe('cost ceilings', () => {
+  test('raising a budget counts once under the budget-raise kind', async () => {
+    const { port } = makePort(happyReply, 4);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'budget-touch', source: 'cli' });
+    await manager.settle(taskId);
+
+    await manager.approve(taskId, true);
+    await manager.settle(taskId);
+    expect(loadTask(taskId)?.human_touches).toBe(1);
+    const rows = readEntries().filter((entry) => entry.issue === 'budget-touch' && entry.human_intervened);
+    expect(rows.map((entry) => entry.gate)).toEqual(['human-budget-raise']);
+  });
+
   test('a task that blows its ceiling stops and asks before the next spawn', async () => {
     const { port, calls } = makePort(happyReply, 4);
     const manager = newOrchestrator(port);
@@ -740,6 +766,32 @@ describe('blind sampling', () => {
 });
 
 describe('stop and stopall', () => {
+  test('stop counts one human touch and records its kind', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'stop-touch', source: 'cli' });
+    await manager.settle(taskId);
+
+    await manager.stop(taskId);
+    expect(loadTask(taskId)?.human_touches).toBe(1);
+    const rows = readEntries().filter((entry) => entry.issue === 'stop-touch' && entry.human_intervened);
+    expect(rows.map((entry) => entry.gate)).toEqual(['human-stop']);
+  });
+
+  test('stopall counts exactly once for every stopped task', async () => {
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const a = await manager.submit({ project: PROJECT, issue: 'stopall-a', source: 'cli' });
+    const b = await manager.submit({ project: PROJECT, issue: 'stopall-b', source: 'cli' });
+    await Promise.all([manager.settle(a.taskId), manager.settle(b.taskId)]);
+
+    expect(await manager.stopAll()).toBe(2);
+    expect(loadTask(a.taskId)?.human_touches).toBe(1);
+    expect(loadTask(b.taskId)?.human_touches).toBe(1);
+    const rows = readEntries().filter((entry) => entry.gate === 'human-stopall' && entry.human_intervened);
+    expect(rows.map((entry) => entry.issue).sort()).toEqual(['stopall-a', 'stopall-b']);
+  });
+
   test('stop terminates a parked task and frees its locks', async () => {
     const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
     const manager = newOrchestrator(port);

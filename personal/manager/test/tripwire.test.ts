@@ -92,6 +92,51 @@ function runnerOptions(name: string): string {
   return match?.[1] ?? '';
 }
 
+function methodSource(source: string, name: string): string {
+  const start = source.indexOf(`  async ${name}(`);
+  expect(start, `${name} must remain statically inspectable`).toBeGreaterThan(-1);
+  const next = source.indexOf('\n  async ', start + 1);
+  return source.slice(start, next === -1 ? source.length : next);
+}
+
+describe('human task mutations use one accounting choke point', () => {
+  const serverSource = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'server.ts'), 'utf-8'));
+  const orchestratorSource = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, 'lib', 'orchestrator.ts'), 'utf-8'));
+
+  test('every POST route stays in the reviewed route inventory', () => {
+    expect((serverSource.match(/req\.method === 'POST'/g) ?? []).length).toBe(3);
+    const literalRoutes = [...serverSource.matchAll(/req\.method === 'POST' && pathname === '([^']+)'/g)]
+      .map((match) => match[1])
+      .sort();
+    expect(literalRoutes).toEqual(['/prompt', '/stopall', '/task']);
+
+    const taskActions = serverSource
+      .match(/pathname\.match\(\/\^\\\/task\\\/\(\[\^\/\]\+\)\(\?:\\\/\(([^)]+)\)\)\?\$\//)?.[1]
+      .split('|')
+      .sort();
+    expect(taskActions).toEqual(['answer', 'approve', 'diff', 'stop']);
+    for (const method of ['answer', 'approve', 'stop', 'stopAll']) {
+      expect(serverSource, `server route bypasses orchestrator.${method}`).toContain(`orchestrator.${method}(`);
+    }
+    expect(serverSource).not.toMatch(/saveTask|applyTransition|\.state\s*=/);
+  });
+
+  test('all human mutation entrypoints call recordHumanTouch', () => {
+    expect((orchestratorSource.match(/human_touches \+= 1/g) ?? []).length).toBe(1);
+    for (const method of ['answer', 'approve', 'stop']) {
+      expect(methodSource(orchestratorSource, method), `${method} bypasses recordHumanTouch`).toContain(
+        'this.recordHumanTouch(',
+      );
+    }
+    expect(methodSource(orchestratorSource, 'stopAll')).toContain("this.stop(task.id, 'stopall')");
+    const chokePoint = orchestratorSource.slice(orchestratorSource.indexOf('private recordHumanTouch'));
+    const body = chokePoint.slice(0, chokePoint.indexOf('\n  }') + 4);
+    expect(body).toContain('human_touches += 1');
+    expect(body).toContain('human_intervened: true');
+    expect(body).toContain('saveTask(task)');
+  });
+});
+
 describe('manager runner credential wiring', () => {
   test('Agent SDK manager port requires operator credentials', () => {
     expect(runnerOptions('runAgentSdkTest')).toContain('requiresOperatorCredentials: true');
