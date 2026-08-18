@@ -24,9 +24,18 @@ const CONTEXT_COMPACT_THRESHOLD = 80;
 const BAR_CELLS = 10;
 const NARROW_BAR_CELLS = 6;
 const BRANCH_FLOOR = 12;
-const DIR_FLOOR = 10;
 const FALLBACK_COLUMNS = 80;
 const RESERVED_COLUMNS = 3;
+const GITDIR_WALK_LIMIT = 40;
+
+const IN_PROGRESS = [
+  ['rebase-merge', 'REBASE'],
+  ['rebase-apply', 'REBASE'],
+  ['MERGE_HEAD', 'MERGE'],
+  ['CHERRY_PICK_HEAD', 'PICK'],
+  ['REVERT_HEAD', 'REVERT'],
+  ['BISECT_LOG', 'BISECT'],
+];
 
 /**
  * Moi profile la mot muc chi tiet, giau xuong ngheo. Thu tu nay la thu tu HY SINH:
@@ -34,13 +43,15 @@ const RESERVED_COLUMNS = 3;
  * thoi gian va giong het nhau o moi pane; % context va rate limit khong bao gio bi bo.
  */
 const PROFILES = [
-  { model: true, bar: BAR_CELLS, scale: true, tight: false, dir: Infinity },
-  { model: true, bar: NARROW_BAR_CELLS, scale: false, tight: false, dir: Infinity },
-  { model: true, bar: NARROW_BAR_CELLS, scale: false, tight: true, dir: Infinity },
-  { model: false, bar: NARROW_BAR_CELLS, scale: false, tight: true, dir: Infinity },
-  { model: false, bar: 0, scale: false, tight: true, dir: Infinity },
-  { model: false, bar: 0, scale: false, tight: true, dir: DIR_FLOOR },
-  { model: false, bar: 0, scale: false, tight: true, dir: 0 },
+  { model: true, id: Infinity, bar: BAR_CELLS, scale: true, tight: false, branch: true },
+  { model: true, id: 30, bar: BAR_CELLS, scale: false, tight: false, branch: true },
+  { model: true, id: 24, bar: NARROW_BAR_CELLS, scale: false, tight: false, branch: true },
+  { model: true, id: 20, bar: NARROW_BAR_CELLS, scale: false, tight: true, branch: true },
+  { model: false, id: 20, bar: NARROW_BAR_CELLS, scale: false, tight: true, branch: true },
+  { model: false, id: 20, bar: 0, scale: false, tight: true, branch: true },
+  { model: false, id: 20, bar: 0, scale: false, tight: true, branch: false },
+  { model: false, id: 12, bar: 0, scale: false, tight: true, branch: false },
+  { model: false, id: 0, bar: 0, scale: false, tight: true, branch: false },
 ];
 
 function readSession() {
@@ -129,6 +140,42 @@ function middleTruncate(text, max) {
   return chars.slice(0, head).join('') + '…' + chars.slice(chars.length - tail).join('');
 }
 
+/**
+ * Doc thang tren dia thay vi goi `git rev-parse`: 0.02ms so voi ~16ms mot subprocess,
+ * va script nay chay lai moi 15s o moi pane. `.git` la thu muc => worktree chinh,
+ * la file => worktree phu, trong do co duong dan gitdir that.
+ */
+function gitLayout(cwd) {
+  let dir = path.resolve(cwd);
+  for (let i = 0; i < GITDIR_WALK_LIMIT; i += 1) {
+    const dot = path.join(dir, '.git');
+    let stat = null;
+    try {
+      stat = fs.statSync(dot);
+    } catch {}
+    if (stat) {
+      if (stat.isDirectory()) return { gitDir: dot, linked: false };
+      const pointer = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dot, 'utf8'));
+      if (pointer) return { gitDir: pointer[1].trim(), linked: true };
+      return null;
+    }
+    const up = path.dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  return null;
+}
+
+function inProgress(gitDir) {
+  for (const [marker, label] of IN_PROGRESS) {
+    try {
+      fs.accessSync(path.join(gitDir, marker));
+      return label;
+    } catch {}
+  }
+  return '';
+}
+
 function gitInfo(cwd) {
   const status = git(['status', '--porcelain=v2', '--branch'], cwd);
   if (!status) return null;
@@ -153,9 +200,20 @@ function gitInfo(cwd) {
   }
 
   if (!branch) return null;
-  if (branch === '(detached)') branch = git(['rev-parse', '--short', 'HEAD'], cwd) || 'detached';
 
-  return { branch, ahead, behind, dirty };
+  const detached = branch === '(detached)';
+  if (detached) branch = git(['rev-parse', '--short', 'HEAD'], cwd) || 'detached';
+
+  const layout = gitLayout(cwd);
+  return {
+    branch,
+    ahead,
+    behind,
+    dirty,
+    detached,
+    linked: Boolean(layout && layout.linked),
+    operation: layout ? inProgress(layout.gitDir) : '',
+  };
 }
 
 function renderGit(info, branchWidth) {
@@ -165,10 +223,14 @@ function renderGit(info, branchWidth) {
   if (info.ahead) marks += `${GREEN}↑${info.ahead}${RESET}`;
   if (info.behind) marks += `${YELLOW}↓${info.behind}${RESET}`;
   if (info.dirty) marks += `${YELLOW}●${info.dirty}${RESET}`;
+  if (info.operation) marks += `${marks ? ' ' : ''}${RED}${info.operation}${RESET}`;
 
   const branch = middleTruncate(info.branch, branchWidth);
   if (!branch) return marks;
-  return `${DIM}⎇ ${branch}${RESET}${marks ? ' ' + marks : ''}`;
+
+  const mark = info.linked ? '+' : '';
+  const glyph = info.detached ? `@${mark}` : `⎇${mark} `;
+  return `${DIM}${glyph}${branch}${RESET}${marks ? ' ' + marks : ''}`;
 }
 
 function contextInfo(session) {
@@ -289,10 +351,10 @@ function renderLimits(limits, profile) {
 function compose(parts, profile, branchWidth) {
   const left = [];
   if (profile.model && parts.model) left.push(parts.model);
-  const dir = truncateEnd(parts.dir, profile.dir);
-  if (dir) left.push(dir);
+  const identity = truncateEnd(parts.identity, profile.id);
+  if (identity) left.push(identity);
 
-  const gitText = renderGit(parts.git, branchWidth);
+  const gitText = renderGit(parts.git, profile.branch ? branchWidth : 0);
   if (gitText) left.push(gitText);
 
   return (
@@ -323,8 +385,9 @@ function fit(parts) {
 
   let fallback = null;
   for (const profile of PROFILES) {
-    const branchWidth = widestBranchThatFits(parts, profile, fullBranch, room);
-    if (branchWidth >= Math.min(fullBranch, BRANCH_FLOOR)) {
+    const wantsBranch = profile.branch && fullBranch > 0;
+    const branchWidth = wantsBranch ? widestBranchThatFits(parts, profile, fullBranch, room) : 0;
+    if (!wantsBranch || branchWidth >= Math.min(fullBranch, BRANCH_FLOOR)) {
       const line = compose(parts, profile, branchWidth);
       if (visibleWidth(line) <= room) return line;
     }
@@ -338,6 +401,20 @@ function fit(parts) {
   return clampVisible(fallback || compose(parts, last, 0), room);
 }
 
+/**
+ * Do tren 10 pane dang chay: session_name khac nhau ca 10, con ten thu muc chi khac 6
+ * (bon pane wishlist trung nhau y het). Nen no la thu dinh danh pane, dir chi la du phong
+ * cho luc Claude Code chua kip dat ten. Strip control char vi hop dong la DUNG 1 dong.
+ */
+function sessionLabel(session, cwd) {
+  const raw = typeof session.session_name === 'string' ? session.session_name : '';
+  const cleaned = raw
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || basename(cwd);
+}
+
 function main() {
   const session = readSession();
   const cwd = session.workspace?.current_dir || session.cwd || process.cwd();
@@ -348,7 +425,7 @@ function main() {
 
   const parts = {
     model: `${DIM}${name}${RESET}${effort}${fast}`,
-    dir: basename(cwd),
+    identity: sessionLabel(session, cwd),
     git: gitInfo(cwd),
     context: contextInfo(session),
     limits: pooledLimits(session),
