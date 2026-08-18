@@ -27,9 +27,6 @@ const ASSERT_ORACLE_KINDS: ReadonlyArray<{ kind: OracleKind; shape: RegExp }> = 
   { kind: 'pytest', shape: /\bpytest\b/i },
 ];
 
-/** Areas where a cheap lane is never acceptable (§7.1 override 3). */
-const SENSITIVE_AREA = /\b(auth|authn|authz|login|session|token|oauth|payment|billing|checkout|charge|refund|migration|migrate|schema)\b/i;
-
 export interface ValidationResult {
   ok: boolean;
   errors: string[];
@@ -148,6 +145,14 @@ export function validateEnvelope(raw: unknown): ValidationResult {
   const assumptionCount = requireNumber('assumption_count');
   const estCost = requireNumber('est_cost_usd');
   const estTurns = requireNumber('est_turns');
+  const touchesSensitive = e.touches_sensitive;
+  if (
+    touchesSensitive !== undefined &&
+    touchesSensitive !== null &&
+    (typeof touchesSensitive !== 'string' || touchesSensitive.trim() === '')
+  ) {
+    errors.push('touches_sensitive: must be a non-empty string or null');
+  }
 
   if (errors.length > 0) return { ok: false, errors, envelope: null, overrides: [] };
 
@@ -159,6 +164,7 @@ export function validateEnvelope(raw: unknown): ValidationResult {
     uncertainty,
     lane,
     why,
+    touches_sensitive: typeof touchesSensitive === 'string' ? touchesSensitive : null,
     oracle_available: oracleAvailable,
     oracle_kind: oracleKind,
     needs_human: needsHuman,
@@ -235,10 +241,9 @@ export function applyRouterOverrides(input: TaskEnvelope, ctx: OverrideContext =
     out.lane = 'bug-lon';
     overrides.push('round-2-fail -> lane=bug-lon');
   }
-  const surface = `${out.title} ${out.why}`;
-  if (SENSITIVE_AREA.test(surface) && LANE_RANK[out.lane] < LANE_RANK['bug-lon']) {
+  if (out.touches_sensitive && LANE_RANK[out.lane] < LANE_RANK['bug-lon']) {
     out.lane = 'bug-lon';
-    overrides.push('auth/payment/migration surface -> lane=bug-lon');
+    overrides.push(`touches_sensitive=${out.touches_sensitive} -> lane=bug-lon`);
   }
   if (out.assumption_count > 2 && !out.needs_human) {
     out.needs_human = true;

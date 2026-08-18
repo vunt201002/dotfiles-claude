@@ -46,6 +46,7 @@ export interface TaskEnvelope {
   uncertainty: Uncertainty;
   lane: Lane;
   why: string;
+  touches_sensitive?: string | null;
   oracle_available: boolean;
   oracle_kind: OracleKind[];
   needs_human: boolean;

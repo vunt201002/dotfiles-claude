@@ -32,6 +32,7 @@ function goodEnvelope(overrides: Partial<TaskEnvelope> = {}): TaskEnvelope {
     uncertainty: 'med',
     lane: 'bug-lon',
     why: 'touches shared pricing logic in three places',
+    touches_sensitive: null,
     oracle_available: true,
     oracle_kind: ['playwright', 'tsc'],
     needs_human: false,
@@ -139,10 +140,23 @@ describe('router overrides', () => {
   });
 
   test('auth, payment and migration surfaces float up to bug-lon', () => {
-    for (const word of ['auth', 'payment', 'migration']) {
-      const { envelope } = applyRouterOverrides(goodEnvelope({ lane: 'trivial', title: `fix ${word} label` }));
+    for (const surface of ['auth', 'payment', 'data-migration']) {
+      const { envelope } = applyRouterOverrides(goodEnvelope({ lane: 'trivial', touches_sensitive: surface }));
       expect(envelope.lane).toBe('bug-lon');
     }
+  });
+
+  test('a negated sensitive surface in why does not promote bug-nho', () => {
+    const { envelope } = applyRouterOverrides(
+      goodEnvelope({
+        size: 'S',
+        uncertainty: 'low',
+        lane: 'bug-nho',
+        why: 'small localized fix with no auth/payment/migration surface',
+        touches_sensitive: null,
+      }),
+    );
+    expect(envelope.lane).toBe('bug-nho');
   });
 
   test('a feature is never demoted by an override', () => {

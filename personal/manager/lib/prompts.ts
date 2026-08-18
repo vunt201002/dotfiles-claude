@@ -62,7 +62,7 @@ Overrides you must respect: anything touching auth, payment, or data migration i
 
 Answer in prose, then close with ONE fenced json block holding exactly these keys:
 \`\`\`json
-{"project":"${project}","issue":"${issue}","title":"","size":"S|M|L|XL","uncertainty":"low|med|high","lane":"trivial|bug-nho|bug-lon|feature","why":"","oracle_available":false,"oracle_kind":[],"needs_human":false,"blocking_questions":[],"assumptions":[],"assumption_count":0,"est_cost_usd":0,"est_turns":0}
+{"project":"${project}","issue":"${issue}","title":"","size":"S|M|L|XL","uncertainty":"low|med|high","lane":"trivial|bug-nho|bug-lon|feature","why":"","touches_sensitive":null,"oracle_available":false,"oracle_kind":[],"needs_human":false,"blocking_questions":[],"assumptions":[],"assumption_count":0,"est_cost_usd":0,"est_turns":0}
 \`\`\`
 The manager gets test and check oracles from the project registry. Do not guess them or set needs_human because this advisory list is empty. oracle_kind is advisory only for a real browser capability: use ["my-chrome"] when you can actually use my-chrome for this task, otherwise use []. Set oracle_available to match that advisory list; the manager reconciles both fields with the registry.`;
 }
