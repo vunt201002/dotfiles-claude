@@ -122,7 +122,7 @@ const EVERYTHING_EXPECTED: DiffContext = { operatorDisabledGates: [], operatorRe
 // supposed to move it, so a diff that touches fixtures/ or lib/probe.ts is
 // expected to update this line AND to re-freeze baseline.json. A digest nobody
 // ever asserts against is a digest that can quietly stop being computed.
-const CORPUS_DIGEST = '8c66f84239c1a0a0';
+const CORPUS_DIGEST = '83737b82e05ac05e';
 
 const SAME_CORPUS: CorpusFingerprint = { fixtures: FIXTURES, digest: CORPUS_DIGEST };
 
@@ -1497,16 +1497,15 @@ describe('baseline diff reaches the printed report', () => {
     expect(out).not.toContain(CORPUS_DIGEST);
   });
 
-  // minimum_detection and max_false_positives are type declarations and nothing
-  // else: no gate, no exit code and no comparison reads either. An operator
-  // reading ground-truth.json believes a floor and a ceiling are being held.
-  test('the report says the declared floors are not enforced by anything', () => {
+  test('ground truth and the report no longer advertise dead floors', () => {
+    const groundTruth = loadGroundTruth() as unknown as Record<string, unknown>;
     const now = reportWith([GUARD_AFTER_DENYLIST_SPLIT]);
 
     const out = render(now, diffAgainstBaseline(now, now));
 
-    expect(out).toContain('minimum_detection and max_false_positives');
-    expect(out).toContain('nothing reads either');
+    expect(groundTruth).not.toHaveProperty('minimum_detection');
+    expect(groundTruth).not.toHaveProperty('max_false_positives');
+    expect(out).not.toContain('minimum_detection');
   });
 
   test('a run that lost a fixture does not claim nothing changed one line above saying so', () => {

@@ -220,7 +220,5 @@
       "spec": "The close control stays clear of list content at every scroll position."
     }
   ],
-  "total_bugs": 19,
-  "minimum_detection": 1,
-  "max_false_positives": 2
+  "total_bugs": 19
 }

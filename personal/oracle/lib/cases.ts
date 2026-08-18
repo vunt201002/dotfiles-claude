@@ -49,8 +49,6 @@ export interface GroundTruth {
   fixture: string;
   bugs: GroundTruthBug[];
   total_bugs: number;
-  minimum_detection: number;
-  max_false_positives: number;
 }
 
 export interface FixtureCase {

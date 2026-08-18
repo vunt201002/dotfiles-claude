@@ -617,8 +617,6 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   lines.push('           B5 given a ticket, NOT a detection rate for unreported bugs.');
   lines.push('  guard fp measured against a probe set built to press on precision, not against');
   lines.push('           observed traffic. Real-world precision needs the gate log, not this file.');
-  lines.push('  floors   ground-truth.json declares minimum_detection and max_false_positives, and');
-  lines.push('           nothing reads either: no gate, no exit code, no baseline comparison.');
   lines.push('');
 
   lines.push(`caught by at least one deterministic gate: ${report.caught_by_any_deterministic}/${report.fixtures_total}`);
