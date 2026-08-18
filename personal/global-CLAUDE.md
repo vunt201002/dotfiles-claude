@@ -74,6 +74,13 @@ no API key is passed and none belongs in the command.
 - **The verdict.** codex reporting "done" is a claim, not a result. It goes
   through `/review` exactly like a Claude agent's work does. Everything in the
   next section applies to codex output unchanged.
+- **The brief must demand a typecheck, and a number.** On a TypeScript repo
+  `bun test` only transpiles, so a green suite says nothing about types. The
+  brief has to require running `tsc` and reporting the error count before and
+  after. Treat that count as a ratchet: it may fall, it may never rise. This
+  earned its place the first time it was used — codex reported a clean suite
+  while leaving 6 new type errors behind, and on the next turn repaired 3
+  older ones because the brief made it look.
 - **Anything where being wrong is expensive and being fast is not the point** —
   architecture, a scope cut, a security call, a measurement design.
 
