@@ -84,13 +84,18 @@ export interface GitRun {
   stderr: string;
 }
 
-function git(args: string[], cwd: string, timeoutMs = 120_000): GitRun {
-  const result = spawnSync('git', args, { cwd, stdio: 'pipe', timeout: timeoutMs, encoding: 'utf-8' });
+export function gitRaw(args: string[], cwd: string, timeoutMs = 120_000, input?: string): GitRun {
+  const result = spawnSync('git', args, { cwd, input, stdio: ['pipe', 'pipe', 'pipe'], timeout: timeoutMs, encoding: 'utf-8' });
   return {
     ok: result.status === 0,
-    stdout: (result.stdout ?? '').trim(),
+    stdout: result.stdout ?? '',
     stderr: (result.stderr ?? String(result.error?.message ?? '')).trim(),
   };
+}
+
+export function git(args: string[], cwd: string, timeoutMs = 120_000, input?: string): GitRun {
+  const result = gitRaw(args, cwd, timeoutMs, input);
+  return { ...result, stdout: result.stdout.trim() };
 }
 
 export function isGitRepo(dir: string): boolean {
@@ -120,7 +125,7 @@ export interface EnsureResult {
  */
 export const DEFAULT_WORKTREE_LINKS = ['node_modules', '.env', '.env.local'];
 
-function linkInto(worktreeDir: string, repo: string, links: string[]): string[] {
+export function linkInto(worktreeDir: string, repo: string, links: string[]): string[] {
   const linked: string[] = [];
   for (const rel of links) {
     if (!rel || rel.includes('..') || path.isAbsolute(rel)) continue;

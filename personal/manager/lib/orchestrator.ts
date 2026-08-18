@@ -353,12 +353,10 @@ export class Orchestrator {
   /**
    * The verify lane, split as §7.4 asks.
    *
-   * `B8-assert` runs FIRST and takes no browser token: the manager executes
-   * the project's own command and reads the exit code, so several projects
-   * verify at the same time and the result is evidence rather than an agent's
-   * account of it. Only then, and only when the task actually has a real
-   * browser to judge in, does the single global token get taken for the
-   * judges.
+   * Red-test first runs the registered assert command at baseSha with only the
+   * changed tests applied. `B8-assert` then supplies the task-HEAD result.
+   * Both run without the browser token, so several projects still verify at
+   * once. Only then does a real-browser judge take the global token.
    *
    * Flow is decided by the deterministic half alone. A judge is an llm gate,
    * and §7.3 is explicit that one of those never blocks on its own — it warns,
@@ -894,7 +892,7 @@ export class Orchestrator {
       if (!task.gates_run.includes(report.gate)) task.gates_run.push(report.gate);
     }
     task.findings = task.gate_reports
-      .filter((row) => row.verdict === 'caught' || row.verdict === 'error')
+      .filter((row) => (row.verdict === 'caught' && row.gate !== 'red-test') || row.verdict === 'error')
       .map((row) => ({
         gate: row.gate,
         gate_family: row.gate_family,

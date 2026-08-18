@@ -1,6 +1,7 @@
 import type { Lane } from '../types';
 
 export type ManagerVerifyGate =
+  | 'red-test'
   | 'B8-assert'
   | 'B8-judge'
   | 'design-judge';
@@ -10,9 +11,8 @@ export type ManagerReviewGate =
   | 'impact-review';
 export type ManagerDispatchGate = ManagerVerifyGate | ManagerReviewGate;
 export type HookGate = 'hook';
-export type BuilderArtifactGate = 'red-test';
-export type OracleGate = ManagerDispatchGate | HookGate | BuilderArtifactGate;
-export type OracleOwner = 'manager-dispatch' | 'hook' | 'builder-artifact';
+export type OracleGate = ManagerDispatchGate | HookGate;
+export type OracleOwner = 'manager-dispatch' | 'hook';
 export type OraclePhase = 'verify' | 'review';
 export type OracleCondition = 'always' | 'real-browser-oracle';
 
@@ -25,13 +25,12 @@ interface OracleEntryBase {
 export type OracleChainEntry =
   | (OracleEntryBase & { gate: ManagerVerifyGate; owner: 'manager-dispatch'; phase: 'verify' })
   | (OracleEntryBase & { gate: ManagerReviewGate; owner: 'manager-dispatch'; phase: 'review' })
-  | (OracleEntryBase & { gate: HookGate; owner: 'hook'; phase: 'verify' })
-  | (OracleEntryBase & { gate: BuilderArtifactGate; owner: 'builder-artifact'; phase: 'verify' });
+  | (OracleEntryBase & { gate: HookGate; owner: 'hook'; phase: 'verify' });
 
 const hook = { gate: 'hook', owner: 'hook', phase: 'verify', condition: 'always', displayName: 'hook(lint/tsc)' } as const;
 const redTest = {
   gate: 'red-test',
-  owner: 'builder-artifact',
+  owner: 'manager-dispatch',
   phase: 'verify',
   condition: 'always',
   displayName: 'red-test',
@@ -108,12 +107,4 @@ export function managerGates(condition?: OracleCondition): ManagerDispatchGate[]
       .map((entry) => entry.gate as ManagerDispatchGate),
   );
   return [...new Set(gates)];
-}
-
-export function builderArtifacts(lane: Lane, phase: OraclePhase): BuilderArtifactGate[] {
-  return ORACLE_CHAIN[lane]
-    .filter((entry): entry is Extract<(typeof ORACLE_CHAIN)[Lane][number], { owner: 'builder-artifact' }> =>
-      entry.owner === 'builder-artifact' && entry.phase === phase,
-    )
-    .map((entry) => entry.gate);
 }

@@ -13,9 +13,9 @@
  * Two of those steps are already recorded by the time this file runs. The hook
  * gates are written into the gate log by the harness itself while the agent
  * works, so they are READ here rather than re-run — that is the whole reason
- * they count as independent evidence. The red-test is the agent's own work
- * inside RUNNING; the manager cannot witness which test is the red one, and
- * says so rather than pretending.
+ * they count as independent evidence. The manager witnesses red-test by
+ * applying only changed test files to a temporary baseSha checkout and running
+ * the same registered assert command used at task HEAD.
  *
  * Everything else runs here, and every gate that runs writes exactly one row
  * into the gate log with the family it actually has. Before this file existed
@@ -41,11 +41,9 @@ import type { DiffResult } from './git';
 import { logGate, readEntries } from './gate-log-port';
 import { workOnly } from './gate-log';
 import {
-  builderArtifacts,
   managerChain,
   managerGates,
   ORACLE_CHAIN,
-  type BuilderArtifactGate,
   type HookGate,
   type ManagerDispatchGate,
 } from './oracle-chain';
@@ -58,14 +56,17 @@ import {
   type SpecCheckInput,
 } from './prompts';
 import { transportFailed } from './spawn';
+import { finishRedTest, runRedTestBaseline } from './red-test-runner';
 import { parseVerdictCandidates, type AgentVerdict, type GateReport } from './verdict';
 import { taskDiff, type TaskWorkdir } from './worktrees';
 
 export type ChainGate = ManagerDispatchGate;
-export type ManagerDispatchKind = 'assert' | 'judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
+export type ManagerDispatchKind = 'red-test' | 'assert' | 'judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
 
 export function managerDispatchKind(gate: ChainGate): ManagerDispatchKind {
   switch (gate) {
+    case 'red-test':
+      return 'red-test';
     case 'B8-assert':
       return 'assert';
     case 'B8-judge':
@@ -144,7 +145,7 @@ export interface GateSpawnResult {
 export type GateSpawn = (req: GateSpawnRequest) => Promise<GateSpawnResult>;
 
 export interface ChainGateRun {
-  gate: ChainGate | BuilderArtifactGate;
+  gate: ChainGate;
   /** One per gate for llm gates; one per COMMAND for B8-assert. */
   reports: GateReport[];
   /** Present for llm gates: the full parsed verdict, for questions/irreversible. */
@@ -430,25 +431,6 @@ function skipped(ctx: ChainContext, gate: ChainGate, why: string): ChainGateRun 
   return { gate, reports: [report], verdict: null, assert: null, costUsd: 0 };
 }
 
-function missingBuilderArtifact(ctx: ChainContext, gate: BuilderArtifactGate): ChainGateRun {
-  switch (gate) {
-    case 'red-test':
-      break;
-    default: {
-      const neverGate: never = gate;
-      throw new Error(`builder artifact has no recorder: ${neverGate}`);
-    }
-  }
-  const report: GateReport = {
-    gate,
-    gate_family: 'deterministic',
-    verdict: 'skipped',
-    caught: `${gate} has no manager-verifiable witness: pre-fix failing output capture is not implemented`,
-  };
-  write(ctx, report, NOTHING_SPENT);
-  return { gate, reports: [report], verdict: null, assert: null, costUsd: 0 };
-}
-
 /**
  * A gate with no tree to look at.
  *
@@ -463,6 +445,7 @@ function noTree(ctx: ChainContext, gate: ChainGate, why: string): ChainGateRun {
 
 async function runVerifyGate(ctx: ChainContext, gate: ChainGate): Promise<ChainGateRun> {
   const dispatch = managerDispatchKind(gate);
+  if (dispatch === 'red-test') throw new Error('red-test must be paired with the task HEAD assert');
   if (dispatch === 'assert') {
     if (ctx.workdir.reason) return noTree(ctx, gate, ctx.workdir.reason);
     const result = await runAssertGate({
@@ -512,10 +495,10 @@ function assemble(runs: ChainGateRun[], lines: string[], forceUnavailable = fals
 }
 
 /**
- * The verify lane, split as §7.4 asks. `B8-assert` runs first and takes no
- * token, so N projects verify at once. The judges run only when the task
- * actually has a real browser to judge in, and the caller holds the single
- * browser token around them.
+ * The verify lane, split as §7.4 asks. Red-test builds and runs the isolated
+ * baseSha checkout, then `B8-assert` supplies the task-HEAD half of the proof.
+ * Neither takes a browser token. Judges run only when the task has a real
+ * browser to judge in.
  */
 export async function runVerifyChain(
   ctx: ChainContext,
@@ -523,10 +506,28 @@ export async function runVerifyChain(
 ): Promise<ChainRun> {
   const runs: ChainGateRun[] = [];
   const lines: string[] = [];
+  let baseline: Awaited<ReturnType<typeof runRedTestBaseline>> | null = null;
   if (gates.length === 0 && ctx.workdir.reason) return assemble(runs, [ctx.workdir.reason], true);
   for (const gate of gates) {
+    if (gate === 'red-test') {
+      baseline = await runRedTestBaseline({
+        project: ctx.project,
+        scope: ctx.scope,
+        record: ctx.workdir.record,
+        exec: ctx.exec,
+        timeoutMs: ctx.assertTimeoutMs,
+      });
+      continue;
+    }
     const run = await runVerifyGate(ctx, gate);
     runs.push(run);
+    if (gate === 'B8-assert' && baseline) {
+      const report = finishRedTest(baseline, run.assert);
+      write(ctx, report, NOTHING_SPENT);
+      runs.push({ gate: 'red-test', reports: [report], verdict: null, assert: null, costUsd: 0 });
+      lines.push(`red-test: ${report.caught}`);
+      baseline = null;
+    }
     if (run.assert) {
       lines.push(
         `B8-assert (${run.assert.plan.source}): ${run.assert.summary.ran} test(s) ran, ${run.assert.summary.skipped} skipped`,
@@ -535,8 +536,11 @@ export async function runVerifyChain(
       if (!run.assert.summary.proven) break;
     }
   }
-  if (gates.length === 0 || gates.includes('B8-assert')) {
-    for (const gate of builderArtifacts(ctx.envelope.lane, 'verify')) runs.push(missingBuilderArtifact(ctx, gate));
+  if (baseline) {
+    const report = finishRedTest(baseline, null);
+    write(ctx, report, NOTHING_SPENT);
+    runs.push({ gate: 'red-test', reports: [report], verdict: null, assert: null, costUsd: 0 });
+    lines.push(`red-test: ${report.caught}`);
   }
   return assemble(runs, lines);
 }

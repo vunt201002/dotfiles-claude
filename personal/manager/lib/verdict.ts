@@ -4,7 +4,8 @@
  *
  * A single LLM gate never blocks. So one LLM gate raising an alarm is a WARN
  * that goes to the human; two different LLM gates naming the same finding, or
- * any deterministic gate failing, blocks.
+ * any deterministic failure, blocks. A caught red-test is a successful witness
+ * that the test detects the baseSha bug, not a failure at task HEAD.
  *
  * The rule survived the 14/08 move of the review gates onto codex. The two
  * judges are still Claude (they need a browser codex cannot drive), so a pair
@@ -178,10 +179,8 @@ function demote(gate: GateReport): GateReport {
  * real deterministic rows for the same project, and letting those vouch for an
  * agent's claim would reopen this hole from the other side.
  *
- * `red-test` still has no witness outside the agent: nothing but the agent
- * knows which of a suite's tests is the one written before the fix, so a
- * claimed `red-test` always demotes. Closing that needs the failing output
- * captured before the fix (§8 P6), which is not built yet.
+ * Manager-owned gates are removed from agent verdicts before this function is
+ * called. Their rows come from the manager's own execution path.
  */
 export function verifyDeterministicGates(
   gates: GateReport[],
@@ -262,7 +261,8 @@ export function applyEnsembleRule(gates: GateReport[]): EnsembleDecision {
   const measured = gates.length > 0;
 
   for (const gate of gates) {
-    const isAlarm = gate.verdict === 'caught' || gate.verdict === 'error';
+    const redTestWitness = gate.gate === 'red-test' && gate.verdict === 'caught';
+    const isAlarm = !redTestWitness && (gate.verdict === 'caught' || gate.verdict === 'error');
     if (gate.gate_family === 'llm' && gate.verdict !== 'error' && gate.verdict !== 'skipped') answered++;
     if (!isAlarm) continue;
     findings.push({ gate: gate.gate, gate_family: gate.gate_family, text: gate.caught || gate.verdict });

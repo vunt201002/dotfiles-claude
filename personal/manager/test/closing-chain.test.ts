@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { spawnSync } from 'node:child_process';
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-chain-'));
 process.env.MANAGER_HOME = HOME;
@@ -36,10 +37,12 @@ import { ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths
 import { executePrompt } from '../lib/prompts';
 import { applyEnsembleRule, parseVerdict, verifyDeterministicGates, UNVERIFIED_MARK, type GateReport } from '../lib/verdict';
 import type { Lane, TaskEnvelope } from '../types';
+import type { WorktreeRecord } from '../lib/worktrees';
 
 const REPO = fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-chain-repo-'));
 const PROJECT = 'demo';
 const GREEN = ' 9 pass\n 0 fail\nRan 9 tests across 2 files.';
+const RED_REPOS: string[] = [];
 
 function envelope(overrides: Partial<TaskEnvelope> = {}): TaskEnvelope {
   return {
@@ -111,7 +114,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  for (const dir of [HOME, REPO]) {
+  for (const dir of [HOME, REPO, ...RED_REPOS]) {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {
@@ -119,6 +122,58 @@ afterAll(() => {
     }
   }
 });
+
+function redGit(args: string[], cwd: string): string {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf-8', stdio: 'pipe' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+  return (result.stdout ?? '').trim();
+}
+
+function redRepo(testBody = "expect(value()).toBe(1);\n"): WorktreeRecord {
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mgr-red-test-repo-')));
+  RED_REPOS.push(repo);
+  redGit(['init', '-q', '-b', 'main'], repo);
+  redGit(['config', 'user.email', 't@t.test'], repo);
+  redGit(['config', 'user.name', 'test'], repo);
+  fs.mkdirSync(path.join(repo, 'tests'));
+  fs.writeFileSync(path.join(repo, 'app.ts'), 'export const value = () => 0;\n');
+  fs.writeFileSync(path.join(repo, 'tests', 'app.test.ts'), "expect(typeof value()).toBe('number');\n");
+  redGit(['add', '-A'], repo);
+  redGit(['commit', '-qm', 'base'], repo);
+  const baseSha = redGit(['rev-parse', 'HEAD'], repo);
+  fs.writeFileSync(path.join(repo, 'app.ts'), 'export const value = () => 1;\n');
+  fs.writeFileSync(path.join(repo, 'tests', 'app.test.ts'), testBody);
+  return {
+    taskId: 'red-task',
+    project: PROJECT,
+    repo,
+    dir: repo,
+    branch: 'main',
+    baseSha,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function redExec(cwds: string[] = []): ExecFn {
+  return async (_cmd, cwd) => {
+    cwds.push(cwd);
+    const production = fs.readFileSync(path.join(cwd, 'app.ts'), 'utf-8');
+    const assertion = fs.readFileSync(path.join(cwd, 'tests', 'app.test.ts'), 'utf-8');
+    const fails = assertion.includes('toBe(1)') && production.includes('=> 0');
+    return fails
+      ? { exitCode: 1, stdout: ' 0 pass\n 1 fail\nRan 1 test across 1 file.', stderr: 'expected 1, got 0', timedOut: false }
+      : { exitCode: 0, stdout: ' 1 pass\n 0 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false };
+  };
+}
+
+function redContext(record: WorktreeRecord, exec: ExecFn): Partial<ChainContext> {
+  return {
+    scope: record.repo,
+    workdir: { dir: record.dir, source: 'worktree', record, reason: '' },
+    envelope: envelope({ lane: 'bug-nho', oracle_kind: ['bun-test'] }),
+    exec,
+  };
+}
 
 describe('the chain each lane actually runs (§7.2)', () => {
   test('trivial closes on the hooks alone', () => {
@@ -135,7 +190,7 @@ describe('the chain each lane actually runs (§7.2)', () => {
   });
 
   test('bug-nho adds spec-check without becoming bug-lon', () => {
-    expect(VERIFY_CHAIN['bug-nho']).toEqual(['B8-assert']);
+    expect(VERIFY_CHAIN['bug-nho']).toEqual(['red-test', 'B8-assert']);
     expect(REVIEW_CHAIN['bug-nho']).toEqual(['spec-check']);
     expect(REVIEW_CHAIN['bug-nho']).not.toContain('tech-review');
   });
@@ -152,7 +207,7 @@ describe('the chain each lane actually runs (§7.2)', () => {
   });
 
   test('bug-lon adds the judge, spec-check and tech-review', () => {
-    expect(VERIFY_CHAIN['bug-lon']).toEqual(['B8-assert', 'B8-judge']);
+    expect(VERIFY_CHAIN['bug-lon']).toEqual(['red-test', 'B8-assert', 'B8-judge']);
     expect(REVIEW_CHAIN['bug-lon']).toEqual(['spec-check', 'tech-review']);
   });
 
@@ -178,13 +233,13 @@ describe('the chain each lane actually runs (§7.2)', () => {
   });
 
   test('every declared lane entry has exactly one executable owner path', () => {
+    expect(MANAGER_OWNED_GATES).toContain('red-test');
     for (const lane of ['trivial', 'bug-nho', 'bug-lon', 'feature'] as Lane[]) {
       const manager = new Set([...VERIFY_CHAIN[lane], ...REVIEW_CHAIN[lane]]);
       for (const entry of ORACLE_CHAIN[lane]) {
         const paths = [
           entry.owner === 'manager-dispatch' && manager.has(entry.gate as ChainGate) && Boolean(managerDispatchKind(entry.gate)),
           entry.owner === 'hook' && hookEvidenceGates(entry.gate).length > 0,
-          entry.owner === 'builder-artifact' && entry.gate === 'red-test',
         ].filter(Boolean);
         expect(paths, `${lane}:${entry.gate} must have exactly one owner path`).toHaveLength(1);
       }
@@ -201,13 +256,156 @@ describe('the chain each lane actually runs (§7.2)', () => {
   });
 });
 
-describe('required builder artifacts leave a row', () => {
-  test('red-test without a manager-verifiable witness is recorded as skipped', async () => {
+describe('manager-owned red-test leaves a row', () => {
+  test('red-test without a worktree baseSha is recorded as skipped', async () => {
     const { ctx } = harness({ envelope: envelope({ lane: 'bug-nho' }) });
     const chain = await runVerifyChain(ctx);
     const report = chain.reports.find((row) => row.gate === 'red-test');
     expect(report?.verdict).toBe('skipped');
-    expect(report?.caught).toContain('pre-fix failing output capture is not implemented');
+    expect(report?.caught).toContain('worktree record with baseSha');
+  });
+
+  test('changed regression test is red at baseSha and green at HEAD', async () => {
+    const record = redRepo();
+    const cwds: string[] = [];
+    const chain = await runVerifyChain(harness(redContext(record, redExec(cwds))).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('caught');
+    expect(report?.gate_family).toBe('deterministic');
+    expect(report?.caught).toContain('manager reproduced red at baseSha');
+    expect(report?.caught).not.toContain(UNVERIFIED_MARK);
+    expect(cwds).toHaveLength(2);
+    expect(applyEnsembleRule(chain.reports).outcome).toBe('clear');
+  });
+
+  test('shape-only test that stays green on baseSha becomes a blocking finding', async () => {
+    const record = redRepo("expect(typeof value()).toBe('number');\nexpect(true).toBe(true);\n");
+    const chain = await runVerifyChain(harness(redContext(record, redExec())).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('error');
+    expect(report?.caught).toContain('does not exercise the pre-fix bug');
+    expect(applyEnsembleRule(chain.reports).outcome).toBe('block');
+  });
+
+  test('production-only change is skipped with a concrete reason', async () => {
+    const record = redRepo();
+    fs.writeFileSync(path.join(record.dir, 'tests', 'app.test.ts'), "expect(typeof value()).toBe('number');\n");
+    const chain = await runVerifyChain(harness(redContext(record, redExec())).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('no changed test files');
+  });
+
+  test('ambiguous test-like path is skipped instead of guessed', async () => {
+    const record = redRepo();
+    fs.writeFileSync(path.join(record.dir, 'tests', 'app.test.ts'), "expect(typeof value()).toBe('number');\n");
+    fs.mkdirSync(path.join(record.dir, 'spec'));
+    fs.writeFileSync(path.join(record.dir, 'spec', 'contract.ts'), 'unknown test convention\n');
+    const chain = await runVerifyChain(harness(redContext(record, redExec())).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('cannot classify test-like changed file');
+  });
+
+  test('missing assert command is skipped and never passed', async () => {
+    const record = redRepo();
+    fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: { path: record.repo } }));
+    const chain = await runVerifyChain(harness(redContext(record, redExec())).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('no runnable assert command');
+  });
+
+  test('red baseline with red HEAD is skipped instead of claimed as a regression proof', async () => {
+    const record = redRepo();
+    const alwaysRed: ExecFn = async () => ({
+      exitCode: 1,
+      stdout: ' 0 pass\n 1 fail\nRan 1 test across 1 file.',
+      stderr: 'still broken',
+      timedOut: false,
+    });
+    const chain = await runVerifyChain(harness(redContext(record, alwaysRed)).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('B8-assert was not green');
+    expect(chain.proven).toBe(false);
+  });
+
+  test('timed-out baseline assert is skipped with the oracle failure', async () => {
+    const record = redRepo();
+    const exec: ExecFn = async (_cmd, cwd) =>
+      cwd === record.dir
+        ? { exitCode: 0, stdout: ' 1 pass\n 0 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false }
+        : { exitCode: -1, stdout: '', stderr: 'timeout', timedOut: true };
+    const chain = await runVerifyChain(harness(redContext(record, exec)).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('baseline assert did not produce a verdict');
+  });
+
+  test('zero-test baseline assert is skipped rather than read as green', async () => {
+    const record = redRepo();
+    const exec: ExecFn = async (_cmd, cwd) =>
+      cwd === record.dir
+        ? { exitCode: 0, stdout: ' 1 pass\n 0 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false }
+        : { exitCode: 0, stdout: ' 0 pass\n 0 fail\n 3 skip\nRan 0 tests across 1 file.', stderr: '', timedOut: false };
+    const chain = await runVerifyChain(harness(redContext(record, exec)).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('ran 0 tests');
+  });
+
+  test('project testMatch classifies a nonstandard test path before fallbacks', async () => {
+    const record = redRepo();
+    fs.writeFileSync(path.join(record.dir, 'app.ts'), 'export const value = () => 0;\n');
+    fs.writeFileSync(path.join(record.dir, 'tests', 'app.test.ts'), "expect(typeof value()).toBe('number');\n");
+    fs.mkdirSync(path.join(record.dir, 'checks'));
+    fs.writeFileSync(path.join(record.dir, 'checks', 'value.case.ts'), "expect(typeof value()).toBe('number');\n");
+    fs.writeFileSync(path.join(record.dir, 'package.json'), JSON.stringify({ jest: { testMatch: ['**/*.case.ts'] } }));
+    redGit(['add', '-A'], record.dir);
+    redGit(['commit', '-qm', 'configured base'], record.dir);
+    record.baseSha = redGit(['rev-parse', 'HEAD'], record.dir);
+    fs.writeFileSync(path.join(record.dir, 'app.ts'), 'export const value = () => 1;\n');
+    fs.writeFileSync(path.join(record.dir, 'checks', 'value.case.ts'), 'expect(value()).toBe(1);\n');
+    const exec: ExecFn = async (_cmd, cwd) => {
+      const production = fs.readFileSync(path.join(cwd, 'app.ts'), 'utf-8');
+      const assertion = fs.readFileSync(path.join(cwd, 'checks', 'value.case.ts'), 'utf-8');
+      const red = assertion.includes('toBe(1)') && production.includes('=> 0');
+      return red
+        ? { exitCode: 1, stdout: ' 0 pass\n 1 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false }
+        : { exitCode: 0, stdout: ' 1 pass\n 0 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false };
+    };
+    const chain = await runVerifyChain(harness(redContext(record, exec)).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('caught');
+    expect(report?.caught).toContain('checks/value.case.ts');
+  });
+
+  test('unreadable project test-file config is skipped instead of guessed', async () => {
+    const record = redRepo();
+    fs.writeFileSync(path.join(record.dir, 'package.json'), '{invalid');
+    const chain = await runVerifyChain(harness(redContext(record, redExec())).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('package.json is invalid');
+  });
+
+  test('untracked regression test is included in the isolated patch', async () => {
+    const record = redRepo();
+    fs.writeFileSync(path.join(record.dir, 'tests', 'app.test.ts'), "expect(typeof value()).toBe('number');\n");
+    fs.writeFileSync(path.join(record.dir, 'tests', 'new.test.ts'), 'expect(value()).toBe(1);\n');
+    const exec: ExecFn = async (_cmd, cwd) => {
+      const production = fs.readFileSync(path.join(cwd, 'app.ts'), 'utf-8');
+      const assertion = fs.readFileSync(path.join(cwd, 'tests', 'new.test.ts'), 'utf-8');
+      const red = assertion.includes('toBe(1)') && production.includes('=> 0');
+      return red
+        ? { exitCode: 1, stdout: ' 0 pass\n 1 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false }
+        : { exitCode: 0, stdout: ' 1 pass\n 0 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false };
+    };
+    const chain = await runVerifyChain(harness(redContext(record, exec)).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('caught');
+    expect(report?.caught).toContain('tests/new.test.ts');
   });
 });
 
