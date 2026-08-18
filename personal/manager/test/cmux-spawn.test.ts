@@ -452,3 +452,78 @@ describe('parsing what cmux prints back', () => {
     expect(parseWorkspaceRef('some error happened')).toBe('');
   });
 });
+
+describe('readScreen distinguishes a failed read from a genuinely empty pane', () => {
+  const controlUrl = pathToFileURL(path.resolve('personal/manager/lib/cmux-control.ts')).href;
+  const spawnUrl = pathToFileURL(path.resolve('personal/manager/lib/cmux-spawn.ts')).href;
+  const moduleUrl = (relativePath: string): string => pathToFileURL(path.resolve(relativePath)).href;
+
+  function isolatedReadScreen(cmuxBin: string): { ok: boolean; screen?: string; error?: string } {
+    const script = `const { readScreen } = await import(${JSON.stringify(controlUrl)}); process.stdout.write(JSON.stringify(readScreen('workspace:77'))) `;
+    const child = spawnSync(process.execPath, ['-e', script], {
+      env: { ...process.env, MANAGER_CMUX_BIN: cmuxBin },
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    });
+    expect(child.status, child.stderr).toBe(0);
+    return JSON.parse(child.stdout);
+  }
+
+  function isolatedOperatorOutput(screenResult: { ok: boolean; screen?: string; error?: string }): string {
+    const configUrl = moduleUrl('personal/manager/config.ts');
+    const sessionsUrl = moduleUrl('personal/manager/lib/cmux-sessions.ts');
+    const pathsUrl = moduleUrl('personal/manager/lib/paths.ts');
+    const runnerUrl = moduleUrl('personal/manager/lib/spawn.ts');
+    const worktreesUrl = moduleUrl('personal/manager/lib/worktrees.ts');
+    const costUrl = moduleUrl('personal/manager/lib/cost.ts');
+    const script = `
+      import { mock } from 'bun:test';
+      mock.module(${JSON.stringify(configUrl)}, () => ({
+        loadConfig: () => ({ cmuxRoles: ['implementer'], cmuxSkipPermissions: false, worktreeLinks: [], cmuxSlotWaitMs: 1, cmuxClaudeArgs: [], cmuxClaudeBin: 'claude', cmuxStartupMs: 1, cmuxRunTimeoutMs: 1, cmuxNeedsInputGraceMs: 1, cmuxCloseOnSuccess: false }),
+        resolveMaxAgents: () => 1,
+        resolveModelId: () => 'model'
+      }));
+      mock.module(${JSON.stringify(controlUrl)}, () => ({
+        buildLaunchCommand: () => 'launch',
+        closeWorkspace: () => ({ ok: true, stdout: '', stderr: '' }),
+        cmuxAvailable: () => true,
+        createWorkspace: () => ({ ok: true, ref: 'workspace:77', reason: '' }),
+        readScreen: () => (${JSON.stringify(screenResult)}),
+        sleep: async () => {},
+        waitForSession: async () => ({ sessionId: 's', transcriptPath: '', cwd: '/tmp/cmux-test-work' }),
+        writePromptFile: () => '/tmp/prompt'
+      }));
+      mock.module(${JSON.stringify(sessionsUrl)}, () => ({
+        busyCount: () => 0,
+        fleet: () => [{ cwd: '/tmp/cmux-test-work', transcriptPath: '' }],
+        healthOf: () => 'crashed',
+        needsHuman: () => false,
+        usageFromTranscript: () => ({ turns: 0 })
+      }));
+      mock.module(${JSON.stringify(pathsUrl)}, () => ({ atomicWriteJson: () => {}, managerDir: () => '/tmp/cmux-test-manager' }));
+      mock.module(${JSON.stringify(runnerUrl)}, () => ({ agentSdkSpawnPort: { run: async () => { throw new Error('unexpected SDK run'); } }, scopeDirective: () => 'scope' }));
+      mock.module(${JSON.stringify(worktreesUrl)}, () => ({ ensureTaskWorktree: () => ({ ok: true, record: { dir: '/tmp/cmux-test-work' } }) }));
+      mock.module(${JSON.stringify(costUrl)}, () => ({ measuredCost: () => ({ usd: 0, known: false, model: '' }) }));
+      const { cmuxSpawnPort } = await import(${JSON.stringify(`${spawnUrl}?operator-output-test`)});
+      const result = await cmuxSpawnPort.run({ role: 'implementer', taskId: 't', project: 'p', issue: 'i', scope: '/tmp/cmux-test-work', source: 'cli', prompt: 'x', modelAlias: 'm' });
+      process.stdout.write(result.output);
+    `;
+    const child = spawnSync(process.execPath, ['-e', script], { stdio: 'pipe', encoding: 'utf-8' });
+    expect(child.status, child.stderr).toBe(0);
+    return child.stdout;
+  }
+
+  test('a failed screen read reports the read error to the operator', () => {
+    const result = isolatedReadScreen('/usr/bin/false');
+    expect(result).toEqual({ ok: false, error: 'cmux read-screen failed' });
+    expect(isolatedOperatorOutput(result)).toBe(
+      'cmux pane workspace:77 ended as "crashed": screen was unreadable (cmux read-screen failed)',
+    );
+  });
+
+  test('a successful empty screen reports an empty transcript to the operator', () => {
+    const result = isolatedReadScreen('/usr/bin/true');
+    expect(result).toEqual({ ok: true, screen: '' });
+    expect(isolatedOperatorOutput(result)).toBe('cmux pane workspace:77 ended as "crashed" with nothing in its transcript.');
+  });
+});

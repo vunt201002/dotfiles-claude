@@ -537,13 +537,19 @@ export const cmuxSpawnPort: SpawnPort = {
     // so stop has to mean stop even though it costs the post-mortem.
     const aborted = exitReason === 'aborted';
     const keepOpen = exitReason !== 'success' && !aborted;
-    const screen = keepOpen ? readScreen(created.ref, 120) : '';
+    const screenResult = keepOpen ? readScreen(created.ref, 120) : null;
+    const screen = screenResult?.ok ? screenResult.screen : '';
     const shouldClose = aborted || (!keepOpen && cfg.cmuxCloseOnSuccess);
     const paneClosed: PaneClosedState = shouldClose ? (closeWorkspace(created.ref).ok ? 'yes' : 'unknown') : 'no';
     recordEndedPane(paneRecord, exitReason, paneClosed);
 
     return {
-      output: output || screen || `cmux pane ${created.ref} ended as "${exitReason}" with nothing in its transcript.`,
+      output:
+        output ||
+        screen ||
+        (screenResult && !screenResult.ok
+          ? `cmux pane ${created.ref} ended as "${exitReason}": screen was unreadable (${screenResult.error})`
+          : `cmux pane ${created.ref} ended as "${exitReason}" with nothing in its transcript.`),
       outputs,
       exitReason,
       turnsUsed: usage?.turns ?? 0,

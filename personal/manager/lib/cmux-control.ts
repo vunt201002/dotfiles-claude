@@ -142,9 +142,12 @@ export function closeWorkspace(ref: string): CmuxRun {
   return cmux(['close-workspace', '--workspace', ref]);
 }
 
-export function readScreen(ref: string, lines = 200): string {
+export type ReadScreenResult = { ok: true; screen: string } | { ok: false; error: string };
+
+export function readScreen(ref: string, lines = 200): ReadScreenResult {
   const run = cmux(['read-screen', '--workspace', ref, '--lines', String(lines)]);
-  return run.ok ? run.stdout : '';
+  if (run.ok) return { ok: true, screen: run.stdout };
+  return { ok: false, error: run.stderr || 'cmux read-screen failed' };
 }
 
 export function renameWorkspace(ref: string, title: string): CmuxRun {
