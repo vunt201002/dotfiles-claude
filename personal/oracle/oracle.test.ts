@@ -1880,6 +1880,50 @@ describe('LLM backend provenance and instrument changes', () => {
 });
 
 describe('variant-aware outcome judging and replay', () => {
+  // A run whose canary tripped reports the gate unavailable with every cell
+  // errored. Folding that into the range turns "the gate died" into "within
+  // noise", which is the one thing a range must never be able to say.
+  const noiseSample = (caught: number, fp: number): GateStats => ({
+    ...SPEC_CHECK_SCORED,
+    caught, missed: 19 - caught, applicable: 19, error: 0,
+    detection_rate: caught / 19, false_positives: fp, fp_denominator: 19, fp_rate: fp / 19,
+  });
+  const deadSample: GateStats = { ...SPEC_CHECK_SCORED, available: false, error: 19, caught: 0, missed: 0, applicable: 0, detection_rate: null, false_positives: 0, fp_denominator: 0, fp_rate: null };
+
+  test('a sample where the gate never ran stays out of its noise range', () => {
+    const frozen = recordObservedNoise([
+      reportWith([noiseSample(16, 1)]), reportWith([noiseSample(17, 0)]),
+      reportWith([noiseSample(16, 1)]), reportWith([deadSample]), reportWith([deadSample]),
+    ]);
+
+    const gate = frozen.gates.find(g => g.gate === 'spec-check');
+    expect(gate?.noise_range?.samples).toBe(3);
+    expect(gate?.noise_range?.detection).toEqual({ min: 16, max: 17 });
+    expect(gate?.noise_range?.false_positives).toEqual({ min: 0, max: 1 });
+  });
+
+  // Ranked purely by caught ascending, two dead samples sit either side of the
+  // middle and the median lands on one of them. Freezing a run where the gate
+  // never ran would publish its zeros as the measurement.
+  test('the median is chosen from runs where the gate actually ran', () => {
+    const chosen = selectMedianRejudgeReport([
+      reportWith([deadSample]), reportWith([deadSample]), reportWith([noiseSample(17, 0)]),
+    ]);
+
+    const gate = chosen.gates.find(g => g.gate === 'spec-check');
+    expect(gate?.available).toBe(true);
+    expect(gate?.caught).toBe(17);
+  });
+
+  test('fewer than three intact samples records no range rather than a fabricated one', () => {
+    const frozen = recordObservedNoise([
+      reportWith([noiseSample(16, 1)]), reportWith([noiseSample(17, 0)]),
+      reportWith([deadSample]), reportWith([deadSample]), reportWith([deadSample]),
+    ]);
+
+    expect(frozen.gates.find(g => g.gate === 'spec-check')?.noise_range).toBeUndefined();
+  });
+
   // The library short-circuit in obtainReport is what actually stops a rejudge
   // from spending, and it has its own tests. This pins the second layer: run.ts
   // hands the gates a backend whose callJson throws, so a refactor that drops

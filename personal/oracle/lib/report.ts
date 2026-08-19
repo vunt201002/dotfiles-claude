@@ -161,9 +161,22 @@ export function buildReport(
  * Exact ties retain sample order. The whole chosen report is preserved, so the
  * reviewer gate is deliberately not promised to be at its own median.
  */
+/**
+ * A sample only describes a gate if that gate actually ran in it. A run where
+ * the canary tripped reports the gate unavailable with every cell errored, and
+ * folding that into a range turns "the gate died" into "within noise".
+ */
+function gateRan(g: GateStats | undefined): g is GateStats {
+  return g !== undefined && g.available && g.error === 0;
+}
+
+const MIN_NOISE_SAMPLES = 3;
+
 export function selectMedianRejudgeReport(reports: OracleReport[]): OracleReport {
   if (reports.length === 0) throw new Error('cannot select a median from zero rejudge reports');
-  const ranked = reports.map((report, sample) => {
+  const intact = reports.filter(report => report.gates.filter(g => g.family === 'llm').every(gateRan));
+  const pool = intact.length > 0 ? intact : reports;
+  const ranked = pool.map((report, sample) => {
     const gate = report.gates.find(candidate => candidate.gate === 'spec-check');
     if (!gate) throw new Error('cannot select a rejudge median without spec-check');
     return { report, gate, sample };
@@ -178,11 +191,10 @@ export function recordObservedNoise(reports: OracleReport[]): OracleReport {
   if (reports.length === 1) return selected;
   const gates = selected.gates.map(gate => {
     if (gate.family !== 'llm') return gate;
-    const samples = reports.map(report => {
-      const match = report.gates.find(candidate => candidate.gate === gate.gate);
-      if (!match) throw new Error(`rejudge sample has no ${gate.gate} gate`);
-      return match;
-    });
+    const samples = reports
+      .map(report => report.gates.find(candidate => candidate.gate === gate.gate))
+      .filter(gateRan);
+    if (samples.length < MIN_NOISE_SAMPLES) return gate;
     return {
       ...gate,
       noise_range: {
