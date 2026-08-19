@@ -1,13 +1,13 @@
 {
-  "generated_at": "2026-08-19T05:21:58.806Z",
+  "generated_at": "2026-08-19T10:42:56.803Z",
   "report_source": {
-    "mode": "live",
-    "raw_report_run": "2026-08-19T04-59-33-129Z-71973",
-    "raw_report_dir": "/Users/avadavu/.gstack-dev/oracle-reports/2026-08-19T04-59-33-129Z-71973"
+    "mode": "rejudge",
+    "raw_report_run": "2026-08-19T09-00-58-009Z-72583",
+    "raw_report_dir": "/Users/avadavu/.gstack-dev/oracle-reports/2026-08-19T09-00-58-009Z-72583"
   },
   "corpus": {
     "fixtures": 19,
-    "digest": "7abd89396f8ac6c1"
+    "digest": "90429966daaa1bb0"
   },
   "fixtures_total": 19,
   "fixtures_verified": 19,
@@ -103,10 +103,21 @@
       "applicable": 19,
       "detection_rate": 0.895,
       "coverage": 1,
-      "false_positives": 5,
+      "false_positives": 0,
       "fp_errors": 0,
       "fp_denominator": 19,
-      "fp_rate": 0.263
+      "fp_rate": 0,
+      "noise_range": {
+        "samples": 5,
+        "detection": {
+          "min": 17,
+          "max": 19
+        },
+        "false_positives": {
+          "min": 0,
+          "max": 1
+        }
+      }
     },
     {
       "gate": "reviewer",
@@ -115,17 +126,28 @@
       "judge_backend": "claude-cli",
       "available": true,
       "unavailable_reason": "",
-      "caught": 13,
-      "missed": 6,
+      "caught": 14,
+      "missed": 5,
       "n_a": 0,
       "error": 0,
       "applicable": 19,
-      "detection_rate": 0.684,
+      "detection_rate": 0.737,
       "coverage": 1,
-      "false_positives": 2,
+      "false_positives": 0,
       "fp_errors": 0,
       "fp_denominator": 19,
-      "fp_rate": 0.105
+      "fp_rate": 0,
+      "noise_range": {
+        "samples": 5,
+        "detection": {
+          "min": 14,
+          "max": 14
+        },
+        "false_positives": {
+          "min": 0,
+          "max": 1
+        }
+      }
     }
   ],
   "matrix": {
@@ -174,7 +196,7 @@
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "caught",
+      "spec-check": "missed",
       "reviewer": "caught"
     },
     "symlink-script-path": {
@@ -190,7 +212,7 @@
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "missed",
+      "spec-check": "caught",
       "reviewer": "missed"
     },
     "sheet-empty-row-footprint": {
@@ -279,7 +301,7 @@
       "tsc": "missed",
       "red-test": "caught",
       "spec-check": "caught",
-      "reviewer": "missed"
+      "reviewer": "caught"
     }
   },
   "details": {
@@ -288,152 +310,152 @@
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "audit produced no output at all (exit 0) — the check silently did nothing",
-      "spec-check": "The QA report successfully identified the planted bug through two complementary findings that together capture the full defect: (1) the hardcoded HOME-relative path that makes the script machine-specific, and (2) the silent exit 0 that hide",
-      "reviewer": "The QA report correctly identified the planted bug: a silent exit 0 when the repository directory does not exist, preventing the audit from running. The report matches the core defect description and includes the specific code evidence [ -d"
+      "spec-check": "The QA report correctly identified the planted bug (hook-hardcoded-repo-path) across all three findings: the hardcoded HOME path (finding 1), the silent exit 0 behavior masking failure (finding 3), and the broken audit guard (finding 2). Th",
+      "reviewer": "The QA report correctly identified the planted bug: a hardcoded repository path check that silently exits with status 0 when the repo is missing, preventing the audit from running. The report's evidence points directly to the problematic co"
     },
     "hook-lint-flag-version-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "a file with no lint errors was blocked because the CLI rejected the flag before linting",
-      "spec-check": "The QA report identified a legitimate security concern (ORACLE_LINT_CMD override), but this is NOT the planted bug. The planted bug is specifically about the --no-warn-ignored flag not existing in ESLint versions <9, causing CLI-parse failu",
-      "reviewer": "The report identifies two issues with the lint command handling, but neither addresses the planted bug. The planted bug is specifically about ESLint v9's --no-warn-ignored flag causing version drift that blocks every edit on older ESLint ve"
+      "spec-check": "The QA report identified three issues, but none correspond to the planted bug. The planted bug is specifically about the --no-warn-ignored flag being incompatible with ESLint versions < v9, causing the hook to block every edit. The report m",
+      "reviewer": "The QA report identifies two issues related to shell argument handling in the lint command invocation, but neither matches the planted bug. The planted bug is specifically about ESLint v9's --no-warn-ignored flag not existing in older versi"
     },
     "hook-gate-without-config": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "the stop gate reported FAIL on a repo that has no root tsconfig, so every turn is blocked by a check that never ran",
-      "spec-check": "The report correctly identified the core defect (finding #2: 'The joy path runs without verifying a real config exists') which directly matches the planted bug's essence — the joy branch is unguarded against missing tsconfig. However, findi",
-      "reviewer": "The report correctly identified the planted bug (finding #1: 'Joy repositories without a TypeScript config fail instead of being skipped') with clear evidence citing the missing guard clause in the joy branch. However, the report also surfa"
+      "spec-check": "The report correctly identified the core bug (joy branch lacks tsconfig guard), matching detection hints 'joy', 'no config', and 'twin'. Finding #1 directly describes the vulnerability. However, findings #2 and #3 are false positives: #2 mi",
+      "reviewer": "The report correctly identifies the core defect: the stop gate's conditional check `[ -f \"$root/tsconfig.json\" ] || exit 0` leaves the joy branch unguarded when no root tsconfig exists. The wording differs (report says 'bypasses' via deleti"
     },
     "guard-denylist-variant": {
       "guard": "guard allowed the call (exit 0)",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "untracked work was destroyed with no way back",
-      "spec-check": "The report correctly identified the planted bug: git clean -fdx destroys untracked files, bypassing the denylist guard. The report provided specific evidence (the exact command from the code) and explained why it matters (destroys uncommitt",
-      "reviewer": "The QA report correctly identified the planted bug via issue #1 ('Unconditionally deletes all untracked and ignored files') which directly matches the guard-denylist-variant defect—specifically calling out `git clean -fdx` as the problemati"
+      "spec-check": "The QA report correctly identifies the planted bug: `git clean -fdx` permanently deletes untracked files, bypassing the denylist guard that blocks `git reset --hard` and `git push --force`. The report states the defect clearly ('Untracked a",
+      "reviewer": "The report correctly identified the planted bug—the denylist bypass via `git clean -fdx` that destroys untracked files. Finding #1 directly matches the core defect (unconditional deletion of untracked files, permanent data loss, no recovery"
     },
     "stage-whole-index": {
       "guard": "guard allowed the call (exit 0)",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "the deploy commit swept in unrelated files: ci.yml, scratch-token.txt",
-      "spec-check": "The report correctly identified the planted bug (stage-whole-index) via the `git add -A` evidence, matching the detection hint perfectly. Finding #1 accurately describes the scope-drift issue where unrelated files can ride into the deploy c",
-      "reviewer": "The QA report correctly identified the planted bug. The report describes how `git add -A` followed unconditionally by `git commit` can stage and commit unrelated files that were previously in the index, which matches the ground truth bug de"
+      "spec-check": "The report correctly identified the planted bug (stage-whole-index) via the 'git add -A' evidence, matching the detection hint about staging the whole index and unrelated files. The other three findings (no push, silent directory change, co",
+      "reviewer": "The report correctly identified the planted bug 'stage-whole-index' via finding #2 ('The script blindly stages every modification and deletion') which directly maps to the scope-drift severity issue of `git add -A` staging the whole index. "
     },
     "worklog-dedupe-key": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "one branch showed up as 2 tasks in the standup, each with its own next action",
-      "spec-check": "The QA report identifies the core logic defect: the code keeps the first save (seen.has(key) continue) rather than the newest, which causes stale data in standup rows. This matches the planted bug's description of deduping on branch name wh",
-      "reviewer": "The report correctly identifies the planted bug (worklog-dedupe-key) in finding #2: 'Duplicate branches use stale first-write-wins behavior' accurately describes the scenario where the same branch name appears twice with different spellings"
+      "spec-check": "The report identifies a different bug: 'newest save wins is not implemented' (first save wins instead of last). The planted bug is about deduplication failing on branch names with/without slashes, causing duplicates. The report's issue is a",
+      "reviewer": "The report correctly identifies the core defect: duplicate handling of the same branch causes stale actions to persist. The evidence points to the deduplication logic (`if (seen.has(key)) continue;`) and explains the ordering dependency. Ho"
     },
     "symlink-script-path": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
-      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-oMECMN/home/.claude/brain-vault, outside the checkout, so they never get committed",
-      "spec-check": "The report correctly identified the planted bug: vault location resolution relative to scriptPath using hard-coded depth (`'..', '..', '..'`) that fails when the script is reached through a symlink. The report's evidence (the actual code pa",
-      "reviewer": "The QA report found no issues, but the ground truth contains a planted bug related to symlink resolution in the note script causing vault files to land outside the repository. The report completely missed this environment/configuration bug."
+      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-cDuKSn/home/.claude/brain-vault, outside the checkout, so they never get committed",
+      "spec-check": "The report correctly identifies the core defect: vault resolution is caller-dependent via defaultVaultDir(scriptPath), which causes the vault to resolve relative to the symlink location rather than the repo. The detection matches the plante",
+      "reviewer": "The QA report contains no findings at all. The planted bug regarding symlink resolution causing the vault to be created outside the repository (not committed) was not detected. This is a legitimate defect that would require either running t"
     },
     "sheet-tombstone-resurrection": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "a row the user cleared by hand came back as \"Task the user deleted by hand\"",
-      "spec-check": "The QA report identifies issues with integration scope, row identity matching, and the tombstone concept itself, but misses the actual planted bug: that cleared rows retain their hidden pid, allowing sync to resurrect deleted tasks. The rep",
-      "reviewer": "The QA report identified two issues: (1) duplicate task PIDs creating duplicate rows, and (2) falsy PIDs not being classified as tombstones. Neither matches the planted bug 'sheet-tombstone-resurrection', which describes a cleared row retai"
+      "spec-check": "The report correctly identified the planted bug under finding #2 ('Tombstone behavior was added beyond the spec'). The evidence `isTombstone(row)` points directly to the tombstone logic that enables the resurrection defect. However, the rep",
+      "reviewer": "The QA report identified three issues related to PID (page ID) lookup and map handling, but none of them describe the planted bug. The planted bug is about a cleared row retaining its hidden page id, causing the sync update path to resurrec"
     },
     "sheet-empty-row-footprint": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "a hand-edited row with a blank title but live data in every other column was overwritten by the append",
-      "spec-check": "The QA report correctly identified the planted bug: rows are treated as empty based solely on the title field, causing data loss when a row has a blank title but populated data in other columns. The report includes specific evidence (the co",
-      "reviewer": "The QA report correctly identified the planted bug: a row with a blank title in column A but live data in other columns is treated as empty and overwritten, causing silent data loss. The report's wording ('empty title but data in status, no"
+      "spec-check": "The report correctly identified the ground truth bug: the append-row detection logic checks only the title field (!rows[i].title) to determine if a row is empty, which causes data loss when a row has a blank title but contains data in other",
+      "reviewer": "The report correctly identified the planted bug: rows with empty titles but populated data are selected as append targets and overwritten, causing silent data loss. The evidence cites the actual code (`if (!rows[i].title) return i;` and `ou"
     },
     "cross-surface-token-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "the test written from the ticket stays green: admin card matches the spec, which is the only surface QC named",
-      "spec-check": "The report identifies the token drift on the preview surface (--space-3 vs --space-4 spec requirement) with a specific code reference. However, the detection is incomplete: it only reports the preview surface issue and provides no evidence ",
-      "reviewer": "The QA report identifies a mutable export issue but misses the planted bug entirely. The report's finding about `export const surfaces = [...]` being mutable is a legitimate code quality concern (false positive = 1, not a planted bug). The "
+      "spec-check": "QA report correctly identified the token drift on the preview surface (--space-3 vs spec's --space-4). The detection aligns with the planted bug's 'token|drift|one surface' hints. Evidence quality is moderate: the report provides a specific",
+      "reviewer": "The QA report identified a mutability issue with the exported surfaces array, which is a legitimate code concern but does NOT match the planted bug. The planted bug describes a spacing token drifting across duplicate card instances on diffe"
     },
     "scope-drift-extra-endpoint": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "the test written from the ticket stays green: the requested cart summary is correct, which is all the ticket asked for",
-      "spec-check": "The QA report correctly identified the planted scope-drift bug by detecting both the unrequested /discount/preview endpoint and the unrequested telemetry beacon (/telemetry/preview-usage). Both findings map to the same root cause: scope dri",
-      "reviewer": "The QA report identified two legitimate code issues (rounding bug, validation gap) but completely missed the planted scope-drift bug. The report shows no awareness of unasked-for features (/discount/preview endpoint, telemetry beacon) that "
+      "spec-check": "The report correctly identified the planted bug (scope-drift-extra-endpoint) by catching both the /discount/preview endpoint and the /telemetry/preview-usage endpoint as unspecified additions shipped alongside the requested /cart/summary fe",
+      "reviewer": "The QA report identified a legitimate input-validation bug (untrusted caller-supplied prices/quantities) but completely missed the planted scope-drift bug. The report contains no mention of unasked-for features, extra endpoints (/discount/p"
     },
     "twin-mapper-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "an order the bulk sweep invoiced first was built as retail even though the buyer is a company",
-      "spec-check": "Report correctly identified the twin-mapper-drift bug: two mappers producing different DTOs, with mapBulkOrderToDto omitting purchasingEntity.company while mapDetailOrderToDto includes it. This matches the ground truth description of asymme",
-      "reviewer": "The QA report correctly identified the planted bug: bulk mapping silently drops company data. The report describes the exact defect—purchasingEntity.company is present in BULK_FIELDS but omitted in mapBulkOrderToDto, causing B2B orders to b"
+      "spec-check": "The QA report correctly identified the core defect: purchasingEntity.company is missing from the bulk order mapper (mapBulkOrderToDto) but present in the detail mapper (mapDetailOrderToDto), causing B2B company orders fetched via bulk to be",
+      "reviewer": "The QA report correctly identified the core defect: purchasingEntity.company is omitted in mapBulkOrderToDto despite being requested in BULK_FIELDS, causing B2B orders to be misclassified. The report provides specific code references (funct"
     },
     "pagination-truncation": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "invoice charged 500 against an order total of 600 and every guard passed it",
-      "spec-check": "The report correctly identified the pagination-truncation bug across all three findings: finding #2 explicitly names the 50-line truncation, finding #1 describes the under-invoiced total symptom, and finding #3 explains why the guard fails ",
-      "reviewer": "The QA report identifies the pagination-truncation bug clearly through two interconnected findings: (1) explicit detection of the `.slice(0, PAGE_SIZE)` truncation in fetchOrderDetail causing partial invoicing, and (2) explanation of why va"
+      "spec-check": "The report identifies the pagination-truncation bug across all three findings. Finding #2 directly names the truncation ('Order lines are silently truncated to 50') with evidence showing `order.lines.slice(0, PAGE_SIZE)`. Finding #1 describ",
+      "reviewer": "The QA report identified the planted pagination-truncation bug with high fidelity. Finding #1 directly captures the core defect: orders over 50 lines are silently under-invoiced due to fetchOrderDetail truncating to PAGE_SIZE. Finding #2 co"
     },
     "tautological-validation": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "a credit note held for crediting too little was transmitted by one retry, because validation compared the document with itself",
-      "spec-check": "The report correctly identified the core tautological-validation bug: the Retry function validates the document total against a sum computed from the same lines it's checking, creating a fake oracle that always passes. Finding 1 directly ma",
-      "reviewer": "The report correctly identified the planted tautological-validation bug in finding #1, with clear evidence showing how retryTransmission derives totalAmount from doc.lines without validating against stored doc.totalAmount. The language matc"
+      "spec-check": "The report correctly identifies the planted bug: the validation is tautological because retryTransmission validates the document against a totalAmount computed from the same lines, creating a self-referential check. Points 1 and 3 directly ",
+      "reviewer": "The QA report correctly identified the tautological validation bug. It describes the core defect: retryTransmission computes totalAmount from doc.lines and validates against that same computed value, making the validation unable to detect m"
     },
     "ignored-input-field": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the document demands 87.85 while the customer paid 72.6",
-      "spec-check": "Finding #2 ('Tax-inclusive shops are treated as tax-exclusive') directly identifies the planted bug. The report correctly diagnoses that when order.taxesIncluded is true, the VAT is applied twice: once in the line prices (which already incl",
-      "reviewer": "The report correctly identified the planted bug (Tax-inclusive orders are taxed twice) with strong evidence pointing to the exact code location (buildUbl ignoring taxesIncluded and recalculating VAT). The description matches the ground trut"
+      "spec-check": "The report correctly identified the core defect: taxes_included field arrives on the order but is never read, causing VAT to be applied twice in tax-inclusive shops. Finding #2 explicitly names this issue with the detection keywords 'tax-in",
+      "reviewer": "The report correctly identified the planted bug: taxes_included is ignored by buildUbl, causing VAT to be applied twice on tax-inclusive orders. Finding #1 directly matches the detection hints ('VAT twice', 'over-invoiced', never read). Fin"
     },
     "silent-skip-without-env": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "2 integration cases did not run and the suite still reported ok",
-      "spec-check": "The report correctly identified the planted bug (issue #1: 'Missing database URL silently passes without running integration cases') with clear evidence pointing to the exact code pattern (`if (!dbUrl) { return { status: 'ok', ran: 0, faile",
-      "reviewer": "The QA report correctly identified the planted bug: when TEST_DATABASE_URL is absent, the integration suite silently skips all tests but returns a successful status. The report provides strong evidence by citing the exact code path (`if (!d"
+      "spec-check": "The QA report identified the planted bug with high precision. The finding directly matches the ground truth: it describes the silent-skip behavior (suite returns 'ok' without running tests when TEST_DATABASE_URL is absent), includes the exa",
+      "reviewer": "The report correctly identified the planted bug: silent skip when TEST_DATABASE_URL is absent, causing the suite to return ok without running any tests. The evidence provided (the exact code snippet showing `if (!dbUrl) { return { status: '"
     },
     "idempotency-key-race": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the stored credit note is 40 instead of 61 — the losing path spent the idempotency key, so the correct document can never be issued",
-      "spec-check": "Finding #3 directly identifies the planted bug: the refund idempotency key is claimed before fetching/issuing, and any failure prevents retries and reconciliation from creating the note. This matches the ground truth's core defect (key spen",
-      "reviewer": "The QA report identifies the planted idempotency-key-race bug across both findings. Finding #1 describes the core issue: the idempotency key is claimed before detail retrieval, so any reader failure locks out reconciliation retries permanen"
+      "spec-check": "The report correctly identified the core planted bug: the idempotency key is claimed before the refund reader fetch completes (store.claim before reader.fetchRefundDetail), and the fallback path with incomplete data permanently locks out th",
+      "reviewer": "The report correctly identified the planted bug (idempotency-key-race) in finding #2: webhook fetch failures causing incomplete refunds with consumed idempotency keys that block reconciliation. The evidence cites the exact code path (issueF"
     },
     "global-queue-drain": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "run-a took 2 rows and run-b took 0 — two concurrent runs eat one another's rows",
-      "spec-check": "The report correctly identifies the core defect: drainQueue() ignores the _runId parameter and calls store.takeAll(), which removes all rows regardless of which run enqueued them. This violates per-run isolation and causes concurrent runs t",
-      "reviewer": "The report correctly identified the global-queue-drain bug. It describes the exact defect: drainQueue ignores runId filtering and calls store.takeAll() without checking QueueRow.runId, causing rows from concurrent runs to be processed toget"
+      "spec-check": "The QA report correctly identified the planted bug 'global-queue-drain'. The report clearly describes how drainQueue ignores the runId parameter (marked with underscore as unused) and drains all rows from the shared store via takeAll(), vio",
+      "reviewer": "The QA report accurately identified the planted bug 'global-queue-drain'. The report correctly identifies that drainQueue ignores the runId parameter (evidenced by the underscore prefix indicating it's unused) and calls store.takeAll(), whi"
     },
     "scroll-pinned-control": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the close control sits on top of content",
-      "spec-check": "The report correctly identifies the core defect: the close control's position is invariant while content scrolls, causing overlap. The first finding ('List content overlaps the close control') maps directly to the planted bug's description ",
-      "reviewer": "The QA report identifies a bug in the overlapsControl logic—that it always returns true and cannot distinguish overlapping from safe layouts. However, this is NOT the planted bug. The planted bug is a layout/positioning defect: the floating"
+      "spec-check": "The report correctly identified the core defect: the close control can be overlapped by scrolling content. The evidence cites the specific formula (const top = i * ITEM_HEIGHT - scrollTop) showing how content position changes with scroll wh",
+      "reviewer": "The QA report correctly identified the core defect: the close control's rect remains invariant while content scrolls, causing persistent overlap. The report describes this as 'overlapsControl cannot return false' and traces it to the item p"
     }
   },
   "false_positives": {
@@ -446,38 +468,8 @@
     "lint": [],
     "tsc": [],
     "red-test": [],
-    "spec-check": [
-      {
-        "on": "hook-hardcoded-repo-path/fixed",
-        "detail": "The QA report correctly identifies the core defect: the hardcoded repo path check `[ -d \"$REPO\" ] || exit 0` silently treats a missing checkout as success (exits 0) instead of reporting failure. Finding #3 directly quotes the problematic co"
-      },
-      {
-        "on": "worklog-dedupe-key/fixed",
-        "detail": "The report correctly identifies the core dedupe bug via the `replace(/[^a-zA-Z0-9._-]/g, '')` evidence, which removes slashes and would cause 'feature/a' to be treated identically to 'featurea'. However, the report conflates this with two o"
-      },
-      {
-        "on": "sheet-empty-row-footprint/fixed",
-        "detail": "Finding #1 correctly identifies the ground truth bug: DATA_COLS.every() checks only specific columns, causing rows with blank column A but data elsewhere to be treated as empty and overwritten. The evidence directly quotes the mechanism. Fi"
-      },
-      {
-        "on": "silent-skip-without-env/fixed",
-        "detail": "Finding #1 correctly identifies the planted bug: the code returns early with status 'not-run' and ran: 0 when TEST_DATABASE_URL is absent, allowing the suite to report success without executing integration cases. The evidence quote directly"
-      },
-      {
-        "on": "global-queue-drain/fixed",
-        "detail": "The report correctly identifies the formerly planted bug: unscoped queue draining allowing rows from other runs to be processed. The report names the specific mechanism (QueueStore.takeAll() bypassing run ownership) and correctly characteri"
-      }
-    ],
-    "reviewer": [
-      {
-        "on": "twin-mapper-drift/fixed",
-        "detail": "The report correctly identifies the core defect: purchasingEntity is selected but company (a nested field within it) is not explicitly selected in the orderNodeSelection(), causing B2B orders to fail to map company data. This is the exact m"
-      },
-      {
-        "on": "pagination-truncation/fixed",
-        "detail": "The QA report correctly identifies the pagination truncation bug. It asserts the defect remains present in the fixed code ('Orders over 1,050 lines are silently truncated'), provides the exact mechanism (PAGE_SIZE = 50, MAX_EXTRA_PAGES = 20"
-      }
-    ]
+    "spec-check": [],
+    "reviewer": []
   },
   "fp_errors": {
     "guard": [],
@@ -497,7 +489,7 @@
       "detail": "personal/oracle/fixtures/ignored-input-field/ratchet/index.ts(16,3): error TS2741: Property 'taxesIncluded' is missing in type '{ id: string; totalPrice: number; vatRate: number; lines: OrderLine[]; }' but required in type 'OrderInput'."
     }
   },
-  "deterministic_catch_share": 0.362,
+  "deterministic_catch_share": 0.354,
   "caught_by_any_deterministic": 17,
   "caught_by_nothing": [],
   "llm_gate_backends_share_family": true
