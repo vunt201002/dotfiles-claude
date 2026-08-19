@@ -16,11 +16,10 @@ export interface Invoice {
 }
 
 const PAGE_SIZE = 50;
-const MAX_EXTRA_PAGES = 20;
 
 export function fetchOrderDetail(order: Order): Order {
   const lines: LineItem[] = [];
-  for (let page = 0; page <= MAX_EXTRA_PAGES; page++) {
+  for (let page = 0; ; page++) {
     const chunk = order.lines.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
     if (chunk.length === 0) break;
     lines.push(...chunk);

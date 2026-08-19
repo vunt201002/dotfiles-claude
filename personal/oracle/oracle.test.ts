@@ -141,7 +141,7 @@ const EVERYTHING_EXPECTED: DiffContext = { operatorDisabledGates: [], operatorRe
 // The fingerprint of the fixtures actually on disk. Changing the corpus moves
 // this constant immediately. baseline.json stays on its paid-run digest until
 // the next paid measurement freezes matching numbers and provenance.
-const CORPUS_DIGEST = '7abd89396f8ac6c1';
+const CORPUS_DIGEST = '90429966daaa1bb0';
 
 const SAME_CORPUS: CorpusFingerprint = { fixtures: FIXTURES, digest: CORPUS_DIGEST };
 
