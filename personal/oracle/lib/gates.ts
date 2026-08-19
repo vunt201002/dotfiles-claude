@@ -29,6 +29,8 @@ export interface FalsePositive {
 export interface GateOutcome {
   gate: string;
   family: GateFamily;
+  gate_backend: string;
+  judge_backend: string;
   available: boolean;
   unavailable_reason: string;
   cells: Record<string, GateCell>;
@@ -87,7 +89,7 @@ function caseMarker(c: FixtureCase, variant: string): string {
 }
 
 function emptyOutcome(gate: string, family: GateFamily): GateOutcome {
-  return { gate, family, available: true, unavailable_reason: '', cells: {}, false_positives: [], fp_errors: [], fp_denominator: 0 };
+  return { gate, family, gate_backend: '', judge_backend: '', available: true, unavailable_reason: '', cells: {}, false_positives: [], fp_errors: [], fp_denominator: 0 };
 }
 
 function markAll(outcome: GateOutcome, cases: FixtureCase[], verdict: Verdict, detail: string): GateOutcome {

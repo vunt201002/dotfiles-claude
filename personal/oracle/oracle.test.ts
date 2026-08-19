@@ -9,7 +9,9 @@ import {
 } from './lib/cases';
 import { verifyFixtures, runRedTestGate, runGuardGate, runLintGate, runTscGate, runTscRatchet, type Verdict } from './lib/gates';
 import { backendLabel, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skippedLlmGate } from './lib/llm-gates';
-import type { Backend } from './lib/llm-backends';
+import {
+  backendFamily, claudeCliBackend, requireBackendRole, resolveBackends, type Backend,
+} from './lib/llm-backends';
 import {
   summarize, diffBaseline, diffAgainstBaseline, buildReport, render, exitCodeFor, unfitToFreeze, writeBaseline, BASELINE_PATH,
   type GateStats, type OracleReport, type DiffContext,
@@ -23,6 +25,8 @@ const FIXTURES = 19;
 const SPEC_CHECK_NEVER_SCORED: GateStats = {
   gate: 'spec-check',
   family: 'llm',
+  gate_backend: '',
+  judge_backend: '',
   available: false,
   unavailable_reason: 'ORACLE_LLM=1 is not set — the paid gates are off by default',
   caught: 0, missed: 0, n_a: 0, error: 19, applicable: 0,
@@ -32,6 +36,8 @@ const SPEC_CHECK_NEVER_SCORED: GateStats = {
 const SPEC_CHECK_SCORED: GateStats = {
   gate: 'spec-check',
   family: 'llm',
+  gate_backend: 'codex',
+  judge_backend: 'claude-cli',
   available: true,
   unavailable_reason: '',
   caught: 17, missed: 2, n_a: 0, error: 0, applicable: 19,
@@ -41,6 +47,8 @@ const SPEC_CHECK_SCORED: GateStats = {
 const REVIEWER_SCORED: GateStats = {
   gate: 'reviewer',
   family: 'llm',
+  gate_backend: 'codex',
+  judge_backend: 'claude-cli',
   available: true,
   unavailable_reason: '',
   caught: 13, missed: 5, n_a: 0, error: 1, applicable: 18,
@@ -52,6 +60,8 @@ const REVIEWER_NEVER_SCORED: GateStats = { ...SPEC_CHECK_NEVER_SCORED, gate: 're
 const REVIEWER_QUOTA_DIED_AFTER_TWO: GateStats = {
   gate: 'reviewer',
   family: 'llm',
+  gate_backend: 'codex',
+  judge_backend: 'claude-cli',
   available: true,
   unavailable_reason: '',
   caught: 2, missed: 0, n_a: 0, error: 17, applicable: 2,
@@ -61,6 +71,8 @@ const REVIEWER_QUOTA_DIED_AFTER_TWO: GateStats = {
 const GUARD_AFTER_DENYLIST_SPLIT: GateStats = {
   gate: 'guard',
   family: 'deterministic',
+  gate_backend: '',
+  judge_backend: '',
   available: true,
   unavailable_reason: '',
   caught: 0, missed: 2, n_a: 17, error: 0, applicable: 2,
@@ -84,6 +96,8 @@ const GUARD_CANARY_FAILED: GateStats = {
 const RED_TEST_SCORED: GateStats = {
   gate: 'red-test',
   family: 'deterministic',
+  gate_backend: '',
+  judge_backend: '',
   available: true,
   unavailable_reason: '',
   caught: 17, missed: 2, n_a: 0, error: 0, applicable: 19,
@@ -105,6 +119,8 @@ const RED_TEST_ALL_BUT_ONE_ERRORS: GateStats = {
 const LINT_SCORED: GateStats = {
   gate: 'lint',
   family: 'deterministic',
+  gate_backend: '',
+  judge_backend: '',
   available: true,
   unavailable_reason: '',
   caught: 0, missed: 6, n_a: 13, error: 0, applicable: 6,
@@ -133,6 +149,7 @@ interface ReportParts {
 }
 
 function reportWith(gates: GateStats[], parts: ReportParts = {}): OracleReport {
+  const llmGateFamilies = gates.filter(g => g.family === 'llm' && g.gate_backend).map(g => backendFamily(g.gate_backend));
   return {
     generated_at: '2026-08-14T04:57:24.244Z',
     corpus: parts.corpus === null ? undefined : parts.corpus ?? SAME_CORPUS,
@@ -148,6 +165,8 @@ function reportWith(gates: GateStats[], parts: ReportParts = {}): OracleReport {
     deterministic_catch_share: null,
     caught_by_any_deterministic: 17,
     caught_by_nothing: [],
+    llm_gate_backends_share_family: llmGateFamilies.length >= 2
+      && llmGateFamilies.every(family => family !== undefined && family === llmGateFamilies[0]),
   };
 }
 
@@ -1182,6 +1201,8 @@ describe('baseline diff: what the measured set did', () => {
     const uselessNewGate: GateStats = {
       gate: 'newgate',
       family: 'deterministic',
+      gate_backend: '',
+      judge_backend: '',
       available: true,
       unavailable_reason: '',
       caught: 0, missed: 19, n_a: 0, error: 0, applicable: 19,
@@ -1657,11 +1678,117 @@ describe.skipIf(!slowGates)('oracle deterministic gates (ORACLE=1)', () => {
   }, 900_000);
 });
 
+describe('LLM backend provenance and instrument changes', () => {
+  test('the same backend pair preserves normal regression comparison', () => {
+    const base = reportWith([SPEC_CHECK_SCORED]);
+    const worse = { ...SPEC_CHECK_SCORED, caught: 16, missed: 3, detection_rate: 0.842 };
+    const diff = diffAgainstBaseline(reportWith([worse]), base);
+
+    expect(diff.instrumentChanged).toEqual([]);
+    expect(diff.regressions).toContain('spec-check: detection 17/19 (0.895) -> 16/19 (0.842)');
+    expect(exitCodeFor(diff)).toBe(2);
+  });
+
+  test('a changed backend pair is an instrument change instead of a regression', () => {
+    const base = reportWith([SPEC_CHECK_SCORED]);
+    const changed = {
+      ...SPEC_CHECK_SCORED,
+      gate_backend: 'anthropic-api',
+      caught: 16,
+      missed: 3,
+      detection_rate: 0.842,
+    };
+    const diff = diffAgainstBaseline(reportWith([changed]), base);
+
+    expect(diff.instrumentChanged).toEqual([
+      'spec-check: backend pair codex/claude-cli -> anthropic-api/claude-cli; numbers from different instruments are not comparable — re-freeze with --write-baseline',
+    ]);
+    expect(diff.regressions).toEqual([]);
+    expect(exitCodeFor(diff)).toBe(1);
+  });
+
+  test('an instrument change excludes only its own gate', () => {
+    const base = reportWith([SPEC_CHECK_SCORED, REVIEWER_SCORED]);
+    const changedSpec = { ...SPEC_CHECK_SCORED, gate_backend: 'anthropic-api', caught: 16, missed: 3, detection_rate: 0.842 };
+    const worseReviewer = { ...REVIEWER_SCORED, caught: 12, missed: 6, detection_rate: 0.667 };
+    const diff = diffAgainstBaseline(reportWith([changedSpec, worseReviewer]), base);
+
+    expect(diff.instrumentChanged).toHaveLength(1);
+    expect(diff.regressions).toEqual(['reviewer: detection 13/18 (0.722) -> 12/18 (0.667)']);
+  });
+
+  test('a legacy baseline without provenance emits a caveat and remains comparable', () => {
+    const legacy: Partial<GateStats> = { ...SPEC_CHECK_SCORED };
+    delete legacy.gate_backend;
+    delete legacy.judge_backend;
+    const diff = diffAgainstBaseline(reportWith([SPEC_CHECK_SCORED]), reportWith([legacy as GateStats]));
+
+    expect(diff.corruption).toEqual([]);
+    expect(diff.baselineCaveats).toEqual([
+      'spec-check: this baseline does not record which gate/judge backends produced its numbers, so one silent backend change cannot be detected for this gate; metrics remain comparable',
+    ]);
+    expect(diff.regressions).toEqual([]);
+    expect(exitCodeFor(diff)).toBe(0);
+  });
+
+  test('non-hermetic backends are refused as gates but accepted as judges', () => {
+    expect(() => requireBackendRole(claudeCliBackend, 'gate')).toThrow(
+      'backend "claude-cli" cannot run as a gate: it is non-hermetic and reads the operator\'s real ~/.claude configuration',
+    );
+    expect(requireBackendRole(claudeCliBackend, 'judge')).toBe(claudeCliBackend);
+  });
+
+  test('shared LLM gate-backend families render the double-counting warning', () => {
+    const shared = reportWith([SPEC_CHECK_SCORED, REVIEWER_SCORED]);
+    const independent = reportWith([
+      SPEC_CHECK_SCORED,
+      { ...REVIEWER_SCORED, gate_backend: 'anthropic-api' },
+    ]);
+
+    expect(shared.llm_gate_backends_share_family).toBe(true);
+    expect(render(shared, diffAgainstBaseline(shared, shared))).toContain('one opinion counted twice, not a cross-check');
+    expect(independent.llm_gate_backends_share_family).toBe(false);
+    expect(render(independent, diffAgainstBaseline(independent, independent))).not.toContain('one opinion counted twice, not a cross-check');
+  });
+
+  // A baseline frozen by a FREE run records '' for both backends, because the gate
+  // never ran. Reading that as "a different instrument" turns the next paid run into
+  // exit 1 with advice to re-freeze WITHOUT ORACLE_LLM, which freezes an empty
+  // baseline again. Empty means unmeasured, not different.
+  test('a baseline frozen free then measured paid is unfrozen, not an instrument change', () => {
+    const base = reportWith([SPEC_CHECK_NEVER_SCORED]);
+    const now = reportWith([SPEC_CHECK_SCORED]);
+
+    const diff = diffAgainstBaseline(now, base);
+
+    expect(diff.instrumentChanged).toEqual([]);
+    expect(diff.baselineCaveats.filter(c => c.includes('does not record which gate/judge backends'))).toEqual([]);
+    expect(diff.unfrozenMeasurements).toHaveLength(2);
+    expect(exitCodeFor(diff)).toBe(3);
+  });
+
+  test('per-gate backend overrides fall back through common knobs to defaults', () => {
+    const own = resolveBackends({
+      ORACLE_REVIEWER_GATE_BACKEND: 'anthropic-api',
+      ORACLE_REVIEWER_JUDGE_BACKEND: 'anthropic-api',
+      ORACLE_GATE_BACKEND: 'codex',
+      ORACLE_JUDGE_BACKEND: 'claude-cli',
+    }, 'reviewer');
+    const common = resolveBackends({ ORACLE_GATE_BACKEND: 'anthropic-api', ORACLE_JUDGE_BACKEND: 'anthropic-api' }, 'reviewer');
+    const defaults = resolveBackends({}, 'reviewer');
+
+    expect([own.gate.name, own.judge.name]).toEqual(['anthropic-api', 'anthropic-api']);
+    expect([common.gate.name, common.judge.name]).toEqual(['anthropic-api', 'anthropic-api']);
+    expect([defaults.gate.name, defaults.judge.name]).toEqual(['codex', 'claude-cli']);
+  });
+});
+
 describe('false-positive measurement errors', () => {
   function backend(call: (prompt: string) => unknown): Backend {
     return {
       name: 'codex',
       family: 'openai',
+      hermetic: true,
       available: () => ({ ok: true, reason: '' }),
       callJson: async <T>(prompt: string) => call(prompt) as T,
     };
@@ -1729,7 +1856,7 @@ describe('false-positive measurement errors', () => {
 
   test('fp rate uses only completed fixed-side calls', () => {
     const stats = summarize({
-      gate: 'spec-check', family: 'llm', available: true, unavailable_reason: '', cells: {},
+      gate: 'spec-check', family: 'llm', gate_backend: 'codex', judge_backend: 'claude-cli', available: true, unavailable_reason: '', cells: {},
       false_positives: [{ on: 'real-fp/fixed', detail: 'reported' }],
       fp_errors: [{ on: 'transport-dead/fixed', detail: 'timeout' }],
       fp_denominator: 2,
@@ -1787,6 +1914,7 @@ describe('oracle llm gate canaries', () => {
     return {
       name: 'codex',
       family: 'openai',
+      hermetic: true,
       available: () => ({ ok: true, reason: '' }),
       callJson: async <T>(prompt: string) => call(prompt) as T,
     };

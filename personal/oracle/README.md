@@ -24,9 +24,14 @@ ORACLE_LLM=1 ORACLE_LLM_LIMIT=2 bun test personal/oracle/   # smoke 2 fixture tr
 **Cổng LLM không cần API key nữa.** Mặc định cổng chạy bằng `codex` (auth từ
 `~/.codex/`) và chấm bằng `claude -p` (auth subscription) — hai họ model khác
 nhau trên hai nửa, đúng luật ensemble §7.3, thay vì Claude chấm Claude như bản
-gọi thẳng Anthropic SDK. Đổi bằng `ORACLE_GATE_BACKEND` / `ORACLE_JUDGE_BACKEND`
-(`codex` · `claude-cli` · `anthropic-api`); mỗi lần chạy in ra cặp backend đang
-dùng, và **cảnh báo khi hai nửa trùng họ** vì lúc đó con số yếu hẳn.
+gọi thẳng Anthropic SDK. Đổi chung bằng `ORACLE_GATE_BACKEND` /
+`ORACLE_JUDGE_BACKEND`, hoặc đổi riêng bằng `ORACLE_SPEC_CHECK_GATE_BACKEND` /
+`ORACLE_SPEC_CHECK_JUDGE_BACKEND` và `ORACLE_REVIEWER_GATE_BACKEND` /
+`ORACLE_REVIEWER_JUDGE_BACKEND` (`codex` · `claude-cli` · `anthropic-api`).
+Override riêng thắng knob chung, knob chung thắng mặc định. Mỗi lần chạy in ra
+cặp backend của từng cổng và **cảnh báo khi hai cổng dùng gate backend cùng họ**.
+`claude-cli` chỉ được làm judge vì nó đọc cấu hình `~/.claude` thật của operator;
+backend làm gate bắt buộc phải hermetic.
 
 Chi phí đổi chỗ chứ không biến mất: nó ăn vào **hạn mức CLI**, không phải dollar
 theo API. Đo được: ~11s/call, một lần chạy đủ là 19 fixture × 2 cổng × 4 call =

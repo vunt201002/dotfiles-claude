@@ -14,7 +14,7 @@ import * as path from 'node:path';
 import { outcomeJudgePrompt } from '../../../test/helpers/llm-judge';
 import type { FixtureCase } from './cases';
 import type { GateOutcome } from './gates';
-import { resolveBackends, type Backend } from './llm-backends';
+import { requireBackendRole, resolveBackends, type Backend } from './llm-backends';
 
 type ReviewCase = Pick<FixtureCase, 'bug' | 'entryName'>;
 
@@ -53,19 +53,29 @@ export function llmGatesEnabled(): { enabled: boolean; reason: string } {
   if (process.env.ORACLE_LLM !== '1') {
     return { enabled: false, reason: 'ORACLE_LLM=1 is not set — the LLM gates are off by default' };
   }
-  const { gate, judge } = resolveBackends();
-  const gateAv = gate.available();
-  if (!gateAv.ok) return { enabled: false, reason: `gate backend "${gate.name}" unusable: ${gateAv.reason}` };
-  const judgeAv = judge.available();
-  if (!judgeAv.ok) return { enabled: false, reason: `judge backend "${judge.name}" unusable: ${judgeAv.reason}` };
+  for (const gateName of ['spec-check', 'reviewer'] as const) {
+    let gate: Backend;
+    let judge: Backend;
+    try {
+      ({ gate, judge } = resolveBackends(process.env, gateName));
+    } catch (err) {
+      return { enabled: false, reason: `${gateName}: ${(err as Error).message}` };
+    }
+    const gateAv = gate.available();
+    if (!gateAv.ok) return { enabled: false, reason: `${gateName} gate backend "${gate.name}" unusable: ${gateAv.reason}` };
+    const judgeAv = judge.available();
+    if (!judgeAv.ok) return { enabled: false, reason: `${gateName} judge backend "${judge.name}" unusable: ${judgeAv.reason}` };
+  }
   return { enabled: true, reason: '' };
 }
 
 /** Named in the report: a run whose halves share a family is a weaker number. */
 export function backendLabel(): string {
-  const { gate, judge } = resolveBackends();
-  const independent = gate.family !== judge.family;
-  return `gate=${gate.name}[${gate.family}] judge=${judge.name}[${judge.family}]${independent ? '' : ' — SAME FAMILY, not an independent check (§7.3)'}`;
+  return (['spec-check', 'reviewer'] as const).map(gateName => {
+    const { gate, judge } = resolveBackends(process.env, gateName);
+    const independent = gate.family !== judge.family;
+    return `${gateName}: gate=${gate.name}[${gate.family}] judge=${judge.name}[${judge.family}]${independent ? '' : ' — SAME FAMILY, not an independent check (§7.3)'}`;
+  }).join('; ');
 }
 
 function readVariant(c: FixtureCase, variant: 'buggy' | 'fixed'): string {
@@ -142,9 +152,12 @@ async function runLlmGate(
   backends: LlmGateBackends,
 ): Promise<GateOutcome> {
   const { gate: gateBackend, judge: judgeBackend } = backends;
+  requireBackendRole(gateBackend, 'gate');
   const out: GateOutcome = {
     gate,
     family: 'llm',
+    gate_backend: gateBackend.name,
+    judge_backend: judgeBackend.name,
     available: true,
     unavailable_reason: '',
     cells: {},
@@ -204,11 +217,11 @@ async function runLlmGate(
   return out;
 }
 
-export async function runSpecCheckGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends()): Promise<GateOutcome> {
+export async function runSpecCheckGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends(process.env, 'spec-check')): Promise<GateOutcome> {
   return runLlmGate('spec-check', cases, specCheckReport, backends);
 }
 
-export async function runReviewerGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends()): Promise<GateOutcome> {
+export async function runReviewerGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends(process.env, 'reviewer')): Promise<GateOutcome> {
   return runLlmGate('reviewer', cases, reviewerReport, backends);
 }
 
@@ -216,6 +229,8 @@ export function skippedLlmGate(gate: 'spec-check' | 'reviewer', cases: FixtureCa
   const out: GateOutcome = {
     gate,
     family: 'llm',
+    gate_backend: '',
+    judge_backend: '',
     available: false,
     unavailable_reason: reason,
     cells: {},

@@ -7,12 +7,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ORACLE_DIR, type CorpusFingerprint, type FixtureCase } from './cases';
 import type { GateOutcome, Verdict, FixtureIntegrity } from './gates';
+import { backendFamily } from './llm-backends';
 
 export const BASELINE_PATH = path.join(ORACLE_DIR, 'baseline.json');
 
 export interface GateStats {
   gate: string;
   family: 'deterministic' | 'llm';
+  gate_backend: string;
+  judge_backend: string;
   available: boolean;
   unavailable_reason: string;
   caught: number;
@@ -44,6 +47,7 @@ export interface OracleReport {
   deterministic_catch_share: number | null;
   caught_by_any_deterministic: number;
   caught_by_nothing: string[];
+  llm_gate_backends_share_family: boolean;
 }
 
 function ratio(num: number, den: number): number | null {
@@ -57,6 +61,8 @@ export function summarize(outcome: GateOutcome, total: number): GateStats {
   return {
     gate: outcome.gate,
     family: outcome.family,
+    gate_backend: outcome.gate_backend,
+    judge_backend: outcome.judge_backend,
     available: outcome.available,
     unavailable_reason: outcome.unavailable_reason,
     caught: counts.caught,
@@ -111,6 +117,10 @@ export function buildReport(
   const fpErrors: Record<string, { on: string; detail: string }[]> = {};
   for (const o of outcomes) fpErrors[o.gate] = o.fp_errors;
 
+  const llmGateFamilies = gates
+    .filter(g => g.family === 'llm' && g.gate_backend)
+    .map(g => backendFamily(g.gate_backend));
+
   return {
     generated_at: new Date().toISOString(),
     corpus,
@@ -126,6 +136,8 @@ export function buildReport(
     deterministic_catch_share: ratio(deterministicCatches, totalCatches),
     caught_by_any_deterministic: caughtByAnyDeterministic.length,
     caught_by_nothing: caughtByNothing,
+    llm_gate_backends_share_family: llmGateFamilies.length >= 2
+      && llmGateFamilies.every(family => family !== undefined && family === llmGateFamilies[0]),
   };
 }
 
@@ -193,6 +205,8 @@ export interface BaselineDiff {
    * ground is not the same as standing on the same ground.
    */
   corpusChanged: string[];
+  /** Per-gate backend pairs that changed, making only that gate's numbers incomparable. */
+  instrumentChanged: string[];
   regressions: string[];
   /** The measured set shrank without the operator asking for it. An alarm, not an advisory. */
   lostMeasurements: string[];
@@ -217,7 +231,7 @@ export interface BaselineDiff {
 function emptyDiff(hasBaseline: boolean): BaselineDiff {
   return {
     hasBaseline,
-    corruption: [], corpusChanged: [], regressions: [], lostMeasurements: [], improvements: [],
+    corruption: [], corpusChanged: [], instrumentChanged: [], regressions: [], lostMeasurements: [], improvements: [],
     firstMeasurements: [], unfrozenMeasurements: [], acknowledgedAbsences: [], baselineCaveats: [],
     newCases: [], droppedCases: [],
   };
@@ -280,7 +294,7 @@ export function unfitToFreeze(
  * one place instead of a copy that can drift.
  */
 export function exitCodeFor(diff: BaselineDiff): number {
-  if (diff.corruption.length > 0 || diff.corpusChanged.length > 0) return 1;
+  if (diff.corruption.length > 0 || diff.corpusChanged.length > 0 || diff.instrumentChanged.length > 0) return 1;
   if (diff.regressions.length > 0 || diff.lostMeasurements.length > 0) return 2;
   if (diff.unfrozenMeasurements.length > 0) return 3;
   return 0;
@@ -477,8 +491,31 @@ export function diffAgainstBaseline(
   const before = scoredMetrics(base);
   const after = scoredMetrics(report);
   const nowGates = new Map(report.gates.map(g => [g.gate, g]));
+  const changedInstruments = new Set<string>();
+
+  for (const was of base.gates) {
+    if (was.family !== 'llm') continue;
+    const now = nowGates.get(was.gate);
+    const baselineMeasured = was.detection_rate !== null || was.fp_rate !== null;
+    if (!baselineMeasured) continue;
+    const baselineHasProvenance = Boolean(was.gate_backend) && Boolean(was.judge_backend);
+    if (!baselineHasProvenance) {
+      diff.baselineCaveats.push(
+        `${was.gate}: this baseline does not record which gate/judge backends produced its numbers, so one silent backend change cannot be detected for this gate; metrics remain comparable`,
+      );
+      continue;
+    }
+    if (!now || !now.gate_backend || !now.judge_backend) continue;
+    if (was.gate_backend !== now.gate_backend || was.judge_backend !== now.judge_backend) {
+      changedInstruments.add(was.gate);
+      diff.instrumentChanged.push(
+        `${was.gate}: backend pair ${was.gate_backend}/${was.judge_backend} -> ${now.gate_backend}/${now.judge_backend}; numbers from different instruments are not comparable — re-freeze with --write-baseline`,
+      );
+    }
+  }
 
   for (const [key, was] of before) {
+    if (changedInstruments.has(was.gate)) continue;
     const now = after.get(key);
     const nowGate = nowGates.get(was.gate);
     if (!now) noteShrink(diff, context, was, undefined, nowGate);
@@ -488,6 +525,7 @@ export function diffAgainstBaseline(
   }
 
   for (const [key, now] of after) {
+    if (changedInstruments.has(now.gate)) continue;
     if (before.has(key)) continue;
     const paid = nowGates.get(now.gate)?.family === 'llm';
     const command = `${paid ? 'ORACLE_LLM=1 ' : ''}bun personal/oracle/run.ts --write-baseline`;
@@ -511,7 +549,7 @@ export function diffAgainstBaseline(
     }
   }
 
-  const sameMetrics = before.size === after.size && [...before.keys()].every(k => after.has(k));
+  const sameMetrics = changedInstruments.size === 0 && before.size === after.size && [...before.keys()].every(k => after.has(k));
   const wasShare = deterministicCatchShare(base);
   const nowShare = deterministicCatchShare(report);
   if (sameMetrics && wasShare !== null && nowShare !== null && nowShare !== wasShare) {
@@ -528,7 +566,7 @@ export function diffAgainstBaseline(
     if (!prevRow) continue;
     for (const [gate, verdict] of Object.entries(row)) {
       const was = prevRow[gate];
-      if (!was || chosenOff.has(gate)) continue;
+      if (!was || chosenOff.has(gate) || changedInstruments.has(gate)) continue;
       if (was === 'caught' && verdict !== 'caught') diff.regressions.push(`${id} / ${gate}: caught -> ${verdict}`);
       if (was === 'missed' && verdict === 'caught') diff.improvements.push(`${id} / ${gate}: missed -> caught`);
     }
@@ -614,6 +652,19 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   }
   lines.push('');
 
+  const llmBackends = report.gates.filter(g => g.family === 'llm' && g.gate_backend && g.judge_backend);
+  if (llmBackends.length > 0) {
+    lines.push('backend provenance');
+    for (const g of llmBackends) lines.push(`  ${g.gate.padEnd(PAD)} gate=${g.gate_backend} judge=${g.judge_backend}`);
+    if (report.llm_gate_backends_share_family) {
+      lines.push('WARNING — both LLM gates run on the same gate-backend family, so their agreement is');
+    lines.push('        one opinion counted twice, not a cross-check. Principle 3: a different model does');
+    lines.push('        not substitute for independent context, and independent context does not substitute');
+    lines.push('        for an independent failure mode.');
+    }
+    lines.push('');
+  }
+
   for (const g of report.gates) {
     if (!g.available) lines.push(`NOT MEASURED — ${g.gate}: ${g.unavailable_reason}`);
   }
@@ -665,12 +716,13 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   if (!diff.hasBaseline) {
     lines.push('no baseline on disk — run with --write-baseline to freeze this run');
   } else {
-    const said = diff.corruption.length + diff.corpusChanged.length + diff.regressions.length + diff.lostMeasurements.length
+    const said = diff.corruption.length + diff.corpusChanged.length + diff.instrumentChanged.length + diff.regressions.length + diff.lostMeasurements.length
       + diff.improvements.length + diff.unfrozenMeasurements.length + diff.firstMeasurements.length + diff.acknowledgedAbsences.length
       + diff.baselineCaveats.length + diff.newCases.length + diff.droppedCases.length;
     if (said === 0) lines.push('baseline: no change');
     for (const c of diff.corruption) lines.push(`CORRUPT     ${c}`);
     for (const c of diff.corpusChanged) lines.push(`CORPUS      ${c}`);
+    for (const c of diff.instrumentChanged) lines.push(`INSTRUMENT  ${c}`);
     for (const l of diff.lostMeasurements) lines.push(`LOST        ${l}`);
     for (const r of diff.regressions) lines.push(`REGRESSION  ${r}`);
     for (const i of diff.improvements) lines.push(`improved    ${i}`);

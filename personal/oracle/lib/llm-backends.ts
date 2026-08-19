@@ -34,6 +34,8 @@ export interface Availability {
 export interface Backend {
   name: BackendName;
   family: ModelFamily;
+  /** Whether the backend runs without reading the operator's real tool configuration. */
+  hermetic: boolean;
   available(): Availability;
   callJson<T>(prompt: string, timeoutMs?: number): Promise<T>;
 }
@@ -165,6 +167,7 @@ export function clearCodexHome(): void {
 export const codexBackend: Backend = {
   name: 'codex',
   family: 'openai',
+  hermetic: true,
   available() {
     if (!binaryOnPath('codex')) return { ok: false, reason: 'codex is not on PATH' };
     if (!fs.existsSync(path.join(os.homedir(), '.codex'))) {
@@ -203,6 +206,7 @@ export const codexBackend: Backend = {
 export const claudeCliBackend: Backend = {
   name: 'claude-cli',
   family: 'anthropic',
+  hermetic: false,
   available() {
     if (!binaryOnPath('claude')) return { ok: false, reason: 'claude is not on PATH' };
     return { ok: true, reason: '' };
@@ -226,6 +230,7 @@ export const claudeCliBackend: Backend = {
 export const anthropicApiBackend: Backend = {
   name: 'anthropic-api',
   family: 'anthropic',
+  hermetic: true,
   available() {
     return process.env.ANTHROPIC_API_KEY
       ? { ok: true, reason: '' }
@@ -247,15 +252,31 @@ export function backendByName(name: string | undefined, fallback: BackendName): 
   return BACKENDS[key] ?? BACKENDS[fallback];
 }
 
+export type BackendRole = 'gate' | 'judge';
+
+export function requireBackendRole(backend: Backend, role: BackendRole): Backend {
+  if (role === 'gate' && !backend.hermetic) {
+    throw new Error(`backend "${backend.name}" cannot run as a gate: it is non-hermetic and reads the operator's real ~/.claude configuration`);
+  }
+  return backend;
+}
+
+export function backendFamily(name: string): ModelFamily | undefined {
+  return BACKENDS[name as BackendName]?.family;
+}
+
 /**
  * Gate defaults to codex and scorer to Claude, so the two halves of a
  * measurement come from different families. Both are overridable, and both are
  * reported, because a run where they collapse to one family is a weaker number
  * and the reader has to be able to see that.
  */
-export function resolveBackends(env: NodeJS.ProcessEnv = process.env): { gate: Backend; judge: Backend } {
+export function resolveBackends(env: NodeJS.ProcessEnv = process.env, gate?: string): { gate: Backend; judge: Backend } {
+  const prefix = gate ? `ORACLE_${gate.replace(/-/g, '_').toUpperCase()}` : '';
+  const gateName = (prefix ? env[`${prefix}_GATE_BACKEND`] : undefined) ?? env.ORACLE_GATE_BACKEND;
+  const judgeName = (prefix ? env[`${prefix}_JUDGE_BACKEND`] : undefined) ?? env.ORACLE_JUDGE_BACKEND;
   return {
-    gate: backendByName(env.ORACLE_GATE_BACKEND, 'codex'),
-    judge: backendByName(env.ORACLE_JUDGE_BACKEND, 'claude-cli'),
+    gate: requireBackendRole(backendByName(gateName, 'codex'), 'gate'),
+    judge: requireBackendRole(backendByName(judgeName, 'claude-cli'), 'judge'),
   };
 }
