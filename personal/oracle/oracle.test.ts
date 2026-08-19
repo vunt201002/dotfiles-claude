@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-  corpusFingerprint, fixtureEscapes, loadCases, loadGuardFpProbes, loadGroundTruth,
+  auditDetectionHints, corpusFingerprint, fixtureEscapes, loadCases, loadGuardFpProbes, loadGroundTruth,
   APPARATUS_DIR, FIXTURES_DIR, SHARED_FIXTURE_HARNESS, type CorpusFingerprint, type FixtureCase,
 } from './lib/cases';
 import { verifyFixtures, runRedTestGate, runGuardGate, runLintGate, runTscGate, runTscRatchet, type Verdict } from './lib/gates';
@@ -12,6 +12,8 @@ import { backendLabel, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skipp
 import {
   backendFamily, claudeCliBackend, requireBackendRole, resolveBackends, type Backend,
 } from './lib/llm-backends';
+import { writeRawReport, type RawReportRun } from './lib/raw-reports';
+import { outcomeJudgePrompt } from '../../test/helpers/llm-judge';
 import {
   summarize, diffBaseline, diffAgainstBaseline, buildReport, render, exitCodeFor, unfitToFreeze, writeBaseline, BASELINE_PATH,
   type GateStats, type OracleReport, type DiffContext,
@@ -134,11 +136,10 @@ const PAID_GATES_OFF: DiffContext = {
 
 const EVERYTHING_EXPECTED: DiffContext = { operatorDisabledGates: [], operatorReason: '' };
 
-// The fingerprint of the fixtures actually on disk. Changing the corpus is
-// supposed to move it, so a diff that touches fixtures/ or lib/probe.ts is
-// expected to update this line AND to re-freeze baseline.json. A digest nobody
-// ever asserts against is a digest that can quietly stop being computed.
-const CORPUS_DIGEST = '83737b82e05ac05e';
+// The fingerprint of the fixtures actually on disk. Changing the corpus moves
+// this constant immediately. baseline.json stays on its paid-run digest until
+// the next paid measurement freezes matching numbers and provenance.
+const CORPUS_DIGEST = '7abd89396f8ac6c1';
 
 const SAME_CORPUS: CorpusFingerprint = { fixtures: FIXTURES, digest: CORPUS_DIGEST };
 
@@ -1601,7 +1602,7 @@ describe('oracle fixture integrity', () => {
     const report = buildReport(cases, [redTest], [], {}, corpusFingerprint());
     const frozen = readFrozenBaseline();
     if (frozen) {
-      const comparable: OracleReport = { ...frozen, corpus: frozen.corpus ?? report.corpus };
+      const comparable: OracleReport = { ...frozen, corpus: report.corpus };
       const diff = diffAgainstBaseline(report, comparable, PAID_GATES_OFF);
 
       expect(diff.corruption).toEqual([]);
@@ -1780,6 +1781,213 @@ describe('LLM backend provenance and instrument changes', () => {
     expect([own.gate.name, own.judge.name]).toEqual(['anthropic-api', 'anthropic-api']);
     expect([common.gate.name, common.judge.name]).toEqual(['anthropic-api', 'anthropic-api']);
     expect([defaults.gate.name, defaults.judge.name]).toEqual(['codex', 'claude-cli']);
+  });
+});
+
+describe('variant-aware outcome judging and replay', () => {
+  // The library short-circuit in obtainReport is what actually stops a rejudge
+  // from spending, and it has its own tests. This pins the second layer: run.ts
+  // hands the gates a backend whose callJson throws, so a refactor that drops
+  // the wrapper cannot quietly turn a free replay back into a paid run.
+  test('run.ts gives rejudge a gate backend that throws instead of calling out', () => {
+    const source = fs.readFileSync(path.join(APPARATUS_DIR, 'run.ts'), 'utf-8');
+
+    expect(source).toContain('rejudge attempted to call');
+    expect(source.slice(source.indexOf('function cachedGateBackend'))).toMatch(/callJson[\s\S]{0,120}throw new Error/);
+  });
+
+  const groundTruth = {
+    total_bugs: 1,
+    bugs: [{ id: 'fixture-bug', category: 'correctness', severity: 'high', description: 'The defect.', detection_hint: 'defect|remedy' }],
+  };
+
+  function backend(call: (prompt: string) => unknown): Backend {
+    return {
+      name: 'codex',
+      family: 'openai',
+      hermetic: true,
+      available: () => ({ ok: true, reason: '' }),
+      callJson: async <T>(prompt: string) => call(prompt) as T,
+    };
+  }
+
+  function rawRun(dir: string): RawReportRun {
+    const run: RawReportRun = {
+      dir,
+      manifest: {
+        format_version: 1,
+        generated_at: '2026-08-19T00:00:00.000Z',
+        source_run: 'paid-source-run',
+        gate_backends: { 'spec-check': 'codex', reviewer: 'codex' },
+      },
+    };
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), `${JSON.stringify(run.manifest, null, 2)}\n`);
+    return run;
+  }
+
+  function writeReplaySet(run: RawReportRun, fixture: string): void {
+    for (const [id, variant, report] of [
+      ['llm-canary-unauthenticated-delete-all-customers', 'buggy', 'The unauthenticated bulk delete remains.'],
+      [fixture, 'buggy', 'The planted defect remains.'],
+      [fixture, 'fixed', 'The fix is present.'],
+    ] as const) {
+      writeRawReport(run, { gate: 'spec-check', fixture: id, variant, gate_backend: 'codex', report });
+    }
+  }
+
+  test('the default outcome prompt is exactly the legacy buggy prompt', () => {
+    const report = 'One finding.';
+    const expected = `You are evaluating a QA testing report against known ground truth bugs.
+
+GROUND TRUTH (1 planted bugs):
+${JSON.stringify(groundTruth.bugs, null, 2)}
+
+QA REPORT (generated by an AI agent):
+One finding.
+
+For each planted bug, determine if the report identified it. A bug counts as
+"detected" if the report describes the same defect, even if the wording differs.
+Use the detection_hint keywords as guidance.
+
+Also count false positives: issues in the report that don't correspond to any
+planted bug AND aren't legitimate issues with the page.
+
+Respond with ONLY valid JSON:
+{
+  "detected": ["bug-id-1", "bug-id-2"],
+  "missed": ["bug-id-3"],
+  "false_positives": 0,
+  "detection_rate": 2,
+  "evidence_quality": 4,
+  "reasoning": "brief explanation"
+}
+
+Rules:
+- "detected" and "missed" arrays must only contain IDs from the ground truth: fixture-bug
+- detection_rate = length of detected array
+- evidence_quality (1-5): Do detected bugs have screenshots, repro steps, or specific element references?
+  5 = excellent evidence for every bug, 1 = no evidence at all`;
+
+    expect(outcomeJudgePrompt(groundTruth, report)).toBe(expected);
+  });
+
+  test('the fixed prompt states repaired code, requires a remains-present claim, and rejects keyword-only matching', () => {
+    const prompt = outcomeJudgePrompt(groundTruth, 'The report.', 'fixed');
+
+    expect(prompt).toContain('HAS ALREADY BEEN FIXED');
+    expect(prompt).toContain('only if the report claims the defect remains');
+    expect(prompt).toContain('A keyword match alone is never enough');
+  });
+
+  test('LLM scoring receives buggy prompts for canary and detection, then a fixed prompt for false positives', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'idempotency-key-race')!;
+    const prompts: string[] = [];
+    await runSpecCheckGate([source], {
+      gate: backend(() => ({ findings: [{ title: 'Finding', why_it_matters: 'Impact.', evidence: 'Symbol.' }] })),
+      judge: backend(prompt => {
+        prompts.push(prompt);
+        const id = prompt.includes('llm-canary-unauthenticated-delete-all-customers')
+          ? 'llm-canary-unauthenticated-delete-all-customers'
+          : source.bug.id;
+        return { detected: prompt.includes('HAS ALREADY BEEN FIXED') ? [] : [id], reasoning: 'Scored.' };
+      }),
+    });
+
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).not.toContain('HAS ALREADY BEEN FIXED');
+    expect(prompts[1]).not.toContain('HAS ALREADY BEEN FIXED');
+    expect(prompts[2]).toContain('HAS ALREADY BEEN FIXED');
+  });
+
+  test('hint audit names a fixture and token found only in fixed code', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-hint-'));
+    try {
+      fs.mkdirSync(path.join(root, 'fixtures', 'fake', 'buggy'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'fixtures', 'fake', 'fixed'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'fixtures', 'fake', 'buggy', 'index.ts'), 'export const state = "broken";\n');
+      fs.writeFileSync(path.join(root, 'fixtures', 'fake', 'fixed', 'index.ts'), 'export const state = "remedyToken";\n');
+      fs.writeFileSync(path.join(root, 'fixtures', 'ground-truth.json'), JSON.stringify({ bugs: [{ id: 'fake', detection_hint: 'broken|remedyToken' }] }));
+
+      expect(auditDetectionHints(root)).toEqual([{ fixture: 'fake', token: 'remedyToken' }]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('hint audit accepts a token present in both variants', () => {
+    expect(auditDetectionHints()).toEqual([]);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-hint-'));
+    try {
+      for (const variant of ['buggy', 'fixed']) {
+        fs.mkdirSync(path.join(root, 'fixtures', 'fake', variant), { recursive: true });
+        fs.writeFileSync(path.join(root, 'fixtures', 'fake', variant, 'index.ts'), 'export const sharedToken = true;\n');
+      }
+      fs.writeFileSync(path.join(root, 'fixtures', 'ground-truth.json'), JSON.stringify({ bugs: [{ id: 'fake', detection_hint: 'sharedToken' }] }));
+
+      expect(auditDetectionHints(root)).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('rejudge builds complete gate results from raw reports without calling the gate backend', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'idempotency-key-race')!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-rejudge-'));
+    try {
+      const run = rawRun(dir);
+      writeReplaySet(run, source.bug.id);
+      const outcome = await runSpecCheckGate([source], {
+        gate: backend(() => { throw new Error('gate backend must not be called during rejudge'); }),
+        judge: backend(prompt => {
+          const id = prompt.includes('llm-canary-unauthenticated-delete-all-customers')
+            ? 'llm-canary-unauthenticated-delete-all-customers'
+            : source.bug.id;
+          return { detected: prompt.includes('HAS ALREADY BEEN FIXED') ? [] : [id], reasoning: 'Rejudged.' };
+        }),
+      }, { rejudgeSource: run });
+
+      expect(outcome.cells[source.bug.id].verdict).toBe('caught');
+      expect(outcome.fp_denominator).toBe(1);
+      expect(outcome.fp_errors).toEqual([]);
+      const report = buildReport([source], [outcome], [], {}, { fixtures: 1, digest: 'rejudge-test' }, {
+        mode: 'rejudge',
+        raw_report_run: run.manifest.source_run,
+        raw_report_dir: run.dir,
+      });
+      expect(report.report_source).toEqual({
+        mode: 'rejudge',
+        raw_report_run: 'paid-source-run',
+        raw_report_dir: run.dir,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing replay report is an error cell and never a miss', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'idempotency-key-race')!;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-rejudge-'));
+    try {
+      const run = rawRun(dir);
+      writeReplaySet(run, source.bug.id);
+      fs.rmSync(path.join(dir, 'spec-check', 'buggy', `${source.bug.id}.json`));
+      const outcome = await runSpecCheckGate([source], {
+        gate: backend(() => { throw new Error('gate backend must not be called during rejudge'); }),
+        judge: backend(prompt => ({
+          detected: prompt.includes('llm-canary-unauthenticated-delete-all-customers')
+            ? ['llm-canary-unauthenticated-delete-all-customers']
+            : [],
+          reasoning: 'Rejudged.',
+        })),
+      }, { rejudgeSource: run });
+
+      expect(outcome.cells[source.bug.id].verdict).toBe('error');
+      expect(outcome.cells[source.bug.id].detail).toContain('raw report missing for (spec-check, idempotency-key-race, buggy)');
+      expect(outcome.cells[source.bug.id].verdict).not.toBe('missed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

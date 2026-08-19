@@ -33,6 +33,11 @@ export interface GateStats {
 
 export interface OracleReport {
   generated_at: string;
+  report_source?: {
+    mode: 'live' | 'rejudge';
+    raw_report_run: string;
+    raw_report_dir: string;
+  };
   /** Which fixtures these numbers were measured on. Absent in baselines frozen before the pin existed. */
   corpus?: CorpusFingerprint;
   fixtures_total: number;
@@ -85,6 +90,7 @@ export function buildReport(
   integrity: FixtureIntegrity[],
   ratchet: Record<string, { holds: boolean; detail: string }>,
   corpus: CorpusFingerprint,
+  reportSource?: OracleReport['report_source'],
 ): OracleReport {
   const total = cases.length;
   const gates = outcomes.map(o => summarize(o, total));
@@ -123,6 +129,7 @@ export function buildReport(
 
   return {
     generated_at: new Date().toISOString(),
+    report_source: reportSource,
     corpus,
     fixtures_total: total,
     fixtures_verified: integrity.filter(i => i.ok).length,
@@ -620,6 +627,11 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   lines.push('');
   lines.push(`ORACLE MEASUREMENT — ${report.fixtures_total} fixtures, all from bugs that really happened`);
   lines.push(`generated ${report.generated_at}`);
+  if (report.report_source?.mode === 'rejudge') {
+    lines.push(`rejudged from raw report run ${report.report_source.raw_report_run} at ${report.report_source.raw_report_dir}`);
+  } else if (report.report_source?.mode === 'live') {
+    lines.push(`raw gate reports saved as run ${report.report_source.raw_report_run} at ${report.report_source.raw_report_dir}`);
+  }
   lines.push(report.corpus
     ? `corpus: ${report.corpus.fixtures} fixtures, ${report.corpus.digest}`
     : 'corpus: NOT RECORDED — this run does not say which fixtures produced these numbers');

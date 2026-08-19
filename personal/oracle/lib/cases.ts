@@ -85,6 +85,44 @@ export interface CorpusFingerprint {
   digest: string;
 }
 
+export interface DetectionHintViolation {
+  fixture: string;
+  token: string;
+}
+
+const MIN_AUDITED_HINT_LENGTH = 5;
+const COMMON_HINT_TOKENS = new Set(['code', 'error', 'false', 'issue']);
+
+function readSourceTree(dir: string): string {
+  return fs.readdirSync(dir, { withFileTypes: true }).map(entry => {
+    const target = path.join(dir, entry.name);
+    return entry.isDirectory() ? readSourceTree(target) : entry.isFile() ? fs.readFileSync(target, 'utf-8') : '';
+  }).join('\n').toLowerCase();
+}
+
+/**
+ * Finds hint vocabulary introduced by the fix rather than present in the bug.
+ * Tokens shorter than five characters and four generic review words are
+ * ignored because their substring collision rate makes them poor evidence.
+ */
+export function auditDetectionHints(oracleDir: string = ORACLE_DIR): DetectionHintViolation[] {
+  const fixturesDir = path.join(oracleDir, 'fixtures');
+  const groundTruth = JSON.parse(fs.readFileSync(path.join(fixturesDir, 'ground-truth.json'), 'utf-8')) as GroundTruth;
+  const violations: DetectionHintViolation[] = [];
+  for (const bug of groundTruth.bugs) {
+    const fixtureDir = path.join(fixturesDir, bug.id);
+    const buggy = readSourceTree(path.join(fixtureDir, 'buggy'));
+    const fixed = readSourceTree(path.join(fixtureDir, 'fixed'));
+    for (const raw of bug.detection_hint.split('|')) {
+      const token = raw.trim();
+      const normalized = token.toLowerCase();
+      if (normalized.length < MIN_AUDITED_HINT_LENGTH || COMMON_HINT_TOKENS.has(normalized)) continue;
+      if (fixed.includes(normalized) && !buggy.includes(normalized)) violations.push({ fixture: bug.id, token });
+    }
+  }
+  return violations;
+}
+
 /**
  * One field into the hash, length-prefixed, so the stream can be read back only
  * one way. Plain concatenation is ambiguous — moving a trailing newline from one

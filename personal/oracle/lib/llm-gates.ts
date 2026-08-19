@@ -15,6 +15,9 @@ import { outcomeJudgePrompt } from '../../../test/helpers/llm-judge';
 import type { FixtureCase } from './cases';
 import type { GateOutcome } from './gates';
 import { requireBackendRole, resolveBackends, type Backend } from './llm-backends';
+import {
+  readRawReport, writeRawReport, type CodeVariant, type LlmGateName, type RawReportRun,
+} from './raw-reports';
 
 type ReviewCase = Pick<FixtureCase, 'bug' | 'entryName'>;
 
@@ -131,7 +134,7 @@ Return an empty findings array if you would approve this as is.`);
   return renderReport(out);
 }
 
-async function scoreOne(c: ReviewCase, report: string, judge: Backend) {
+async function scoreOne(c: ReviewCase, report: string, judge: Backend, variant: CodeVariant = 'buggy') {
   const groundTruth = {
     total_bugs: 1,
     bugs: [{
@@ -142,17 +145,37 @@ async function scoreOne(c: ReviewCase, report: string, judge: Backend) {
       detection_hint: c.bug.detection_hint,
     }],
   };
-  return judge.callJson<{ detected: string[]; reasoning: string }>(outcomeJudgePrompt(groundTruth, report));
+  return judge.callJson<{ detected: string[]; reasoning: string }>(outcomeJudgePrompt(groundTruth, report, variant));
+}
+
+export interface LlmGateRunOptions {
+  rawReportOutput?: RawReportRun;
+  rejudgeSource?: RawReportRun;
 }
 
 async function runLlmGate(
-  gate: 'spec-check' | 'reviewer',
+  gate: LlmGateName,
   cases: FixtureCase[],
   produce: (c: ReviewCase, code: string, gate: Backend) => Promise<string>,
   backends: LlmGateBackends,
+  options: LlmGateRunOptions = {},
 ): Promise<GateOutcome> {
   const { gate: gateBackend, judge: judgeBackend } = backends;
   requireBackendRole(gateBackend, 'gate');
+  const obtainReport = async (c: ReviewCase, code: string, variant: CodeVariant): Promise<string> => {
+    if (options.rejudgeSource) return readRawReport(options.rejudgeSource, gate, c.bug.id, variant).report;
+    const report = await produce(c, code, gateBackend);
+    if (options.rawReportOutput) {
+      writeRawReport(options.rawReportOutput, {
+        gate,
+        fixture: c.bug.id,
+        variant,
+        gate_backend: gateBackend.name,
+        report,
+      });
+    }
+    return report;
+  };
   const out: GateOutcome = {
     gate,
     family: 'llm',
@@ -169,8 +192,8 @@ async function runLlmGate(
   let canaryReport: string;
   let canaryScore: { detected: string[]; reasoning: string };
   try {
-    canaryReport = await produce(CANARY_CASE, CANARY_CODE, gateBackend);
-    canaryScore = await scoreOne(CANARY_CASE, canaryReport, judgeBackend);
+    canaryReport = await obtainReport(CANARY_CASE, CANARY_CODE, 'buggy');
+    canaryScore = await scoreOne(CANARY_CASE, canaryReport, judgeBackend, 'buggy');
   } catch (err: any) {
     out.available = false;
     out.unavailable_reason = `canary could not run through produce → scoreOne: ${err?.message ?? err}. Every "missed" would be indistinguishable from a broken LLM pipeline.`;
@@ -192,8 +215,8 @@ async function runLlmGate(
 
   for (const c of cases) {
     try {
-      const report = await produce(c, readVariant(c, 'buggy'), gateBackend);
-      const scored = await scoreOne(c, report, judgeBackend);
+      const report = await obtainReport(c, readVariant(c, 'buggy'), 'buggy');
+      const scored = await scoreOne(c, report, judgeBackend, 'buggy');
       out.cells[c.bug.id] = scored.detected.includes(c.bug.id)
         ? { verdict: 'caught', detail: scored.reasoning.slice(0, 240) }
         : { verdict: 'missed', detail: scored.reasoning.slice(0, 240) };
@@ -203,8 +226,8 @@ async function runLlmGate(
     }
 
     try {
-      const report = await produce(c, readVariant(c, 'fixed'), gateBackend);
-      const scored = await scoreOne(c, report, judgeBackend);
+      const report = await obtainReport(c, readVariant(c, 'fixed'), 'fixed');
+      const scored = await scoreOne(c, report, judgeBackend, 'fixed');
       out.fp_denominator++;
       if (scored.detected.includes(c.bug.id)) {
         out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: scored.reasoning.slice(0, 240) });
@@ -217,12 +240,20 @@ async function runLlmGate(
   return out;
 }
 
-export async function runSpecCheckGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends(process.env, 'spec-check')): Promise<GateOutcome> {
-  return runLlmGate('spec-check', cases, specCheckReport, backends);
+export async function runSpecCheckGate(
+  cases: FixtureCase[],
+  backends: LlmGateBackends = resolveBackends(process.env, 'spec-check'),
+  options: LlmGateRunOptions = {},
+): Promise<GateOutcome> {
+  return runLlmGate('spec-check', cases, specCheckReport, backends, options);
 }
 
-export async function runReviewerGate(cases: FixtureCase[], backends: LlmGateBackends = resolveBackends(process.env, 'reviewer')): Promise<GateOutcome> {
-  return runLlmGate('reviewer', cases, reviewerReport, backends);
+export async function runReviewerGate(
+  cases: FixtureCase[],
+  backends: LlmGateBackends = resolveBackends(process.env, 'reviewer'),
+  options: LlmGateRunOptions = {},
+): Promise<GateOutcome> {
+  return runLlmGate('reviewer', cases, reviewerReport, backends, options);
 }
 
 export function skippedLlmGate(gate: 'spec-check' | 'reviewer', cases: FixtureCase[], reason: string): GateOutcome {
