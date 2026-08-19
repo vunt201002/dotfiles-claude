@@ -11,6 +11,12 @@ import { backendFamily } from './llm-backends';
 
 export const BASELINE_PATH = path.join(ORACLE_DIR, 'baseline.json');
 
+export interface NoiseRange {
+  samples: number;
+  detection: { min: number; max: number };
+  false_positives: { min: number; max: number };
+}
+
 export interface GateStats {
   gate: string;
   family: 'deterministic' | 'llm';
@@ -29,6 +35,7 @@ export interface GateStats {
   fp_errors: number;
   fp_denominator: number;
   fp_rate: number | null;
+  noise_range?: NoiseRange;
 }
 
 export interface OracleReport {
@@ -148,6 +155,52 @@ export function buildReport(
   };
 }
 
+/**
+ * Chooses one real report by ordering samples on spec-check caught ascending,
+ * then false positives descending, and taking the middle or lower-middle item.
+ * Exact ties retain sample order. The whole chosen report is preserved, so the
+ * reviewer gate is deliberately not promised to be at its own median.
+ */
+export function selectMedianRejudgeReport(reports: OracleReport[]): OracleReport {
+  if (reports.length === 0) throw new Error('cannot select a median from zero rejudge reports');
+  const ranked = reports.map((report, sample) => {
+    const gate = report.gates.find(candidate => candidate.gate === 'spec-check');
+    if (!gate) throw new Error('cannot select a rejudge median without spec-check');
+    return { report, gate, sample };
+  }).sort((a, b) => a.gate.caught - b.gate.caught
+    || b.gate.false_positives - a.gate.false_positives
+    || a.sample - b.sample);
+  return ranked[Math.floor((ranked.length - 1) / 2)].report;
+}
+
+export function recordObservedNoise(reports: OracleReport[]): OracleReport {
+  const selected = selectMedianRejudgeReport(reports);
+  if (reports.length === 1) return selected;
+  const gates = selected.gates.map(gate => {
+    if (gate.family !== 'llm') return gate;
+    const samples = reports.map(report => {
+      const match = report.gates.find(candidate => candidate.gate === gate.gate);
+      if (!match) throw new Error(`rejudge sample has no ${gate.gate} gate`);
+      return match;
+    });
+    return {
+      ...gate,
+      noise_range: {
+        samples: samples.length,
+        detection: {
+          min: Math.min(...samples.map(sample => sample.caught)),
+          max: Math.max(...samples.map(sample => sample.caught)),
+        },
+        false_positives: {
+          min: Math.min(...samples.map(sample => sample.false_positives)),
+          max: Math.max(...samples.map(sample => sample.false_positives)),
+        },
+      },
+    };
+  });
+  return { ...selected, gates };
+}
+
 export type MetricName = 'detection' | 'false positives';
 
 interface Harm {
@@ -215,6 +268,8 @@ export interface BaselineDiff {
   /** Per-gate backend pairs that changed, making only that gate's numbers incomparable. */
   instrumentChanged: string[];
   regressions: string[];
+  /** A changed LLM metric stayed inside a baseline range measured from at least three samples. */
+  withinNoise: string[];
   /** The measured set shrank without the operator asking for it. An alarm, not an advisory. */
   lostMeasurements: string[];
   improvements: string[];
@@ -238,7 +293,7 @@ export interface BaselineDiff {
 function emptyDiff(hasBaseline: boolean): BaselineDiff {
   return {
     hasBaseline,
-    corruption: [], corpusChanged: [], instrumentChanged: [], regressions: [], lostMeasurements: [], improvements: [],
+    corruption: [], corpusChanged: [], instrumentChanged: [], regressions: [], withinNoise: [], lostMeasurements: [], improvements: [],
     firstMeasurements: [], unfrozenMeasurements: [], acknowledgedAbsences: [], baselineCaveats: [],
     newCases: [], droppedCases: [],
   };
@@ -359,6 +414,15 @@ function inconsistencies(report: OracleReport, side: string): string[] {
     if (g.fp_rate !== ratio(g.false_positives, g.fp_denominator)) {
       found.push(`${where} says false positive rate ${g.fp_rate} but ${g.false_positives}/${g.fp_denominator} is ${ratio(g.false_positives, g.fp_denominator)}`);
     }
+    if (g.noise_range) {
+      const range = g.noise_range;
+      if (g.family !== 'llm') found.push(`${where} records an LLM noise range for a deterministic gate`);
+      if (!Number.isInteger(range.samples) || range.samples < 1) found.push(`${where} has invalid noise sample count ${range.samples}`);
+      if (range.detection.min > range.detection.max) found.push(`${where} has an inverted detection noise range`);
+      if (range.false_positives.min > range.false_positives.max) found.push(`${where} has an inverted false-positive noise range`);
+      if (g.caught < range.detection.min || g.caught > range.detection.max) found.push(`${where} freezes detection ${g.caught} outside its noise range`);
+      if (g.false_positives < range.false_positives.min || g.false_positives > range.false_positives.max) found.push(`${where} freezes false positives ${g.false_positives} outside its noise range`);
+    }
     if (g.coverage !== (ratio(g.applicable, report.fixtures_total) ?? 0)) {
       found.push(`${where} says coverage ${g.coverage} but ${g.applicable}/${report.fixtures_total} is ${ratio(g.applicable, report.fixtures_total) ?? 0}`);
     }
@@ -404,12 +468,19 @@ function scoredMetrics(report: OracleReport): Map<string, ScoredMetric> {
   return scored;
 }
 
-function compareOverSameGround(diff: BaselineDiff, was: ScoredMetric, now: ScoredMetric): void {
-  if (now.rate === was.rate) return;
+function compareOverSameGround(diff: BaselineDiff, was: ScoredMetric, now: ScoredMetric, baselineGate: GateStats): boolean {
+  if (now.rate === was.rate) return false;
   const move = `${now.gate}: ${now.metric} ${metricText(was)} -> ${metricText(now)}`;
+  const range = baselineGate.noise_range;
+  const observed = now.metric === 'detection' ? range?.detection : range?.false_positives;
+  if (baselineGate.family === 'llm' && range && range.samples >= 3 && observed && now.numerator >= observed.min && now.numerator <= observed.max) {
+    diff.withinNoise.push(`${move} — within observed range ${observed.min}..${observed.max} from ${range.samples} samples`);
+    return true;
+  }
   const worse = HARM[now.metric].rateRiseIsWorse ? now.rate > was.rate : now.rate < was.rate;
   if (worse) diff.regressions.push(move);
   else diff.improvements.push(move);
+  return false;
 }
 
 function compareOverWiderGround(diff: BaselineDiff, was: ScoredMetric, now: ScoredMetric): void {
@@ -497,8 +568,10 @@ export function diffAgainstBaseline(
 
   const before = scoredMetrics(base);
   const after = scoredMetrics(report);
+  const baselineGates = new Map(base.gates.map(g => [g.gate, g]));
   const nowGates = new Map(report.gates.map(g => [g.gate, g]));
   const changedInstruments = new Set<string>();
+  const noiseSuppressedMetrics = new Set<string>();
 
   for (const was of base.gates) {
     if (was.family !== 'llm') continue;
@@ -528,7 +601,7 @@ export function diffAgainstBaseline(
     if (!now) noteShrink(diff, context, was, undefined, nowGate);
     else if (now.denominator < was.denominator) noteShrink(diff, context, was, now, nowGate);
     else if (now.denominator > was.denominator) compareOverWiderGround(diff, was, now);
-    else compareOverSameGround(diff, was, now);
+    else if (compareOverSameGround(diff, was, now, baselineGates.get(was.gate)!)) noiseSuppressedMetrics.add(key);
   }
 
   for (const [key, now] of after) {
@@ -559,7 +632,8 @@ export function diffAgainstBaseline(
   const sameMetrics = changedInstruments.size === 0 && before.size === after.size && [...before.keys()].every(k => after.has(k));
   const wasShare = deterministicCatchShare(base);
   const nowShare = deterministicCatchShare(report);
-  if (sameMetrics && wasShare !== null && nowShare !== null && nowShare !== wasShare) {
+  const llmDetectionWithinNoise = [...noiseSuppressedMetrics].some(key => key.endsWith('/detection') && baselineGates.get(key.slice(0, -10))?.family === 'llm');
+  if (!llmDetectionWithinNoise && sameMetrics && wasShare !== null && nowShare !== null && nowShare !== wasShare) {
     const move = `deterministic share of all catches ${wasShare} -> ${nowShare}`;
     if (nowShare < wasShare) diff.regressions.push(`${move} (P8 wants >= 0.2)`);
     else diff.improvements.push(move);
@@ -574,6 +648,7 @@ export function diffAgainstBaseline(
     for (const [gate, verdict] of Object.entries(row)) {
       const was = prevRow[gate];
       if (!was || chosenOff.has(gate) || changedInstruments.has(gate)) continue;
+      if (noiseSuppressedMetrics.has(`${gate}/detection`)) continue;
       if (was === 'caught' && verdict !== 'caught') diff.regressions.push(`${id} / ${gate}: caught -> ${verdict}`);
       if (was === 'missed' && verdict === 'caught') diff.improvements.push(`${id} / ${gate}: missed -> caught`);
     }
@@ -728,7 +803,7 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
   if (!diff.hasBaseline) {
     lines.push('no baseline on disk — run with --write-baseline to freeze this run');
   } else {
-    const said = diff.corruption.length + diff.corpusChanged.length + diff.instrumentChanged.length + diff.regressions.length + diff.lostMeasurements.length
+    const said = diff.corruption.length + diff.corpusChanged.length + diff.instrumentChanged.length + diff.regressions.length + diff.withinNoise.length + diff.lostMeasurements.length
       + diff.improvements.length + diff.unfrozenMeasurements.length + diff.firstMeasurements.length + diff.acknowledgedAbsences.length
       + diff.baselineCaveats.length + diff.newCases.length + diff.droppedCases.length;
     if (said === 0) lines.push('baseline: no change');
@@ -737,6 +812,7 @@ export function render(report: OracleReport, diff: BaselineDiff): string {
     for (const c of diff.instrumentChanged) lines.push(`INSTRUMENT  ${c}`);
     for (const l of diff.lostMeasurements) lines.push(`LOST        ${l}`);
     for (const r of diff.regressions) lines.push(`REGRESSION  ${r}`);
+    for (const n of diff.withinNoise) lines.push(`withinNoise ${n}`);
     for (const i of diff.improvements) lines.push(`improved    ${i}`);
     for (const u of diff.unfrozenMeasurements) lines.push(`UNFROZEN    ${u}`);
     for (const f of diff.firstMeasurements) lines.push(`MEASURED    ${f}`);

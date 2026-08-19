@@ -13,9 +13,11 @@ import {
   backendFamily, claudeCliBackend, requireBackendRole, resolveBackends, type Backend,
 } from './lib/llm-backends';
 import { writeRawReport, type RawReportRun } from './lib/raw-reports';
+import { rejudgeRepeat } from './lib/rejudge';
 import { outcomeJudgePrompt } from '../../test/helpers/llm-judge';
 import {
-  summarize, diffBaseline, diffAgainstBaseline, buildReport, render, exitCodeFor, unfitToFreeze, writeBaseline, BASELINE_PATH,
+  summarize, diffBaseline, diffAgainstBaseline, buildReport, render, exitCodeFor, recordObservedNoise,
+  selectMedianRejudgeReport, unfitToFreeze, writeBaseline, BASELINE_PATH,
   type GateStats, type OracleReport, type DiffContext,
 } from './lib/report';
 
@@ -1680,6 +1682,99 @@ describe.skipIf(!slowGates)('oracle deterministic gates (ORACLE=1)', () => {
 });
 
 describe('LLM backend provenance and instrument changes', () => {
+  function specSample(caught: number, falsePositives: number, generatedAt: string): OracleReport {
+    return {
+      ...reportWith([{
+        ...SPEC_CHECK_SCORED,
+        caught,
+        missed: FIXTURES - caught,
+        detection_rate: Math.round((caught / FIXTURES) * 1000) / 1000,
+        false_positives: falsePositives,
+        fp_rate: Math.round((falsePositives / FIXTURES) * 1000) / 1000,
+      }]),
+      generated_at: generatedAt,
+    };
+  }
+
+  test('--repeat defaults to one rejudge with unchanged single-sample behavior', () => {
+    const report = specSample(16, 2, 'single');
+
+    expect(rejudgeRepeat(['--rejudge'])).toBe(1);
+    expect(rejudgeRepeat(['--rejudge', '--repeat', '1'])).toBe(1);
+    expect(recordObservedNoise([report])).toBe(report);
+    expect(report.gates[0].noise_range).toBeUndefined();
+  });
+
+  test('three samples freeze the real spec-check median report intact', () => {
+    const low = specSample(15, 2, 'low');
+    const median = specSample(16, 3, 'median');
+    const high = specSample(16, 1, 'high');
+    const frozen = recordObservedNoise([high, low, median]);
+
+    expect(selectMedianRejudgeReport([high, low, median])).toBe(median);
+    expect(frozen.generated_at).toBe('median');
+    expect(frozen.gates[0]).toMatchObject({ caught: 16, missed: 3, applicable: 19, false_positives: 3 });
+    expect(diffAgainstBaseline(frozen, frozen).corruption).toEqual([]);
+  });
+
+  test('an even sample count takes the deterministic lower-middle report', () => {
+    const reports = [
+      specSample(17, 0, 'fourth'),
+      specSample(15, 2, 'second'),
+      specSample(16, 1, 'third'),
+      specSample(14, 3, 'first'),
+    ];
+
+    expect(selectMedianRejudgeReport(reports).generated_at).toBe('second');
+    expect(selectMedianRejudgeReport(reports).generated_at).toBe('second');
+  });
+
+  test('a value inside a three-sample range is withinNoise and exits zero', () => {
+    const base = recordObservedNoise([
+      specSample(15, 2, 'low'),
+      specSample(16, 2, 'median'),
+      specSample(17, 1, 'high'),
+    ]);
+    base.matrix = { 'idempotency-key-race': { 'spec-check': 'caught' } };
+    const now = specSample(15, 2, 'now');
+    now.matrix = { 'idempotency-key-race': { 'spec-check': 'missed' } };
+    const diff = diffAgainstBaseline(now, base);
+
+    expect(diff.withinNoise).toEqual([
+      'spec-check: detection 16/19 (0.842) -> 15/19 (0.789) — within observed range 15..17 from 3 samples',
+    ]);
+    expect(diff.regressions).toEqual([]);
+    expect(render(now, diff)).toContain('withinNoise spec-check: detection');
+    expect(exitCodeFor(diff)).toBe(0);
+  });
+
+  test('a value outside the observed range remains a regression', () => {
+    const base = recordObservedNoise([
+      specSample(15, 2, 'low'),
+      specSample(16, 2, 'median'),
+      specSample(17, 1, 'high'),
+    ]);
+    const diff = diffAgainstBaseline(specSample(14, 2, 'now'), base);
+
+    expect(diff.withinNoise).toEqual([]);
+    expect(diff.regressions).toContain('spec-check: detection 16/19 (0.842) -> 14/19 (0.737)');
+    expect(exitCodeFor(diff)).toBe(2);
+  });
+
+  test('a range with fewer than three samples cannot suppress a regression', () => {
+    const base = specSample(17, 2, 'base');
+    base.gates[0].noise_range = {
+      samples: 2,
+      detection: { min: 16, max: 17 },
+      false_positives: { min: 1, max: 2 },
+    };
+    const diff = diffAgainstBaseline(specSample(16, 2, 'now'), base);
+
+    expect(diff.withinNoise).toEqual([]);
+    expect(diff.regressions).toContain('spec-check: detection 17/19 (0.895) -> 16/19 (0.842)');
+    expect(exitCodeFor(diff)).toBe(2);
+  });
+
   test('the same backend pair preserves normal regression comparison', () => {
     const base = reportWith([SPEC_CHECK_SCORED]);
     const worse = { ...SPEC_CHECK_SCORED, caught: 16, missed: 3, detection_rate: 0.842 };

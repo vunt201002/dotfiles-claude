@@ -16,6 +16,7 @@ bun personal/oracle/run.ts                    # cổng deterministic, miễn ph�
 bun personal/oracle/run.ts --matrix           # thêm lưới fixture × cổng
 bun personal/oracle/run.ts --json             # bản máy đọc
 bun personal/oracle/run.ts --write-baseline   # đóng băng lần chạy này làm mốc
+bun personal/oracle/run.ts --rejudge --repeat 5  # chấm lại cùng raw report 5 lượt
 
 ORACLE_LLM=1 bun personal/oracle/run.ts       # thêm spec-check + reviewer
 ORACLE_LLM=1 ORACLE_LLM_LIMIT=2 bun test personal/oracle/   # smoke 2 fixture trước khi chạy đủ
@@ -32,6 +33,21 @@ Override riêng thắng knob chung, knob chung thắng mặc định. Mỗi lầ
 cặp backend của từng cổng và **cảnh báo khi hai cổng dùng gate backend cùng họ**.
 `claude-cli` chỉ được làm judge vì nó đọc cấu hình `~/.claude` thật của operator;
 backend làm gate bắt buộc phải hermetic.
+
+`--repeat` chỉ đi cùng `--rejudge`; bỏ qua thì mặc định là `1`, đúng hành vi cũ.
+Với nhiều lượt, oracle xếp theo `spec-check.caught` tăng dần, hoà thì theo
+`spec-check.false_positives` giảm dần, rồi lấy phần tử giữa; N chẵn lấy phần tử
+dưới-giữa. Nó đóng băng nguyên một lượt có thật, không ghép trung vị từng ô.
+`spec-check` được chọn vì đây là cổng phát hiện chính đang làm ratchet chập chờn;
+đổi lại, `reviewer` trong lượt được chọn có thể không nằm ở trung vị riêng của nó.
+Nếu hai lượt còn hoà cả hai khoá thì thứ tự mẫu ban đầu quyết định, nên cùng đầu
+vào có cùng kết quả.
+
+Mỗi cổng LLM của lượt nhiều mẫu ghi `noise_range`: số mẫu và min/max quan sát của
+`caught` cùng `false_positives`. Khi baseline có ít nhất 3 mẫu, một số mới nằm
+đúng trong dải được in là `withinNoise`, không phải regression và không đổi exit
+code. Ngoài dải vẫn dùng luật regression cũ. Dải 1–2 mẫu không được dập cảnh báo;
+không có lượt lặp thì không ghi dải.
 
 Chi phí đổi chỗ chứ không biến mất: nó ăn vào **hạn mức CLI**, không phải dollar
 theo API. Đo được: ~11s/call, một lần chạy đủ là 19 fixture × 2 cổng × 4 call =
@@ -239,10 +255,11 @@ ngược là tự dựng số.
 | có metric baseline chưa từng đóng băng | `UNFROZEN` | **3** |
 | mẫu số tăng cho metric đã đóng băng | `MEASURED` | 0 |
 | giữ nguyên → so tỉ lệ bình thường | `REGRESSION` / `improved` | 2 / 0 |
+| đổi nhưng nằm trong dải LLM có ≥3 mẫu | `withinNoise` | 0 |
 | hai phía tự mâu thuẫn | `CORRUPT` | **1** |
 
 Ngoài ra: `caveat` (baseline này đóng băng từ một lượt phần lớn fixture lỗi),
-`new fixture` / `DROPPED`. Mười nhãn đều rộng đúng 12 ký tự, có test ghim cột.
+`new fixture` / `DROPPED`. Các nhãn đều rộng đúng 12 ký tự, có test ghim cột.
 
 `exitCodeFor()` là luật **duy nhất**; `run.ts` và mọi test đều đọc nó, không bản sao nào
 trôi được.

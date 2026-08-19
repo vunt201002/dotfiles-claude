@@ -9,6 +9,7 @@
  *   bun personal/oracle/run.ts --json           machine-readable report
  *   bun personal/oracle/run.ts --rejudge        judge the newest saved raw reports
  *   bun personal/oracle/run.ts --rejudge <dir>  judge raw reports from one run
+ *   bun personal/oracle/run.ts --rejudge --repeat N  judge the same raw reports N times
  *   ORACLE_LLM=1 bun personal/oracle/run.ts     add spec-check and reviewer (paid)
  *   ORACLE_ROOT=<dir> bun personal/oracle/run.ts  measure a throwaway copy of the
  *     corpus instead of the installed one, so the tests can run this file end to
@@ -32,8 +33,9 @@ import { backendByName, resolveBackends, type Backend } from './lib/llm-backends
 import {
   createRawReportRun, latestRawReportRun, loadRawReportRun, type LlmGateName, type RawReportRun,
 } from './lib/raw-reports';
+import { rejudgeRepeat } from './lib/rejudge';
 import {
-  buildReport, diffBaseline, writeBaseline, render, renderMatrix, exitCodeFor, unfitToFreeze,
+  buildReport, diffBaseline, writeBaseline, render, renderMatrix, exitCodeFor, recordObservedNoise, unfitToFreeze,
   type DiffContext,
 } from './lib/report';
 
@@ -89,6 +91,7 @@ async function main(): Promise<number> {
   const llm = REJUDGE_REQUESTED ? { enabled: true, reason: '' } : llmGatesEnabled();
   let rawRun: RawReportRun | undefined;
   let reportSource: import('./lib/report').OracleReport['report_source'];
+  const repeatedLlmOutcomes: GateOutcome[][] = [];
   if (REJUDGE_REQUESTED) {
     rawRun = requestedRawReportRun();
     reportSource = {
@@ -96,14 +99,19 @@ async function main(): Promise<number> {
       raw_report_run: rawRun.manifest.source_run,
       raw_report_dir: rawRun.dir,
     };
-    for (const gate of ['spec-check', 'reviewer'] as const) {
-      const judge = resolveBackends(process.env, gate).judge;
-      const availability = judge.available();
-      if (!availability.ok) throw new Error(`${gate} judge backend "${judge.name}" unusable: ${availability.reason}`);
-      const backends = { gate: cachedGateBackend(rawRun, gate), judge };
-      outcomes.push(gate === 'spec-check'
-        ? await runSpecCheckGate(cases, backends, { rejudgeSource: rawRun })
-        : await runReviewerGate(cases, backends, { rejudgeSource: rawRun }));
+    const repeat = rejudgeRepeat(argv);
+    for (let sample = 0; sample < repeat; sample++) {
+      const sampleOutcomes: GateOutcome[] = [];
+      for (const gate of ['spec-check', 'reviewer'] as const) {
+        const judge = resolveBackends(process.env, gate).judge;
+        const availability = judge.available();
+        if (!availability.ok) throw new Error(`${gate} judge backend "${judge.name}" unusable: ${availability.reason}`);
+        const backends = { gate: cachedGateBackend(rawRun, gate), judge };
+        sampleOutcomes.push(gate === 'spec-check'
+          ? await runSpecCheckGate(cases, backends, { rejudgeSource: rawRun })
+          : await runReviewerGate(cases, backends, { rejudgeSource: rawRun }));
+      }
+      repeatedLlmOutcomes.push(sampleOutcomes);
     }
   } else if (llm.enabled) {
     const specBackends = resolveBackends(process.env, 'spec-check');
@@ -125,7 +133,11 @@ async function main(): Promise<number> {
   }
 
   const ratchet = runTscRatchet(cases);
-  const report = buildReport(cases, outcomes, integrity, ratchet, corpus, reportSource);
+  const report = repeatedLlmOutcomes.length > 0
+    ? recordObservedNoise(repeatedLlmOutcomes.map(sample => buildReport(
+      cases, [...outcomes, ...sample], integrity, ratchet, corpus, reportSource,
+    )))
+    : buildReport(cases, outcomes, integrity, ratchet, corpus, reportSource);
   const context: DiffContext = {
     operatorDisabledGates: OPERATOR_SWITCHED_OFF_LLM ? ['spec-check', 'reviewer'] : [],
     operatorReason: llm.reason,
