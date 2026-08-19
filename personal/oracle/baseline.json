@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-18T10:40:48.692Z",
+  "generated_at": "2026-08-19T03:45:45.248Z",
   "corpus": {
     "fixtures": 19,
     "digest": "83737b82e05ac05e"
@@ -79,36 +79,36 @@
     {
       "gate": "spec-check",
       "family": "llm",
-      "available": false,
-      "unavailable_reason": "ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "caught": 0,
-      "missed": 0,
+      "available": true,
+      "unavailable_reason": "",
+      "caught": 15,
+      "missed": 4,
       "n_a": 0,
-      "error": 19,
-      "applicable": 0,
-      "detection_rate": null,
-      "coverage": 0,
-      "false_positives": 0,
+      "error": 0,
+      "applicable": 19,
+      "detection_rate": 0.789,
+      "coverage": 1,
+      "false_positives": 11,
       "fp_errors": 0,
-      "fp_denominator": 0,
-      "fp_rate": null
+      "fp_denominator": 19,
+      "fp_rate": 0.579
     },
     {
       "gate": "reviewer",
       "family": "llm",
-      "available": false,
-      "unavailable_reason": "ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "caught": 0,
-      "missed": 0,
+      "available": true,
+      "unavailable_reason": "",
+      "caught": 13,
+      "missed": 6,
       "n_a": 0,
-      "error": 19,
-      "applicable": 0,
-      "detection_rate": null,
-      "coverage": 0,
-      "false_positives": 0,
+      "error": 0,
+      "applicable": 19,
+      "detection_rate": 0.684,
+      "coverage": 1,
+      "false_positives": 8,
       "fp_errors": 0,
-      "fp_denominator": 0,
-      "fp_rate": null
+      "fp_denominator": 19,
+      "fp_rate": 0.421
     }
   ],
   "matrix": {
@@ -117,152 +117,152 @@
       "lint": "n_a",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "hook-lint-flag-version-drift": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "missed",
+      "reviewer": "missed"
     },
     "hook-gate-without-config": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "missed"
     },
     "guard-denylist-variant": {
       "guard": "missed",
       "lint": "n_a",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "stage-whole-index": {
       "guard": "missed",
       "lint": "n_a",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "worklog-dedupe-key": {
       "guard": "n_a",
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "missed",
+      "reviewer": "caught"
     },
     "symlink-script-path": {
       "guard": "n_a",
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "missed",
+      "reviewer": "missed"
     },
     "sheet-tombstone-resurrection": {
       "guard": "n_a",
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "missed",
+      "reviewer": "missed"
     },
     "sheet-empty-row-footprint": {
       "guard": "n_a",
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "cross-surface-token-drift": {
       "guard": "n_a",
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "missed",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "missed"
     },
     "scope-drift-extra-endpoint": {
       "guard": "n_a",
       "lint": "missed",
       "tsc": "n_a",
       "red-test": "missed",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "missed"
     },
     "twin-mapper-drift": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "pagination-truncation": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "tautological-validation": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "ignored-input-field": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "silent-skip-without-env": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "idempotency-key-race": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "global-queue-drain": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     },
     "scroll-pinned-control": {
       "guard": "n_a",
       "lint": "n_a",
       "tsc": "missed",
       "red-test": "caught",
-      "spec-check": "error",
-      "reviewer": "error"
+      "spec-check": "caught",
+      "reviewer": "caught"
     }
   },
   "details": {
@@ -271,152 +271,152 @@
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "audit produced no output at all (exit 0) — the check silently did nothing",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identified the core planted bug: a hardcoded repo path that fails silently on other machines. Issues #1 and #2 in the report map directly to the detection_hint keywords (hardcode, HOME, path, exit 0, silent). Issue #3 a",
+      "reviewer": "The QA report correctly identified the core defect: the hardcoded repo path check silently exits with 0 when the directory doesn't exist, causing the audit to never run while masking the failure. The report uses the exact evidence line `[ -"
     },
     "hook-lint-flag-version-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "a file with no lint errors was blocked because the CLI rejected the flag before linting",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The QA report completely misses the planted ESLint v9 flag compatibility bug. Instead, it flags two unrelated issues: (1) a file validation concern in the script's argument handling, and (2) an environment variable override capability. Neit",
+      "reviewer": "The QA report identified a filename-based bypass issue ('--help' as a filename), which is a distinct vulnerability unrelated to the planted bug. The planted bug concerns ESLint v9-specific flags (--no-warn-ignored) blocking older installs a"
     },
     "hook-gate-without-config": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "the stop gate reported FAIL on a repo that has no root tsconfig, so every turn is blocked by a check that never ran",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The QA report correctly identified the core twin-path bug in finding #2: 'The \"joy\" path runs without verifying a real configuration exists' directly matches the planted bug's description that the joy branch is unguarded while wishlist has ",
+      "reviewer": "The QA report identifies three issues, none of which match the planted bug. The planted bug (hook-gate-without-config) describes a twin-path gate vulnerability where the joy branch lacks a root-tsconfig check while wishlist is guarded, caus"
     },
     "guard-denylist-variant": {
       "guard": "guard allowed the call (exit 0)",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "untracked work was destroyed with no way back",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identified the core defect: `git clean -fdx` destroys untracked files without protection, bypassing the denylist guard. The report's phrasing ('Untracked and ignored work is permanently deleted') matches the planted bug",
+      "reviewer": "The QA report correctly identified the planted bug: `git clean -fdx` bypassing the denylist and permanently destroying untracked files. The report provides specific evidence (the exact command), describes the impact (permanent removal witho"
     },
     "stage-whole-index": {
       "guard": "guard allowed the call (exit 0)",
       "lint": "fixture is bash, which eslint does not lint",
       "tsc": "fixture is bash, not typescript",
       "red-test": "the deploy commit swept in unrelated files: ci.yml, scratch-token.txt",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identified the planted bug 'stage-whole-index' with specific evidence ('git add -A') matching the detection hint. Finding #1 accurately describes the scope-drift defect of staging the whole index instead of only the CI ",
+      "reviewer": "The report correctly identified the planted bug (stage-whole-index) in finding #1: 'Stages and commits unrelated or sensitive files' directly matches the scope-drift issue where `git add -A` commits the whole index. The evidence cites the e"
     },
     "worklog-dedupe-key": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "one branch showed up as 2 tasks in the standup, each with its own next action",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The QA report identified a different bug: 'first save wins instead of newest save' (oldest-to-newest ordering). This is NOT the planted bug, which is about deduplication on raw branch names leading to duplicate rows when saves use different",
+      "reviewer": "The report correctly identified the core dedupe logic bug: tasks are deduplicated using only the branch name as a key, causing subsequent saves with the same branch to be silently discarded even when nextAction differs. The report provides "
     },
     "symlink-script-path": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
-      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-rXufm4/home/.claude/brain-vault, outside the checkout, so they never get committed",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-IsZjv6/home/.claude/brain-vault, outside the checkout, so they never get committed",
+      "spec-check": "The report identifies a vault path resolution issue, but it misdiagnoses the root cause. It claims the problem is 'hard-coded script layout' and 'differently nested installation', which are generic path resolution concerns. However, the act",
+      "reviewer": "The QA report contains no findings. The planted bug (symlink-script-path) involves a note script that resolves its default vault relative to its symlinked path, causing the vault to be created outside the repository instead of inside it, pr"
     },
     "sheet-tombstone-resurrection": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "a row the user cleared by hand came back as \"Task the user deleted by hand\"",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The QA report identifies two issues (month-tab targeting and tombstone API export) that do not correspond to the planted bug. The planted bug describes a logic error where deleted rows retain hidden page IDs and are resurrected on sync—a da",
+      "reviewer": "The QA report identifies three distinct bugs (repeated PIDs, NaN PIDs, duplicate PIDs) related to task synchronization and mapping logic. None of these describe the ground truth bug: a cleared row retaining its hidden page ID and being resu"
     },
     "sheet-empty-row-footprint": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "a hand-edited row with a blank title but live data in every other column was overwritten by the append",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The QA report accurately identified the planted bug: checking emptiness only in the title column (column A) causes rows with blank titles but live data elsewhere to be treated as empty and overwritten. The evidence is strong—the report prov",
+      "reviewer": "The QA report correctly identified the planted bug: rows with empty titles being silently overwritten. The report captures the core defect (data loss due to blank title detection), provides the specific code evidence (if (!rows[i].title) re"
     },
     "cross-surface-token-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "the test written from the ticket stays green: admin card matches the spec, which is the only surface QC named",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identifies the token drift bug on the preview surface (--space-3 vs spec's --space-4). However, the evidence is incomplete: it documents only ONE surface copy when the planted bug explicitly states the card is duplicate",
+      "reviewer": "The QA report contains no findings whatsoever. The planted bug 'cross-surface-token-drift' describes a medium-severity defect where the same card is duplicated across multiple surfaces (admin, storefront, preview) with one copy drifting to "
     },
     "scope-drift-extra-endpoint": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
       "red-test": "the test written from the ticket stays green: the requested cart summary is correct, which is all the ticket asked for",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identified the planted scope-drift bug by catching both the unrequested /discount/preview endpoint and the telemetry beacon. However, it also flagged a third issue (silently defined discount policy/business rules) that ",
+      "reviewer": "The QA report focuses entirely on input validation and floating-point arithmetic bugs in cart calculations. It completely misses the planted scope-drift bug about shipping unrequested endpoints (/discount/preview) and telemetry. The two rep"
     },
     "twin-mapper-drift": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "an order the bulk sweep invoiced first was built as retail even though the buyer is a company",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identified the core defect: two mapping functions diverge on handling purchasingEntity.company, causing bulk-fetched company orders to be misclassified as non-B2B. The detection matches all key hint keywords (two mapper",
+      "reviewer": "QA report correctly identifies the core defect: mapBulkOrderToDto omits purchasingEntity?.company while the bulk query includes purchasingEntity, causing B2B orders to misclassify. The report demonstrates understanding of the asymmetry betw"
     },
     "pagination-truncation": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "invoice charged 500 against an order total of 600 and every guard passed it",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identified the pagination-truncation bug across all three findings: (1) truncation to 50 lines via slice(0, PAGE_SIZE), (2) under-invoicing due to incomplete line items, and (3) guard bypass because reconciliation compa",
+      "reviewer": "The QA report successfully identified the pagination-truncation bug. Finding #1 directly describes orders with >50 lines being under-invoiced due to truncation at PAGE_SIZE, with specific code evidence (fetchOrderDetail slice). Finding #2 e"
     },
     "tautological-validation": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "a credit note held for crediting too little was transmitted by one retry, because validation compared the document with itself",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The QA report identifies the core defect: retryTransmission validates the credit note against a total computed from the same lines being validated (tautological), making the document always agree with itself. All three findings converge on ",
+      "reviewer": "The report correctly identifies the tautological validation bug: it explicitly states that retryTransmission computes totalAmount from doc.lines and passes it to validateDocument instead of using doc.totalAmount, creating a self-validating "
     },
     "ignored-input-field": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the document demands 87.85 while the customer paid 72.6",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identified the core bug (tax-inclusive orders have VAT applied twice) via findings #2 and #4, which match the ground truth's detection hints ('VAT twice', 'never read', 'taxes_included'). Finding #2 directly describes t",
+      "reviewer": "The report correctly identified the planted bug: taxes_included is ignored in buildUbl, causing VAT to be applied twice on tax-inclusive orders. Finding #1 directly matches the ground truth description with clear evidence (buildUbl ignores "
     },
     "silent-skip-without-env": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "2 integration cases did not run and the suite still reported ok",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The QA report correctly identified the planted bug: silent success when database configuration is missing. The report matches the ground truth on all key points (missing dbUrl, returns 'ok', ran: 0, false success). Evidence quality is high ",
+      "reviewer": "The QA report correctly identified the planted bug 'silent-skip-without-env' as finding #1: missing database configuration falsely passes with zero cases run and TEST_DATABASE_URL unset. The evidence quote directly shows the problematic ear"
     },
     "idempotency-key-race": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the stored credit note is 40 instead of 61 — the losing path spent the idempotency key, so the correct document can never be issued",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "Finding #1 correctly identifies the core race condition: the refund idempotency key is claimed (spent) before the webhook detail fetch completes, and if that fetch fails, the fallback triggers but the key remains consumed, locking out the r",
+      "reviewer": "The report correctly identified the core idempotency-key-race bug across all three findings: the race between claim and fetch/issue operations, the fallback path spending the key before successful fetching, and the non-atomic claim+issue pa"
     },
     "global-queue-drain": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "run-a took 2 rows and run-b took 0 — two concurrent runs eat one another's rows",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report accurately identified the planted bug. Both findings (drainQueue ignoring _runId and QueueStore.takeAll() clearing the entire queue) describe the same root cause: the queue drain mechanism lacks run-scoped isolation, allowing con",
+      "reviewer": "The QA report correctly identified the concurrency bug where drainQueue ignores the _runId parameter and unconditionally calls store.takeAll(), causing cross-run row processing and data loss. The report provides specific code evidence (the "
     },
     "scroll-pinned-control": {
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "core ESLint cannot parse typescript; no typescript-eslint parser is resolvable offline here",
       "tsc": "compiles clean under --strict",
       "red-test": "the close control sits on top of content",
-      "spec-check": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default",
-      "reviewer": "not measured: ORACLE_LLM=1 is not set — the LLM gates are off by default"
+      "spec-check": "The report correctly identifies the core defect: the close control overlaps list content and does not reposition during scrolling. The evidence includes specific rect coordinates (control at {top: 8, bottom: 48} vs first item at {top: 0, bo",
+      "reviewer": "The QA report correctly identified the scroll-pinned control bug, describing it as a fixed rect that fails to move with scrolling content. The report provides specific evidence: the control's fixed 8-48px region relative to the viewport, th"
     }
   },
   "false_positives": {
@@ -429,8 +429,86 @@
     "lint": [],
     "tsc": [],
     "red-test": [],
-    "spec-check": [],
-    "reviewer": []
+    "spec-check": [
+      {
+        "on": "hook-hardcoded-repo-path/fixed",
+        "detail": "The QA report identified the planted bug through two complementary angles. Finding #2 directly targets the hardcoded path issue (BASH_SOURCE, HOME-relative resolution), and Finding #1 describes the consequence: the audit silently exits with"
+      },
+      {
+        "on": "worklog-dedupe-key/fixed",
+        "detail": "The report correctly identifies the planted bug under 'Distinct branch names can be merged' — the normalization logic that strips special characters causes 'feature/a' and 'featurea' to collide, matching the detection hint 'slash|normalize|"
+      },
+      {
+        "on": "symlink-script-path/fixed",
+        "detail": "The QA report correctly identified the symlink-related vault path resolution bug through two key findings: (1) the use of fs.realpathSync(scriptPath) which resolves symlinks, and (2) the hard-coded three-level parent directory climb that ca"
+      },
+      {
+        "on": "sheet-tombstone-resurrection/fixed",
+        "detail": "The report's first finding ('Existing tombstone rows are silently excluded from updates') correctly identifies the planted bug: rows with a hidden pid that are cleared by hand are not updated during sync, allowing the task to be resurrected"
+      },
+      {
+        "on": "sheet-empty-row-footprint/fixed",
+        "detail": "The report correctly identified the planted bug through findings #1 and #2, which together describe the exact defect: checking only column A to determine emptiness (hard-coded columns limitation), then overwriting the entire row when it mis"
+      },
+      {
+        "on": "pagination-truncation/fixed",
+        "detail": "The report correctly identified the pagination truncation bug (finding #3: 'Order lines are silently truncated after 1,050 items' with MAX_EXTRA_PAGES evidence). However, findings #1 and #2 describe legitimate issues with the invoice calcul"
+      },
+      {
+        "on": "tautological-validation/fixed",
+        "detail": "The report identifies the core defect: credit notes are validated against a computed line sum (validateDocument checks lineSum against opts.totalAmount) rather than an independent source, creating a tautological validation where the documen"
+      },
+      {
+        "on": "silent-skip-without-env/fixed",
+        "detail": "The report correctly identifies the planted bug (finding #2: 'Missing database configuration is treated as a non-failure' with evidence of the early return when dbUrl is missing). However, findings #1 and #3 are false positives—they describ"
+      },
+      {
+        "on": "idempotency-key-race/fixed",
+        "detail": "The report correctly identified the core idempotency-key-race bug in finding #3 ('reconciliation failures cannot be retried'), which directly matches the ground truth description: the key is claimed without protection, so if issuance fails,"
+      },
+      {
+        "on": "global-queue-drain/fixed",
+        "detail": "The QA report correctly identified the global-queue-drain bug through two complementary findings: (1) 'Run ownership is not enforced' captures the core issue that any caller can supply another run's ID and process that run's rows, (2) 'A pu"
+      },
+      {
+        "on": "scroll-pinned-control/fixed",
+        "detail": "The QA report correctly identifies the core defect: the close control's rect remains fixed while scrolled content moves behind it, creating overlap. The report cites the exact mechanism (layout() computing `top - scrollTop` while overlapsCo"
+      }
+    ],
+    "reviewer": [
+      {
+        "on": "hook-hardcoded-repo-path/fixed",
+        "detail": "The QA report correctly identifies the core defect: silent failure when repository resolution fails (exit 0 on missing REPO). The evidence cites the exact line [ -d \"$REPO\" ] || exit 0, which matches the planted bug's mechanism. However, th"
+      },
+      {
+        "on": "stage-whole-index/fixed",
+        "detail": "The report correctly identified the planted bug (stage-whole-index) via the `git add -A` mention in finding #1, which matches the detection hint about 'whole index' and scope drift. Finding #1 accurately describes the risk of unstaging/re-s"
+      },
+      {
+        "on": "worklog-dedupe-key/fixed",
+        "detail": "The report correctly identifies the core deduplication bug (normalizeBranchKey removing slashes causes branch name collisions), matching the planted bug about worklog deduping on raw branch names with/without slashes. However, the report ov"
+      },
+      {
+        "on": "pagination-truncation/fixed",
+        "detail": "The report correctly identified the pagination-truncation bug with strong evidence (PAGE_SIZE=50, MAX_EXTRA_PAGES=20, specific code references). Finding #1 matches the ground truth description of orders being silently truncated and invoiced"
+      },
+      {
+        "on": "tautological-validation/fixed",
+        "detail": "The QA report correctly identified the planted tautological-validation bug in item 1, which describes credit-note retries validating against a mutable source-wide refund total (chargedTotalForRetry: reader.refundTotal(doc.sourceKey)). This "
+      },
+      {
+        "on": "silent-skip-without-env/fixed",
+        "detail": "The report correctly identified the planted bug via finding #1 ('empty suite reported as successful'), which maps directly to the silent-skip-without-env defect: when TEST_DATABASE_URL is absent, cases.length === 0 occurs, and the code retu"
+      },
+      {
+        "on": "idempotency-key-race/fixed",
+        "detail": "The QA report correctly identified the planted bug: a race condition where the idempotency key is spent by the webhook fallback path, preventing the reconcile sweep from ever issuing the correct credit note. The report uses precise terminol"
+      },
+      {
+        "on": "scroll-pinned-control/fixed",
+        "detail": "The QA report correctly identifies the core defect: the overlap check fails because the pinned control's rect is fixed while content scrolls beneath it. The report traces the root cause to the clamping logic (Math.max(item.top, HEADER_HEIGH"
+      }
+    ]
   },
   "fp_errors": {
     "guard": [],
@@ -450,10 +528,7 @@
       "detail": "personal/oracle/fixtures/ignored-input-field/ratchet/index.ts(16,3): error TS2741: Property 'taxesIncluded' is missing in type '{ id: string; totalPrice: number; vatRate: number; lines: OrderLine[]; }' but required in type 'OrderInput'."
     }
   },
-  "deterministic_catch_share": 1,
+  "deterministic_catch_share": 0.378,
   "caught_by_any_deterministic": 17,
-  "caught_by_nothing": [
-    "cross-surface-token-drift",
-    "scope-drift-extra-endpoint"
-  ]
+  "caught_by_nothing": []
 }
