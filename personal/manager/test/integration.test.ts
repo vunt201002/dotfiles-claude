@@ -1346,8 +1346,10 @@ describe('bad agent output', () => {
   });
 
   test('a sizing transport refusal tells the operator why no agent ran', async () => {
+    let calls = 0;
     const port: SpawnPort = {
       async run(req) {
+        calls++;
         return {
           output: 'cmux is not answering on its socket. Start the cmux app, or select the sdk runner.',
           outputs: [],
@@ -1368,9 +1370,73 @@ describe('bad agent output', () => {
 
     const task = loadTask(taskId);
     expect(task?.state).toBe('BLOCKED');
+    expect(calls).toBe(2);
+    expect(task?.agents).toHaveLength(0);
     expect(task?.failure_reason).toContain('cmux_unavailable');
     expect(task?.failure_reason).toContain('Start the cmux app');
+    expect(task?.failure_reason).toContain('spawn failed');
+    expect(task?.failure_reason).not.toContain('envelope rejected');
     expect(task?.failure_reason).not.toContain('no JSON object found');
+  });
+
+  test('a success result with no evidence of an agent is a retried spawn failure', async () => {
+    let calls = 0;
+    const port: SpawnPort = {
+      async run(req) {
+        calls++;
+        return {
+          output: '',
+          outputs: [],
+          exitReason: 'success',
+          turnsUsed: 0,
+          costUsd: 0,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: '',
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(calls).toBe(2);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.agents).toHaveLength(0);
+    expect(task?.failure_reason).toContain('spawn failed');
+    expect(task?.failure_reason).not.toContain('envelope rejected');
+  });
+
+  // The retry is a second spawn, so it has to meet the same ceiling the first
+  // one did. Without the check it is the one spend path with no gate, and a run
+  // that already cost most of the budget would quietly double it.
+  test('a retry that the ceiling cannot fund is refused, and the reason says so', async () => {
+    const { port, calls } = makePort((phase) => (phase === 'size' ? envelopeJson() : ''), 4);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(calls.filter((call) => call.phase === 'execute')).toHaveLength(1);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('produced no output');
+    expect(task?.failure_reason).toContain('no retry');
+  });
+
+  test('an agent that returns empty output is retried once and named without blaming parsing', async () => {
+    const { port, calls } = makePort((phase) => (phase === 'size' ? envelopeJson() : ''));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(calls.filter((call) => call.phase === 'execute')).toHaveLength(2);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toBe('execution agent produced no output');
+    expect(task?.failure_reason).not.toContain('parseable verdict');
   });
 
   test('a malformed sizing response cannot erase its agent handle or cost', async () => {
@@ -1418,12 +1484,13 @@ describe('bad agent output', () => {
   });
 
   test('an unparseable envelope blocks instead of routing on a guess', async () => {
-    const { port } = makePort((phase) => (phase === 'size' ? 'I could not size this.' : PASS_VERDICT));
+    const { port, calls } = makePort((phase) => (phase === 'size' ? 'I could not size this.' : PASS_VERDICT));
     const manager = newOrchestrator(port);
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
     expect(loadTask(taskId)?.state).toBe('BLOCKED');
     expect(loadTask(taskId)?.failure_reason).toContain('envelope rejected');
+    expect(calls.filter((call) => call.phase === 'size')).toHaveLength(1);
   });
 
   test('a missing verdict block is a failure, not a pass', async () => {

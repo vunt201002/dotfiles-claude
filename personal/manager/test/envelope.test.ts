@@ -91,6 +91,21 @@ describe('validateEnvelope', () => {
     expect(validateEnvelope(null).ok).toBe(false);
     expect(validateEnvelope([1, 2]).ok).toBe(false);
   });
+
+  test('accepts boolean sensitive markers only in the conservative direction', () => {
+    const sensitive = validateEnvelope({ ...goodEnvelope({ lane: 'trivial' }), touches_sensitive: true });
+    expect(sensitive.ok).toBe(true);
+    expect(sensitive.envelope?.touches_sensitive).toBe('unspecified sensitive surface');
+    const routed = applyRouterOverrides(sensitive.envelope!);
+    expect(routed.envelope.lane).toBe('bug-lon');
+
+    const clear = validateEnvelope({ ...goodEnvelope(), touches_sensitive: false });
+    expect(clear.ok).toBe(true);
+    expect(clear.envelope?.touches_sensitive).toBeNull();
+
+    expect(validateEnvelope({ ...goodEnvelope(), touches_sensitive: 1 }).ok).toBe(false);
+    expect(validateEnvelope({ ...goodEnvelope(), touches_sensitive: ['auth'] }).ok).toBe(false);
+  });
 });
 
 describe('router overrides', () => {

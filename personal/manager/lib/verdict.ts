@@ -85,6 +85,19 @@ function stringList(raw: unknown): string[] {
 
 /** Never throws. Unparseable output becomes a `fail` verdict with the reason said out loud. */
 export function parseVerdict(output: string): AgentVerdict {
+  if (output.trim() === '') {
+    return {
+      verdict: 'fail',
+      reason: 'agent produced no output',
+      gates: [],
+      findings: [],
+      assumptions: [],
+      questions: [],
+      irreversible: [],
+      advisories: [],
+      root_cause: '',
+    };
+  }
   const raw = extractJsonBlock(output);
   if (!raw || typeof raw !== 'object') {
     return {

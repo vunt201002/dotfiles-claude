@@ -149,9 +149,10 @@ export function validateEnvelope(raw: unknown): ValidationResult {
   if (
     touchesSensitive !== undefined &&
     touchesSensitive !== null &&
+    typeof touchesSensitive !== 'boolean' &&
     (typeof touchesSensitive !== 'string' || touchesSensitive.trim() === '')
   ) {
-    errors.push('touches_sensitive: must be a non-empty string or null');
+    errors.push('touches_sensitive: must be a non-empty string, boolean, or null');
   }
 
   if (errors.length > 0) return { ok: false, errors, envelope: null, overrides: [] };
@@ -164,7 +165,12 @@ export function validateEnvelope(raw: unknown): ValidationResult {
     uncertainty,
     lane,
     why,
-    touches_sensitive: typeof touchesSensitive === 'string' ? touchesSensitive : null,
+    touches_sensitive:
+      touchesSensitive === true
+        ? 'unspecified sensitive surface'
+        : typeof touchesSensitive === 'string'
+          ? touchesSensitive
+          : null,
     oracle_available: oracleAvailable,
     oracle_kind: oracleKind,
     needs_human: needsHuman,

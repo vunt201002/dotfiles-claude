@@ -548,6 +548,11 @@ describe('what lands in the gate log', () => {
     const report = reportFromVerdict('spec-check', parseVerdict('I could not do it'));
     expect(report.verdict).toBe('error');
   });
+
+  test('empty output has its own verdict reason and never throws', () => {
+    expect(parseVerdict('').reason).toBe('agent produced no output');
+    expect(parseVerdict('   ').verdict).toBe('fail');
+  });
 });
 
 describe('judges only run when there is something to judge', () => {

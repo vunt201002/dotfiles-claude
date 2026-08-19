@@ -110,6 +110,35 @@ function spawnFailureReason(phase: 'sizing' | 'execution', run: SpawnResult): st
   return `${phase} spawn failed (${run.exitReason})${detail ? `: ${detail}` : ''}`;
 }
 
+type TransientRunFailure = 'spawn' | 'empty-output' | null;
+
+function agentStarted(run: SpawnResult): boolean {
+  return (
+    run.sessionId.trim() !== '' ||
+    run.turnsUsed > 0 ||
+    run.costUsd > 0 ||
+    run.outputs.some((output) => output.trim() !== '')
+  );
+}
+
+function transientRunFailure(run: SpawnResult): TransientRunFailure {
+  if (transportFailed(run.exitReason)) return 'spawn';
+  const hasOutput = run.outputs.some((output) => output.trim() !== '');
+  if (hasOutput) return null;
+  return agentStarted(run) ? 'empty-output' : 'spawn';
+}
+
+function transientFailureReason(
+  phase: 'sizing' | 'execution',
+  run: SpawnResult,
+  failure: Exclude<TransientRunFailure, null>,
+): string {
+  if (failure === 'empty-output') return `${phase} agent produced no output`;
+  const detail = run.output.trim();
+  if (detail) return spawnFailureReason(phase, run);
+  return `${phase} spawn failed (${run.exitReason}): transport returned no evidence that an agent started`;
+}
+
 function parseRunEnvelope(run: SpawnResult, roundTwoFail: boolean) {
   for (const output of run.outputs ?? []) {
     const parsed = parseEnvelope(output, { roundTwoFail });
@@ -242,9 +271,20 @@ export class Orchestrator {
       await this.parkForApproval(task, APPROVAL_BUDGET, budget.reason);
       return false;
     }
-    const run = await this.spawn(task, 'main', sizingPrompt(task.project, task.issue), this.spawnPort);
-    if (transportFailed(run.exitReason)) {
-      await this.terminate(task, 'BLOCKED', spawnFailureReason('sizing', run));
+    const prompt = sizingPrompt(task.project, task.issue);
+    let run = await this.spawn(task, 'main', prompt, this.spawnPort);
+    let transient = transientRunFailure(run);
+    if (transient) {
+      const afforded = this.retryAfforded(task);
+      if (!afforded.ok) {
+        await this.terminate(task, 'BLOCKED', `${transientFailureReason('sizing', run, transient)}; no retry: ${afforded.reason}`);
+        return false;
+      }
+      run = await this.spawn(loadTask(task.id) ?? task, 'main', prompt, this.spawnPort);
+      transient = transientRunFailure(run);
+    }
+    if (transient) {
+      await this.terminate(task, 'BLOCKED', transientFailureReason('sizing', run, transient));
       return false;
     }
     const parsed = parseRunEnvelope(run, this.roundTwoFail.has(task.id));
@@ -317,14 +357,25 @@ export class Orchestrator {
     task.attempt_started_at = new Date().toISOString();
     saveTask(task);
     const priorFailure = task.failure_reason || 'unspecified';
-    const run = await this.spawn(
+    const prompt = executePrompt(envelope, task.attempt, priorFailure);
+    let run = await this.spawn(
       task,
       'subagent',
-      executePrompt(envelope, task.attempt, priorFailure),
+      prompt,
       this.spawnPort,
     );
-    if (transportFailed(run.exitReason)) {
-      await this.terminate(task, 'BLOCKED', spawnFailureReason('execution', run));
+    let transient = transientRunFailure(run);
+    if (transient) {
+      const afforded = this.retryAfforded(task);
+      if (!afforded.ok) {
+        await this.terminate(task, 'BLOCKED', `${transientFailureReason('execution', run, transient)}; no retry: ${afforded.reason}`);
+        return false;
+      }
+      run = await this.spawn(loadTask(task.id) ?? task, 'subagent', prompt, this.spawnPort);
+      transient = transientRunFailure(run);
+    }
+    if (transient) {
+      await this.terminate(task, 'BLOCKED', transientFailureReason('execution', run, transient));
       return false;
     }
     const verdict = parseVerdictCandidates(run.outputs, run.output);
@@ -665,14 +716,16 @@ export class Orchestrator {
     const result = await port.run(req);
     const current = loadTask(task.id) ?? task;
     current.run_started_at = startedAt;
-    current.agents.push({
-      role,
-      model: result.model || modelAlias,
-      session: result.sessionId,
-      status: result.exitReason === 'success' ? 'done' : 'dead',
-      started_at: startedAt,
-      ended_at: new Date().toISOString(),
-    });
+    if (agentStarted(result)) {
+      current.agents.push({
+        role,
+        model: result.model || modelAlias,
+        session: result.sessionId,
+        status: result.exitReason === 'success' ? 'done' : 'dead',
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+      });
+    }
     current.cost_usd_actual = round6(current.cost_usd_actual + result.costUsd);
     if (!result.costKnown) current.cost_unmeasured_runs = unmeasuredRuns(current) + 1;
     if (result.worktreeCreated) current.worktree_created = true;
@@ -952,6 +1005,16 @@ export class Orchestrator {
    * one: codex spends CLI quota, so those runs are invisible to every figure
    * here however large they grow.
    */
+  /**
+   * A retry is a second spawn, so it goes through the same gate the first one
+   * did. Without this the transient-failure retry is the one spend path that
+   * never meets a ceiling, and a run that already cost most of the budget could
+   * double it.
+   */
+  private retryAfforded(task: TaskRecord): { ok: boolean; reason: string } {
+    return this.preflightBudget(loadTask(task.id) ?? task);
+  }
+
   private preflightBudget(task: TaskRecord, cfg: ManagerConfig = loadConfig()): { ok: boolean; reason: string } {
     const ceiling = checkTaskCeiling(task);
     if (!ceiling.ok) return { ok: false, reason: ceiling.reason };
