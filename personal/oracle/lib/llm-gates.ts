@@ -11,6 +11,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { outcomeJudgePrompt } from '../../../test/helpers/llm-judge';
 import type { FixtureCase } from './cases';
 import type { GateOutcome } from './gates';
@@ -19,7 +20,10 @@ import {
   readRawReport, writeRawReport, type CodeVariant, type LlmGateName, type RawReportRun,
 } from './raw-reports';
 
-type ReviewCase = Pick<FixtureCase, 'bug' | 'entryName'>;
+type ReviewCase = Pick<FixtureCase, 'bug' | 'entryName'> & Partial<Pick<FixtureCase, 'buggyDir' | 'fixedDir'>>;
+type FixtureReviewCase = ReviewCase & Pick<FixtureCase, 'buggyDir' | 'fixedDir'>;
+
+const FIX_DIFF_CHARACTER_LIMIT = 24_000;
 
 export interface LlmGateBackends {
   gate: Backend;
@@ -81,9 +85,29 @@ export function backendLabel(): string {
   }).join('; ');
 }
 
-function readVariant(c: FixtureCase, variant: 'buggy' | 'fixed'): string {
-  const file = path.join(c.dir, variant, c.entryName);
+function readVariant(c: FixtureReviewCase, variant: 'buggy' | 'fixed'): string {
+  const file = path.join(variant === 'buggy' ? c.buggyDir : c.fixedDir, c.entryName);
   return fs.readFileSync(file, 'utf-8');
+}
+
+/** Builds the fixed-side evidence while preserving diff's 0/1/2 exit contract. */
+export function buildFixDiff(c: FixtureReviewCase): string {
+  const result = spawnSync('diff', ['-u', c.buggyDir, c.fixedDir], {
+    encoding: 'utf-8',
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (result.error) throw new Error(`could not diff buggy and fixed directories: ${result.error.message}`);
+  const exitCode = result.status ?? -1;
+  if (exitCode >= 2 || exitCode < 0) {
+    const detail = (result.stderr || result.stdout || 'no diagnostic output').trim();
+    throw new Error(`diff -u failed with exit ${exitCode}: ${detail}`);
+  }
+  const diff = result.stdout ?? '';
+  if (diff.trim() === '') {
+    throw new Error(`fixture ${c.bug.id} has identical buggy and fixed directories; fix diff is empty`);
+  }
+  if (diff.length <= FIX_DIFF_CHARACTER_LIMIT) return diff;
+  return `${diff.slice(0, FIX_DIFF_CHARACTER_LIMIT)}\n[FIX DIFF TRUNCATED at ${FIX_DIFF_CHARACTER_LIMIT} of ${diff.length} characters]`;
 }
 
 interface FindingsReport {
@@ -134,7 +158,7 @@ Return an empty findings array if you would approve this as is.`);
   return renderReport(out);
 }
 
-async function scoreOne(c: ReviewCase, report: string, judge: Backend, variant: CodeVariant = 'buggy') {
+async function scoreOne(c: ReviewCase, report: string, judge: Backend, variant: CodeVariant = 'buggy', fixDiff?: string) {
   const groundTruth = {
     total_bugs: 1,
     bugs: [{
@@ -145,7 +169,7 @@ async function scoreOne(c: ReviewCase, report: string, judge: Backend, variant: 
       detection_hint: c.bug.detection_hint,
     }],
   };
-  return judge.callJson<{ detected: string[]; reasoning: string }>(outcomeJudgePrompt(groundTruth, report, variant));
+  return judge.callJson<{ detected: string[]; reasoning: string }>(outcomeJudgePrompt(groundTruth, report, variant, fixDiff));
 }
 
 export interface LlmGateRunOptions {
@@ -226,8 +250,9 @@ async function runLlmGate(
     }
 
     try {
+      const fixDiff = buildFixDiff(c);
       const report = await obtainReport(c, readVariant(c, 'fixed'), 'fixed');
-      const scored = await scoreOne(c, report, judgeBackend, 'fixed');
+      const scored = await scoreOne(c, report, judgeBackend, 'fixed', fixDiff);
       out.fp_denominator++;
       if (scored.detected.includes(c.bug.id)) {
         out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: scored.reasoning.slice(0, 240) });

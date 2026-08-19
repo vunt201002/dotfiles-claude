@@ -8,7 +8,7 @@ import {
   APPARATUS_DIR, FIXTURES_DIR, SHARED_FIXTURE_HARNESS, type CorpusFingerprint, type FixtureCase,
 } from './lib/cases';
 import { verifyFixtures, runRedTestGate, runGuardGate, runLintGate, runTscGate, runTscRatchet, type Verdict } from './lib/gates';
-import { backendLabel, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skippedLlmGate } from './lib/llm-gates';
+import { backendLabel, buildFixDiff, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skippedLlmGate } from './lib/llm-gates';
 import {
   backendFamily, claudeCliBackend, requireBackendRole, resolveBackends, type Backend,
 } from './lib/llm-backends';
@@ -1872,12 +1872,24 @@ Rules:
     expect(outcomeJudgePrompt(groundTruth, report)).toBe(expected);
   });
 
-  test('the fixed prompt states repaired code, requires a remains-present claim, and rejects keyword-only matching', () => {
-    const prompt = outcomeJudgePrompt(groundTruth, 'The report.', 'fixed');
+  test('the fixed prompt includes the fix diff and distinguishes unchanged evidence from a remains-present claim', () => {
+    const fixDiff = '-const repo = hardcoded;\n+const repo = discovered;';
+    const prompt = outcomeJudgePrompt(groundTruth, 'The report.', 'fixed', fixDiff);
 
     expect(prompt).toContain('HAS ALREADY BEEN FIXED');
     expect(prompt).toContain('only if the report claims the defect remains');
     expect(prompt).toContain('A keyword match alone is never enough');
+    expect(prompt).toContain(fixDiff);
+    expect(prompt).toContain('Code present in both variants is not part of the fix');
+    expect(prompt).toContain('only quotes unchanged code is not, by itself');
+    expect(prompt).toContain('independently asserts that the same defect still remains, count it as detected');
+  });
+
+  test('the buggy prompt ignores a supplied fix diff', () => {
+    const prompt = outcomeJudgePrompt(groundTruth, 'The report.', 'buggy', 'MUST_NOT_REACH_BUGGY_PROMPT');
+
+    expect(prompt).not.toContain('MUST_NOT_REACH_BUGGY_PROMPT');
+    expect(prompt).not.toContain('FIX DIFF');
   });
 
   test('LLM scoring receives buggy prompts for canary and detection, then a fixed prompt for false positives', async () => {
@@ -1898,6 +1910,52 @@ Rules:
     expect(prompts[0]).not.toContain('HAS ALREADY BEEN FIXED');
     expect(prompts[1]).not.toContain('HAS ALREADY BEEN FIXED');
     expect(prompts[2]).toContain('HAS ALREADY BEEN FIXED');
+    expect(prompts[0]).not.toContain('FIX DIFF');
+    expect(prompts[1]).not.toContain('FIX DIFF');
+    expect(prompts[2]).toContain('FIX DIFF');
+    expect(prompts[2]).toContain('-  let total: number;');
+  });
+
+  test('identical buggy and fixed directories produce a fixed-side error instead of a miss', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'idempotency-key-race')!;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-empty-fix-diff-'));
+    const buggyDir = path.join(root, 'buggy');
+    const fixedDir = path.join(root, 'fixed');
+    try {
+      fs.mkdirSync(buggyDir);
+      fs.mkdirSync(fixedDir);
+      fs.writeFileSync(path.join(buggyDir, source.entryName), 'export const identical = true;\n');
+      fs.writeFileSync(path.join(fixedDir, source.entryName), 'export const identical = true;\n');
+      const fixture = { ...source, buggyDir, fixedDir };
+      const outcome = await runSpecCheckGate([fixture], {
+        gate: backend(() => ({ findings: [{ title: 'Finding', why_it_matters: 'Impact.', evidence: 'Symbol.' }] })),
+        judge: backend(prompt => {
+          const id = prompt.includes('llm-canary-unauthenticated-delete-all-customers')
+            ? 'llm-canary-unauthenticated-delete-all-customers'
+            : source.bug.id;
+          return { detected: [id], reasoning: 'Scored.' };
+        }),
+      });
+
+      expect(outcome.cells[source.bug.id].verdict).toBe('caught');
+      expect(outcome.cells[source.bug.id].verdict).not.toBe('missed');
+      expect(outcome.fp_denominator).toBe(0);
+      expect(outcome.fp_errors).toEqual([{
+        on: `${source.bug.id}/fixed`,
+        detail: `spec-check failed on fixed: fixture ${source.bug.id} has identical buggy and fixed directories; fix diff is empty`,
+      }]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('diff exit 1 means a non-empty fix diff and does not throw', async () => {
+    const source = (await loadCases()).find(c => c.bug.id === 'hook-hardcoded-repo-path')!;
+    const raw = spawnSync('diff', ['-u', source.buggyDir, source.fixedDir], { encoding: 'utf-8' });
+
+    expect(raw.status).toBe(1);
+    expect(() => buildFixDiff(source)).not.toThrow();
+    expect(buildFixDiff(source)).toContain('-REPO="$HOME/Project/github/dotfiles-claude/personal"');
   });
 
   test('hint audit names a fixture and token found only in fixed code', () => {
