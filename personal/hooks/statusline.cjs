@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Claude Code `statusLine` (settings.json key, KHONG phai hook).
- * Hop dong: doc JSON session tren stdin, in DUNG 1 dong ra stdout.
+ * Hop dong: doc JSON session tren stdin, in nhom NOI (worktree + branch) roi nhom
+ * TRANG THAI (ten session + context + rate limit). So dong CO GIAN theo be ngang pane:
+ * pane rong thi 2 dong, pane hep thi tach ra them chu khong bao gio cat chu bang `…`.
  * Bat buoc: khong bao gio throw va khong bao gio cham — script fail hoac
  * chay lau deu lam thanh status trong tron, va no chay lai rat thuong xuyen.
  */
@@ -23,7 +25,8 @@ const RED = '\x1b[31m';
 const CONTEXT_COMPACT_THRESHOLD = 80;
 const BAR_CELLS = 10;
 const NARROW_BAR_CELLS = 6;
-const BRANCH_FLOOR = 12;
+const MAX_PATH_LINES = 3;
+const MAX_IDENTITY_LINES = 2;
 const FALLBACK_COLUMNS = 80;
 const RESERVED_COLUMNS = 3;
 const GITDIR_WALK_LIMIT = 40;
@@ -38,20 +41,21 @@ const IN_PROGRESS = [
 ];
 
 /**
- * Moi profile la mot muc chi tiet, giau xuong ngheo. Thu tu nay la thu tu HY SINH:
- * cai nao dung truoc thi mat truoc. Scale/model di truoc vi chung khong doi theo
- * thoi gian va giong het nhau o moi pane; % context va rate limit khong bao gio bi bo.
+ * Moi profile la mot muc chi tiet cua DONG TRANG THAI, giau xuong ngheo. Thu tu nay la
+ * thu tu HY SINH: cai nao dung truoc thi mat truoc.
+ *
+ * Chi nhung thu KHONG mang thong tin rieng cua pane moi duoc nam trong bang nay — ten
+ * model va thanh bar giong het nhau o moi pane, bo di khong mat gi. Ten session, duong
+ * dan, branch thi KHONG bao gio bi cat cho vua: het cho thi xuong dong, vi mot cai ten
+ * cut duoi (`Brief MR84 re-rev…`) chinh la thu can doc ma khong doc duoc.
  */
 const PROFILES = [
-  { model: true, id: Infinity, bar: BAR_CELLS, scale: true, tight: false, branch: true },
-  { model: true, id: 30, bar: BAR_CELLS, scale: false, tight: false, branch: true },
-  { model: true, id: 24, bar: NARROW_BAR_CELLS, scale: false, tight: false, branch: true },
-  { model: true, id: 20, bar: NARROW_BAR_CELLS, scale: false, tight: true, branch: true },
-  { model: false, id: 20, bar: NARROW_BAR_CELLS, scale: false, tight: true, branch: true },
-  { model: false, id: 20, bar: 0, scale: false, tight: true, branch: true },
-  { model: false, id: 20, bar: 0, scale: false, tight: true, branch: false },
-  { model: false, id: 12, bar: 0, scale: false, tight: true, branch: false },
-  { model: false, id: 0, bar: 0, scale: false, tight: true, branch: false },
+  { model: true, bar: BAR_CELLS, scale: true, tight: false },
+  { model: true, bar: BAR_CELLS, scale: false, tight: false },
+  { model: true, bar: NARROW_BAR_CELLS, scale: false, tight: false },
+  { model: true, bar: NARROW_BAR_CELLS, scale: false, tight: true },
+  { model: false, bar: NARROW_BAR_CELLS, scale: false, tight: true },
+  { model: false, bar: 0, scale: false, tight: true },
 ];
 
 function readSession() {
@@ -122,13 +126,6 @@ function clampVisible(text, max) {
   return kept + RESET;
 }
 
-function truncateEnd(text, max) {
-  const chars = Array.from(text);
-  if (max <= 0) return '';
-  if (chars.length <= max) return text;
-  return chars.slice(0, max - 1).join('') + '…';
-}
-
 /** Giu dau va duoi: duoi la phan phan biet nhanh, dau la loai nhanh (fix/, feat/). */
 function middleTruncate(text, max) {
   const chars = Array.from(text);
@@ -138,6 +135,119 @@ function middleTruncate(text, max) {
   const head = Math.max(1, Math.floor((max - 1) * 0.45));
   const tail = max - 1 - head;
   return chars.slice(0, head).join('') + '…' + chars.slice(chars.length - tail).join('');
+}
+
+/** Duong dan hien thi: `~` cho home, va luon dung `/` ke ca tren Windows. */
+function tildePath(dir) {
+  const abs = String(dir || '');
+  const slashed = abs.split(path.sep).join('/');
+  const home = (os.homedir() || '').split(path.sep).join('/');
+  if (!home) return slashed;
+  if (slashed === home) return '~';
+  return slashed.startsWith(home + '/') ? '~' + slashed.slice(home.length) : slashed;
+}
+
+/** Chia deu theo be ngang, khong quan tam `/` — luoi cuoi khi cat theo `/` khong du cho. */
+function hardWrap(text, room) {
+  const chars = Array.from(text);
+  const lines = [];
+  for (let i = 0; i < chars.length; i += room) lines.push(chars.slice(i, i + room).join(''));
+  return lines.length ? lines : [''];
+}
+
+/**
+ * Duong dan KHONG bao gio bi cat bang `…` khi con vua trong MAX_PATH_LINES dong — het cho
+ * thi xuong dong, cat o dau `/` va de dau `/` o cuoi dong tren (dong bat dau bang `/` nhin
+ * nhu mot path tuyet doi khac). Ly do: `…` an dung doan phan biet worktree, ma do la ly do
+ * duy nhat dong nay ton tai.
+ *
+ * Cat theo `/` bo phi phan duoi moi dong, nen pane cuc hep co the tran qua so dong cho
+ * phep; luc do chia deu (`hardWrap`) — xau hon nhung khong mat mot ky tu nao. Chi khi ca
+ * hai deu khong vua moi chiu cat, va cat tu DAU: duoi la phan phan biet.
+ */
+function wrapPath(display, room) {
+  if (room <= 0) return [''];
+
+  const segments = display.split('/');
+  const tokens = segments
+    .map((seg, i) => (i < segments.length - 1 ? `${seg}/` : seg))
+    .filter((token) => token !== '');
+
+  const lines = [];
+  let current = '';
+  for (const token of tokens) {
+    if (!current) current = token;
+    else if (Array.from(current + token).length <= room) current += token;
+    else {
+      lines.push(current);
+      current = token;
+    }
+    while (Array.from(current).length > room) {
+      const chars = Array.from(current);
+      lines.push(chars.slice(0, room).join(''));
+      current = chars.slice(room).join('');
+    }
+  }
+  if (current) lines.push(current);
+  if (!lines.length) return [''];
+  if (lines.length <= MAX_PATH_LINES) return lines;
+
+  const packed = hardWrap(display, room);
+  if (packed.length <= MAX_PATH_LINES) return packed;
+
+  const kept = packed.slice(-MAX_PATH_LINES);
+  kept[0] = '…' + Array.from(kept[0]).slice(1).join('');
+  return kept;
+}
+
+/**
+ * Ten session cung khong bi cat: dai qua be ngang pane thi xuong dong o khoang trang.
+ * Giu may dong DAU — ten doc tu trai sang, phan dau moi la phan nhan ra pane nao.
+ */
+function wrapWords(text, room, maxLines) {
+  if (room <= 0) return [];
+  const words = String(text).split(' ').filter(Boolean);
+
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    if (!current) current = word;
+    else if (Array.from(`${current} ${word}`).length <= room) current += ` ${word}`;
+    else {
+      lines.push(current);
+      current = word;
+    }
+    while (Array.from(current).length > room) {
+      const chars = Array.from(current);
+      lines.push(chars.slice(0, room).join(''));
+      current = chars.slice(room).join('');
+    }
+  }
+  if (current) lines.push(current);
+  if (lines.length <= maxLines) return lines;
+
+  const kept = lines.slice(0, maxLines);
+  kept[maxLines - 1] = clampVisible(lines.slice(maxLines - 1).join(' '), room);
+  return kept;
+}
+
+/** Chi doan cuoi sang len: quet 4 pane thi mat bam vao ten worktree, khong bam vao `~/Project`. */
+function paintPath(text) {
+  const cut = text.lastIndexOf('/');
+  if (cut < 0) return text;
+  return `${DIM}${text.slice(0, cut + 1)}${RESET}${text.slice(cut + 1)}`;
+}
+
+/** Be rong lon nhat con vua, do tren dong DA RENDER — cong tay chi phi separator la sai mot ky tu. */
+function widest(max, fits) {
+  let low = 0;
+  let high = max;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (fits(mid)) low = mid;
+    else high = mid - 1;
+  }
+  return low;
 }
 
 /**
@@ -348,63 +458,77 @@ function renderLimits(limits, profile) {
   return ` ${DIM}·${RESET} ` + parts.join(`${DIM} · ${RESET}`);
 }
 
-function compose(parts, profile, branchWidth) {
+/** Ten worktree o dong CUOI phai sang; may dong tren chi la duong di, de mo het. */
+function paintPathLines(lines) {
+  return lines.map((line, i) => (i === lines.length - 1 ? paintPath(line) : `${DIM}${line}${RESET}`));
+}
+
+/** Branch chi bi cat khi mot minh no cung khong vua — cat GIUA de giu ca loai nhanh lan phan phan biet. */
+function fitGit(info, room) {
+  const full = renderGit(info, info && info.branch ? Array.from(info.branch).length : 0);
+  if (!full || visibleWidth(full) <= room) return full;
+  const width = widest(Array.from(info.branch).length, (w) => visibleWidth(renderGit(info, w)) <= room);
+  return renderGit(info, width);
+}
+
+/**
+ * Dong NOI: dang o worktree nao, tren branch nao. Duong dan la thu duy nhat tra loi
+ * "mo cai nao de doc code" — bon lane cua mot repo co the cung ten session mau ma khac
+ * checkout, va cung co the KHAC ten session ma cung mot checkout.
+ *
+ * Branch di theo duong dan tren cung mot dong khi con cho; het cho thi xuong dong rieng
+ * chu khong ai bi cat.
+ */
+function placeLines(display, info, room) {
+  const git = fitGit(info, room);
+  const lines = paintPathLines(wrapPath(display, room));
+  if (!git) return lines;
+
+  const merged = `${lines[lines.length - 1]} ${git}`;
+  if (visibleWidth(merged) <= room) {
+    lines[lines.length - 1] = merged;
+    return lines;
+  }
+  lines.push(clampVisible(git, room));
+  return lines;
+}
+
+function compose(parts, profile, withIdentity) {
   const left = [];
   if (profile.model && parts.model) left.push(parts.model);
-  const identity = truncateEnd(parts.identity, profile.id);
-  if (identity) left.push(identity);
-
-  const gitText = renderGit(parts.git, profile.branch ? branchWidth : 0);
-  if (gitText) left.push(gitText);
+  if (withIdentity && parts.identity) left.push(parts.identity);
 
   return (
     left.join(' ') + renderContext(parts.context, profile, left.length > 0) + renderLimits(parts.limits, profile)
   );
 }
 
-/** Be ngang cua branch la bien dan hoi: no an het cho con thua o profile giau nhat con vua. */
-function widestBranchThatFits(parts, profile, max, room) {
-  let low = 0;
-  let high = max;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (visibleWidth(compose(parts, profile, mid)) <= room) low = mid;
-    else high = mid - 1;
-  }
-  return low;
-}
-
 /**
  * Claude Code export COLUMNS rieng cho tung pane, va tu cat duoi dong khi tran —
  * nghia la thu quan trong nhat (context, rate limit) nam cuoi dong se chet dau tien.
- * Nen o day tu cat lay: chon profile giau nhat ma van vua, va khong bao gio de tran.
+ * Nen o day tu cat lay: tut het thang hy sinh de giu ten session NGUYEN VEN tren mot
+ * dong; van khong vua thi ten session xuong dong rieng va thang hy sinh chay lai tu dau
+ * cho phan so — luc do thanh bar va ten model thuong quay lai duoc.
  */
-function fit(parts) {
-  const room = budget();
-  const fullBranch = parts.git ? Array.from(parts.git.branch).length : 0;
-
-  let fallback = null;
+function statusLines(parts, room) {
   for (const profile of PROFILES) {
-    const wantsBranch = profile.branch && fullBranch > 0;
-    const branchWidth = wantsBranch ? widestBranchThatFits(parts, profile, fullBranch, room) : 0;
-    if (!wantsBranch || branchWidth >= Math.min(fullBranch, BRANCH_FLOOR)) {
-      const line = compose(parts, profile, branchWidth);
-      if (visibleWidth(line) <= room) return line;
-    }
-    if (!fallback) {
-      const bare = compose(parts, profile, 0);
-      if (visibleWidth(bare) <= room) fallback = bare;
-    }
+    const line = compose(parts, profile, true);
+    if (visibleWidth(line) <= room) return [line];
   }
 
-  const last = PROFILES[PROFILES.length - 1];
-  return clampVisible(fallback || compose(parts, last, 0), room);
+  const numbers = PROFILES.map((profile) => compose(parts, profile, false)).find(
+    (line) => visibleWidth(line) <= room
+  );
+  const last =
+    numbers === undefined ? clampVisible(compose(parts, PROFILES[PROFILES.length - 1], false), room) : numbers;
+  return wrapWords(parts.identity, room, MAX_IDENTITY_LINES).concat(last);
 }
 
 /**
  * Do tren 10 pane dang chay: session_name khac nhau ca 10, con ten thu muc chi khac 6
  * (bon pane wishlist trung nhau y het). Nen no la thu dinh danh pane, dir chi la du phong
- * cho luc Claude Code chua kip dat ten. Strip control char vi hop dong la DUNG 1 dong.
+ * cho luc Claude Code chua kip dat ten. Strip control char vi mot ky tu `\n` lot vao la
+ * de ra mot dong khong ai kiem soat be ngang.
  */
 function sessionLabel(session, cwd) {
   const raw = typeof session.session_name === 'string' ? session.session_name : '';
@@ -418,6 +542,7 @@ function sessionLabel(session, cwd) {
 function main() {
   const session = readSession();
   const cwd = session.workspace?.current_dir || session.cwd || process.cwd();
+  const room = budget();
 
   const name = String(session.model?.display_name || '?').replace(/\s*\([^)]*\)\s*$/, '');
   const effort = session.effort?.level ? `${DIM}·${session.effort.level}${RESET}` : '';
@@ -426,16 +551,20 @@ function main() {
   const parts = {
     model: `${DIM}${name}${RESET}${effort}${fast}`,
     identity: sessionLabel(session, cwd),
-    git: gitInfo(cwd),
     context: contextInfo(session),
     limits: pooledLimits(session),
   };
 
-  process.stdout.write(fit(parts) + '\n');
+  const lines = placeLines(tildePath(cwd), gitInfo(cwd), room).concat(statusLines(parts, room));
+  process.stdout.write(`${lines.join('\n')}\n`);
 }
 
-try {
-  main();
-} catch {
-  process.stdout.write('\n');
+if (require.main === module) {
+  try {
+    main();
+  } catch {
+    process.stdout.write('\n');
+  }
 }
+
+module.exports = { tildePath, wrapPath, wrapWords, placeLines, statusLines, sessionLabel, visibleWidth };
