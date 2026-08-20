@@ -83,8 +83,16 @@ function testishButUnknown(file: string): boolean {
 }
 
 function changedFiles(record: WorktreeRecord): { files: string[]; reason: string } {
-  const intent = git(['add', '-A', '--intent-to-add'], record.dir);
-  if (!intent.ok) return { files: [], reason: `cannot expose untracked task files to git diff: ${intent.stderr || 'no stderr'}` };
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], record.dir);
+  if (!untracked.ok) return { files: [], reason: `cannot list untracked files: ${untracked.stderr || 'no stderr'}` };
+  const testLike = untracked.stdout
+    .split('\0')
+    .filter(Boolean)
+    .filter((f) => commonTestPath(f) || testishButUnknown(f));
+  if (testLike.length > 0) {
+    const intent = git(['add', '--intent-to-add', '--', ...testLike], record.dir);
+    if (!intent.ok) return { files: [], reason: `cannot expose untracked task files to git diff: ${intent.stderr || 'no stderr'}` };
+  }
   const changed = git(['diff', '--name-only', '-z', record.baseSha], record.dir);
   if (!changed.ok) return { files: [], reason: `cannot list files changed since ${record.baseSha}: ${changed.stderr || 'no stderr'}` };
   return { files: changed.stdout.split('\0').filter(Boolean), reason: '' };
