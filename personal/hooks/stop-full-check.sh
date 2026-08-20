@@ -93,11 +93,23 @@ if [ -z "$CLAUDE_STOP_CHECK" ]; then
       fi
       ;;
     *dotfiles-claude*)
-      # Repo harness không có build/tsc, nhưng monthly-point-sync CÓ test thật
-      # (logic-test.cjs, 35 case, nạp Code.gs thật vào node:vm). Chỉ gate khi
-      # turn này thực sự đụng thư mục đó — turn sửa skill/doc không phải trả giá.
-      if git diff --name-only HEAD 2>/dev/null | grep -q '^personal/monthly-point-sync/'; then
-        CLAUDE_STOP_CHECK="cd '$root/personal/monthly-point-sync' && node logic-test.cjs"
+      # Repo harness không có build/tsc, nhưng hai chỗ CÓ test thật:
+      # monthly-point-sync (logic-test.cjs, nạp Code.gs thật vào node:vm) và
+      # hooks/statusline (statusline-test.cjs, fuzz bề ngang 4→200 cột). Chỉ gate
+      # khi turn này thực sự đụng thư mục đó — turn sửa skill/doc không phải trả giá.
+      touched=$(git diff --name-only HEAD 2>/dev/null)
+      DOTFILES_CHECKS=""
+      case "$touched" in
+        *personal/monthly-point-sync/*)
+          DOTFILES_CHECKS="cd '$root/personal/monthly-point-sync' && node logic-test.cjs" ;;
+      esac
+      case "$touched" in
+        *personal/hooks/statusline*)
+          [ -n "$DOTFILES_CHECKS" ] && DOTFILES_CHECKS="$DOTFILES_CHECKS && "
+          DOTFILES_CHECKS="${DOTFILES_CHECKS}node '$root/personal/hooks/statusline-test.cjs'" ;;
+      esac
+      if [ -n "$DOTFILES_CHECKS" ]; then
+        CLAUDE_STOP_CHECK="$DOTFILES_CHECKS"
       else
         exit 0
       fi
