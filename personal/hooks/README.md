@@ -16,7 +16,7 @@
 | `stop-full-check.sh` | Stop | Full tsc/test — 1 lần cuối turn | exit 2 = turn KHÔNG kết thúc được khi chưa pass; Claude đọc lỗi tự sửa |
 | `session-start-inject.sh` | SessionStart (startup·resume·**compact**) | Re-inject iron laws — sống sót qua compact | exit 0 + stdout = inject context |
 | `harness-check.sh` | SessionStart (startup·resume) | Audit chính harness: skill/command/rules chưa link, symlink chết, CLAUDE.md drift, hook trỏ file không có | exit 0 + stdout; **im lặng khi mọi thứ ổn** |
-| `statusline.cjs` | *(không phải hook — key `statusLine`)* | Hiện model·effort · **tên session** · branch (+worktree/detached/ahead/behind/dirty, **cảnh báo MERGE·REBASE đang dở**) · **% context đã dùng** (xanh/vàng/đỏ) · rate-limit **còn bao lâu tới reset** + 7d, **tự co theo bề ngang pane** | stdin JSON → in 1 dòng |
+| `statusline.cjs` | *(không phải hook — key `statusLine`)* | Dòng **NƠI**: **đường dẫn worktree đang đứng** + branch (+worktree/detached/ahead/behind/dirty, **cảnh báo MERGE·REBASE đang dở**). Dòng **TRẠNG THÁI**: model·effort · **tên session** · **% context đã dùng** (xanh/vàng/đỏ) · rate-limit **còn bao lâu tới reset** + 7d. Cả hai **tự co theo bề ngang pane** | stdin JSON → in 2 dòng, pane hẹp thì tách thêm |
 
 **Vì sao có `harness-check.sh`:** skill `fix-bug-loop` viết 20/07/2026 nhưng không ai
 symlink — chết 2 tuần không một tín hiệu. `/sync-skills` sửa được nhưng chỉ chạy khi
@@ -54,7 +54,9 @@ cả ba lần. Đặt reserve = 2 thì mọi dòng vừa khít đều mất 1 k�
 chữ số của `7d 95%`. Một cột sai = đúng cái bug đang sửa, chỉ nhỏ hơn. (Chưa tách được
 "Claude Code chừa 3" với "chừa 2 nhưng `⎇` render 2 ô trong font này" — mọi mẫu đo đều
 có đúng một `⎇`. Reserve = 3 đúng cho cả hai giả thuyết, xấu nhất là phí 1 cột khi ở
-thư mục không phải git repo.)
+thư mục không phải git repo. Từ khi tách hai dòng thì **thí nghiệm phân biệt được hai giả
+thuyết đó đã nằm sẵn trên màn hình**: dòng TRẠNG THÁI không còn ký tự `⎇` nào. Đếm ký tự
+hiện ra ở dòng đó, vẫn hụt 3 thì giả thuyết double-width sai; hụt 2 thì nó đúng. Chưa đo.)
 
 `PROFILES` là **thứ tự hy sinh**, giàu → nghèo, cái nào đứng trước thì mất trước:
 
@@ -65,16 +67,21 @@ thư mục không phải git repo.)
 | khoảng trắng quanh `·` của rate-limit | `5h 42% · 7d 95%` → `5h42% 7d95%`, mất 6 ký tự |
 | tên model + effort | giống hệt nhau ở mọi pane, và không đổi theo thời gian |
 | bar hoàn toàn | `45%` vẫn còn, vẫn còn màu |
-| branch (giữ lại dấu ahead/behind/dirty) | khi đã có `session_name` thì branch không còn là thứ phân biệt pane |
-| cắt ngắn `session_name` | tới 12 ký tự vẫn còn đọc được |
 
-**% context và hai con rate-limit không nằm trong bảng này** — chúng không bao giờ bị bỏ.
+**Chỉ những thứ giống hệt nhau ở mọi pane mới được nằm trong bảng này.** Tên model và thanh
+bar bỏ đi không mất một bit nào — pane nào cũng in y hệt. Còn `session_name`, đường dẫn,
+branch thì **không bao giờ bị cắt cho vừa**: hết chỗ thì xuống dòng. Một cái tên cụt đuôi
+(`Brief MR84 re-rev…`) chính là thứ cần đọc mà không đọc được, mà nó cụt chỉ để nhường chỗ
+cho một thanh bar trang trí.
 
-Branch là biến **đàn hồi**: nó ăn hết chỗ còn thừa của profile giàu nhất còn vừa (binary
-search trên bề rộng đã render, nên không phải cộng tay chi phí separator — sai một ký tự
-là tràn). Cắt ở **giữa** chứ không cắt đuôi: `fix/wishlis…n-product-page` giữ cả loại
-nhánh lẫn phần phân biệt, `fix/wishlist-car…` thì vứt mất phần phân biệt. Dưới 12 ký tự
-thì bỏ hẳn branch — `⎇ f…` không nói được gì mà vẫn tốn chỗ.
+**% context và hai con rate-limit** cũng không bao giờ bị bỏ.
+
+Mọi bề rộng đều đo **trên dòng đã render**, không cộng tay chi phí separator — sai một ký
+tự là tràn.
+
+Branch cắt ở **giữa** chứ không cắt đuôi: `fix/wishlis…n-product-page` giữ cả loại nhánh
+lẫn phần phân biệt, `fix/wishlist-car…` thì vứt mất phần phân biệt. Dưới 12 ký tự thì bỏ
+hẳn branch — `⎇ f…` không nói được gì mà vẫn tốn chỗ.
 
 Sàn budget từng viết là `Math.max(16, COLUMNS - reserve)`. Fuzz 4→200 cột bắt được: ở
 pane 16–17 cột nó cho budget **lớn hơn** chỗ thật sự có, tức cũng là tự gây lại bug đang
@@ -95,21 +102,131 @@ Dump 10 pane đang chạy thật rồi đếm xem field nào phân biệt đư�
 
 Bốn pane cùng in `wishlist ⎇ fix/w…ct-page ●6` thì dòng status không còn tác dụng gì.
 `session_name` do Claude Code tự đặt theo nội dung hội thoại, và là field duy nhất unique
-tuyệt đối. Nên nó **thay** tên thư mục ở vai trò định danh chứ không đứng cạnh — đứng cạnh
-thì tốn gấp đôi chỗ để nói cùng một việc. Thiếu `session_name` (đầu session, trước khi
-Claude Code kịp đặt tên) thì rơi về tên thư mục như cũ.
+tuyệt đối. Thiếu `session_name` (đầu session, trước khi Claude Code kịp đặt tên) thì rơi
+về tên thư mục như cũ.
+
+Kết luận cũ ở đây là `session_name` **thay** thư mục, vì "đứng cạnh thì tốn gấp đôi chỗ để
+nói cùng một việc". Lần đo sau (13 pane, 20/08) cho thấy vế sau sai: hai field **không**
+nói cùng một việc. Xem mục dưới.
 
 `session_name` là chuỗi tự do nên phải **strip control character trước khi in**: hợp đồng
-của `statusLine` là đúng một dòng, một ký tự `\n` lọt vào là vỡ. Escape ANSI cũng bị strip
-— nếu không, một cái tên chứa `ESC[31m` sẽ cướp màu của cả phần còn lại. Tám case đã test:
-xuống dòng, ANSI injection, tab/CR, 200 ký tự, emoji, rỗng, toàn khoảng trắng, không phải
-string.
+của `statusLine` là mỗi dòng một dòng do script tự chốt bề ngang; một ký tự `\n` lọt vào
+là ra một dòng không ai kiểm soát bề rộng. Escape ANSI
+cũng bị strip — nếu không, một cái tên chứa `ESC[31m` sẽ cướp màu của cả phần còn lại.
+Tám case đã test: xuống dòng, ANSI injection, tab/CR, 200 ký tự, emoji, rỗng, toàn khoảng
+trắng, không phải string.
+
+### Hai dòng: NƠI ở trên, TRẠNG THÁI ở dưới
+
+`session_name` trả lời "pane này là việc gì", **không** trả lời "code nằm ở đâu để mở ra
+đọc". Đo 13 pane đang chạy (20/08) thì hai câu đó rời hẳn nhau:
+
+| Điều đo được | Con số |
+|---|---|
+| tên tab cmux vs `session_name` | lệch — tab `Lane 1 MR !108 guestId` mà session tên `Brief Slack bug`; tên AI đặt từ đầu phiên rồi đứng yên trong khi lane đã đi tiếp |
+| 4 lane hẹp (46 cột) trong screenshot | **cùng một** `cwd` = `~/Project/gitlab/wishlist`, tức main checkout trên `master` |
+| `●6` in giống hệt trên cả 4 lane | vì đúng là **một** thư mục, sáu file untracked |
+| worktree nằm sẵn trên đĩa cho riêng repo wishlist | **15 cái** (12 sibling `wishlist-*` + 3 `agent-*` do Agent tạo) mà không lane nào đang đứng trong đó |
+
+Nên đường dẫn không phải thông tin thừa cạnh `session_name` — nó là thứ duy nhất trả lời
+"mở cái nào", và tiện thể lộ ra chuyện bốn lane đang giẫm chung một checkout. Trước khi in
+nó ra, chuyện đó vô hình.
+
+Dòng NƠI đặt **ở trên**, dòng TRẠNG THÁI giữ nguyên chỗ cũ sát footer: mắt đã quen liếc %
+context ở đúng dòng đó, thông tin mới chen vào trên thì không phải học lại.
+
+```
+~/Project/gitlab/wishlist ⎇ master ●6          ← dòng NƠI (mới)
+Brief Slack bug │ 51% 5h14% 7d57%              ← dòng TRẠNG THÁI (chỗ cũ)
+```
+
+### Hẹp thì xuống dòng, KHÔNG cắt bằng `…`
+
+Bản đầu co đường dẫn bằng cách nuốt đoạn giữa (`~/…/gitlab/wishlist-mr84-r4`) và cắt đuôi
+tên session (`Brief MR84 re-rev…`). Nhìn trên pane thật thì hỏng đúng chỗ nó sinh ra để
+sửa: `…` ăn mất chính đoạn phân biệt. Nên đổi chính sách — **cái gì mang thông tin riêng
+của pane thì không bao giờ bị cắt cho vừa; hết chỗ thì xuống dòng.**
+
+Đường dẫn xuống dòng ở dấu `/`, dấu `/` ở lại cuối dòng trên (dòng bắt đầu bằng `/` nhìn
+như một path tuyệt đối khác). Tên session xuống dòng ở khoảng trắng. Đoạn cuối đường dẫn
+để sáng, phần cha để mờ — quét bốn pane thì mắt bám vào tên worktree, không bám vào
+`~/Project`.
+
+Cùng một lane, ba bề ngang:
+
+```
+94 cột
+~/Project/gitlab/wishlist-mr84-r4 @+bd928856 ●5
+Opus 5·max Brief MR84 re-review │ ▓▓▓▓░░░░░░ 38% 1M · 44m 15% · 7d 57%
+
+46 cột — branch không nhét vừa cùng dòng nên tách ra, không ai bị cắt
+~/Project/gitlab/wishlist-mr84-r4
+@+bd928856 ●5
+Brief MR84 re-review │ 38% 5h15% 7d57%
+
+30 cột
+~/Project/gitlab/
+wishlist-mr84-r4
+@+bd928856 ●5
+Brief MR84 re-review
+▓▓░░░░ 38% 5h15% 7d57%
+```
+
+Cái mất đi khi hẹp là **thanh bar và tên model**, không phải chữ. Đúng cái nên mất: 46 cột
+giờ in đủ `Brief MR84 re-review` vì bỏ bar đi là vừa, thay vì cắt tên để giữ bar.
+
+Ba nấc lùi của đường dẫn, theo thứ tự:
+
+1. Cắt ở `/` — dòng nào cũng là một khúc path đọc được.
+2. Cắt ở `/` mà quá 3 dòng thì **chia đều theo bề ngang**: xấu hơn, nhưng không mất một ký
+   tự nào. (Cắt theo `/` bỏ phí phần đuôi mỗi dòng, nên pane cực hẹp nó tốn dòng hơn.)
+3. Chia đều vẫn quá 3 dòng thì mới chịu cắt, và cắt từ **đầu** — đuôi là phần phân biệt.
+
+Nấc 3 chỉ chạm tới ở pane dưới ~30 cột với path sâu. Branch cũng chỉ bị cắt (cắt **giữa**)
+khi một mình nó đã không vừa một dòng. Dấu ahead/behind/dirty và cảnh báo `MERGE` không
+nằm trong thang nào cả.
+
+Đo lại trên 12 payload pane thật: **11/12 vẫn đúng 2 dòng**, 1 pane thành 3 dòng vì
+`session_name` dài 30 ký tự trong pane 46 cột.
+
+Nhiều dòng là hợp đồng có thật của `statusLine` (docs: "each `echo` or `print` statement
+displays as a separate row"), không phải mẹo — nhưng docs cũng cảnh báo multi-line + escape
+code dễ vỡ render hơn text thường, nên đường dẫn để **text trần**, không bọc OSC 8
+hyperlink. Bôi đen copy vẫn dùng được ở mọi terminal.
+
+### Test: `statusline-test.cjs`, 18 case, gác bằng Stop hook
+
+Ba hợp đồng dễ vỡ nhất giờ có test thật thay vì đo tay:
+
+1. **Không dòng nào tràn** bề ngang pane.
+2. **Ghép các dòng đường dẫn lại phải ra đúng chuỗi gốc** — bất biến này là cách duy nhất
+   chứng minh "không cắt chữ", mạnh hơn mọi lần nhìn bằng mắt.
+3. Dấu git và cảnh báo `MERGE` không bao giờ mất.
+
+Fuzz cả dải 4→200 cột × 7 hình dạng đường dẫn × 5 trạng thái git, cộng vài lần spawn thật
+để kiểm số dòng (tên session chứa `\n`, ANSI, 400 ký tự, stdin rỗng/rác).
+
+Chính test này bắt được 3 bug trong bản đầu: pane hẹp cắt oan đường dẫn dù còn dòng trống,
+dấu `●6` tràn ở pane 4 cột, và đường dẫn mất ký tự khi cắt theo `/` không đủ chỗ. Nấc "chia
+đều theo bề ngang" ở trên sinh ra từ cái thứ ba.
+
+Đã kiểm bằng **mutation**: bỏ reserve 3 cột → fail; bỏ cảnh báo `MERGE` → fail; luôn chia
+đều thay vì cắt ở `/` → fail; cắt tên session thay vì xuống dòng → fail; bỏ hẳn dòng NƠI →
+fail. Test không bắt được mutant là test vô giá trị.
+
+`stop-full-check.sh` chạy nó khi turn đụng `personal/hooks/statusline*` (cùng cơ chế với
+`monthly-point-sync`); turn sửa skill/doc không phải trả giá.
+
+    node personal/hooks/statusline-test.cjs
 
 ### Worktree · detached · MERGE đang dở — đọc đĩa, không gọi git
 
-Repo ở máy này có **10 worktree mỗi repo** (wishlist 10, dotfiles-claude 10), và 8/10
-worktree wishlist đang detached. Trước đây detached in ra SHA trần, nhìn y hệt một tên
-branch. Ba thứ này lấy được mà không tốn thêm một subprocess nào:
+`git worktree list` của riêng repo wishlist có **16 entry** (đo lại 20/08): 1 chính + 15 phụ
+(12 sibling `wishlist-*` + 3 `agent-*` do Agent tạo), trong đó **8 đang detached**.
+Trước đây detached in ra SHA trần, nhìn y hệt một tên branch. Dấu `+` cũng là thứ duy nhất
+phân biệt **worktree phụ** với một **clone riêng**: `wishlist-2` là clone (`.git` là thư
+mục), `wishlist-mr84-r4` là worktree (`.git` là file) — nhìn đường dẫn không thấy khác biệt
+đó. Ba thứ này lấy được mà không tốn thêm một subprocess nào:
 
 | Hiện | Nghĩa |
 |---|---|
@@ -124,10 +241,13 @@ branch. Ba thứ này lấy được mà không tốn thêm một subprocess nà
 và trong đó có đường dẫn gitdir thật; thao tác đang dở thì `stat` mấy file mốc trong gitdir
 (`MERGE_HEAD`, `rebase-merge`…). Rẻ hơn 700 lần, cùng một câu trả lời.
 
-**Cảnh báo thao tác dở không bao giờ bị hy sinh** — nó nằm ngoài `PROFILES`. Ở pane 46 cột
-vẫn còn: `Merge maste… ●1 MERGE │ 45% 5h42% 7d95%`. Quên mình đang kẹt giữa conflict là
+Cả cụm này nằm ở **dòng NƠI**, ngay sau đường dẫn.
+
+**Cảnh báo thao tác dở không bao giờ bị hy sinh** — nó nằm ngoài mọi thang co. Ở pane 46
+cột nó xuống dòng cùng branch (`⎇ feat/revamp-a…in-wishlist-button ●1 MERGE`), ở 20 cột vẫn
+còn (`⎇ fe…ton ●1 MERGE`) trong khi đường dẫn vẫn hiện đủ trên hai dòng trên nó. Quên mình đang kẹt giữa conflict là
 rủi ro thật khi chạy nhiều `/merge-master` và `/merge-branch` song song, nên nó phải sống
-sót ở mọi bề ngang.
+sót ở mọi bề ngang — có test riêng fuzz 4→200 cột giữ đúng chỗ đó.
 
 ### Đã cân nhắc rồi loại
 
