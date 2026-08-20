@@ -311,6 +311,28 @@ describe('rotation at 10MB keeps 5 generations', () => {
   });
 });
 
+describe('a non-ENOENT read failure is not silently empty', () => {
+  test('single-project path: EISDIR throws instead of returning empty', () => {
+    const file = gateLogPath('kivora');
+    fs.mkdirSync(file, { recursive: true });
+    expect(() => readGateLog('kivora')).toThrow();
+  });
+
+  test('multi-file loop: an unreadable .jsonl entry throws instead of being silently skipped', () => {
+    const f = path.join(gateLogDir(), 'problematic.jsonl');
+    fs.mkdirSync(gateLogDir(), { recursive: true });
+    fs.mkdirSync(f, { recursive: true });
+    expect(() => readGateLog()).toThrow();
+  });
+
+  test('multi-file loop: a log that vanishes between listing and reading is absent, not fatal', () => {
+    appendGateLog({ project: 'kivora', gate: 'lint', gate_family: 'deterministic', verdict: 'pass' });
+    fs.symlinkSync(path.join(gateLogDir(), 'rotated-away.jsonl'), path.join(gateLogDir(), 'vanished.jsonl'));
+    expect(() => readGateLog()).not.toThrow();
+    expect(readGateLog().length).toBe(1);
+  });
+});
+
 describe('a corrupt line is skipped, never fatal', () => {
   test('garbage, blank, and half-written lines drop out; good lines survive', () => {
     const file = gateLogPath('kivora');

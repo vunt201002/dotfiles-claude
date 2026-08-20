@@ -356,12 +356,17 @@ function applyCorrections(parsed: ParsedLog): GateLogEntry[] {
   return entries;
 }
 
+function isEnoent(e: unknown): boolean {
+  return (e as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
 function readParsed(project?: string): ParsedLog[] {
   if (project) {
     try {
       return [parseLines(fs.readFileSync(gateLogPath(project), 'utf8'))];
-    } catch {
-      return [];
+    } catch (e) {
+      if (isEnoent(e)) return [];
+      throw e;
     }
   }
 
@@ -369,14 +374,17 @@ function readParsed(project?: string): ParsedLog[] {
   let files: string[];
   try {
     files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
-  } catch {
-    return [];
+  } catch (e) {
+    if (isEnoent(e)) return [];
+    throw e;
   }
   const out: ParsedLog[] = [];
   for (const f of files.sort()) {
     try {
       out.push(parseLines(fs.readFileSync(path.join(dir, f), 'utf8')));
-    } catch {}
+    } catch (e) {
+      if (!isEnoent(e)) throw e;
+    }
   }
   return out;
 }
