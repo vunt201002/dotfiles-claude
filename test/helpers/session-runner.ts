@@ -50,6 +50,8 @@ export interface SkillTestResult {
   firstResponseMs: number;
   /** Peak latency between consecutive tool calls, in ms */
   maxInterTurnMs: number;
+  /** Claude's own session id, readable from the first event even on a killed run. */
+  sessionId: string;
 }
 
 const BROWSE_ERROR_PATTERNS = [
@@ -379,7 +381,7 @@ export async function runSkillTest(options: {
   }
 
   // Cost from result line (exact) or estimate from chars
-  const turnsUsed = resultLine?.num_turns || 0;
+  const turnsUsed = resultLine ? (resultLine.num_turns ?? 0) : parsed.turnCount;
   const estimatedCost = resultLine?.total_cost_usd || 0;
   const inputChars = prompt.length;
   const outputChars = (resultLine?.result || '').length;
@@ -395,5 +397,7 @@ export async function runSkillTest(options: {
     turnsUsed,
   };
 
-  return { toolCalls, browseErrors, exitReason, duration, output: resultLine?.result || '', costEstimate, transcript, model, firstResponseMs, maxInterTurnMs };
+  const sessionId = String(transcript.find((e) => e?.session_id)?.session_id ?? '');
+
+  return { toolCalls, browseErrors, exitReason, duration, output: resultLine?.result || '', costEstimate, transcript, model, firstResponseMs, maxInterTurnMs, sessionId };
 }

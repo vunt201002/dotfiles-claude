@@ -552,6 +552,9 @@ export function toSkillTestResult(r: AgentSdkResult): SkillTestResult {
   // parseNDJSON emits [{ type: 'assistant', message: {...} }, ...].
   // Use the SDK's assistantTurns directly since their shape matches.
   const transcript: unknown[] = r.events.slice();
+  const sessionId = String(
+    (r.events as Array<{ session_id?: unknown }>).find((e) => e?.session_id)?.session_id ?? '',
+  );
 
   return {
     toolCalls: r.toolCalls,
@@ -567,6 +570,7 @@ export function toSkillTestResult(r: AgentSdkResult): SkillTestResult {
       turnsUsed: r.turnsUsed,
     },
     transcript,
+    sessionId,
     model: r.model,
     firstResponseMs: r.firstResponseMs,
     maxInterTurnMs: r.maxInterTurnMs,

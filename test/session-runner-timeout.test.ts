@@ -71,3 +71,78 @@ exec sleep ${ORPHAN_LINGER_SECS}
     30_000,
   );
 });
+
+// A run that is killed before claude emits its final `result` line used to
+// report turnsUsed 0, cost 0 and an empty session id — indistinguishable from
+// a run where no agent ever started. The transcript already knew better.
+describe.skipIf(process.platform === 'win32')('a killed run still reports what it did', () => {
+  const SESSION = '11111111-2222-3333-4444-555555555555';
+  let fixtureBin: string;
+  let workDir: string;
+
+  const writeFakeClaude = (dir: string, tail: string) => {
+    fs.writeFileSync(
+      path.join(dir, 'claude'),
+      `#!/bin/sh
+cat > /dev/null &
+echo '{"type":"system","subtype":"init","session_id":"${SESSION}"}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{}}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{}}]}}'
+${tail}
+`,
+      { mode: 0o755 },
+    );
+  };
+
+  beforeAll(() => {
+    fixtureBin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-claude-evidence-'));
+    workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-runner-evidence-'));
+  });
+
+  afterAll(() => {
+    for (const dir of [fixtureBin, workDir]) {
+      if (dir && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(
+    'no result line: observed turns and the session id survive, cost stays unknown',
+    async () => {
+      writeFakeClaude(fixtureBin, `exec sleep ${ORPHAN_LINGER_SECS}`);
+      const result = await runSkillTest({
+        testName: 'session-runner-evidence-killed',
+        workingDirectory: workDir,
+        prompt: 'irrelevant',
+        timeout: 3_000,
+        env: { PATH: `${fixtureBin}:${process.env.PATH ?? ''}` },
+      });
+
+      expect(result.exitReason).toBe('timeout');
+      expect(result.sessionId).toBe(SESSION);
+      expect(result.costEstimate.turnsUsed).toBe(2);
+      expect(result.costEstimate.estimatedCost).toBe(0);
+    },
+    30_000,
+  );
+
+  test(
+    'a result line still wins, so an honest zero stays zero',
+    async () => {
+      writeFakeClaude(
+        fixtureBin,
+        `echo '{"type":"result","subtype":"success","num_turns":0,"total_cost_usd":0,"result":"done"}'`,
+      );
+      const result = await runSkillTest({
+        testName: 'session-runner-evidence-complete',
+        workingDirectory: workDir,
+        prompt: 'irrelevant',
+        timeout: 10_000,
+        env: { PATH: `${fixtureBin}:${process.env.PATH ?? ''}` },
+      });
+
+      expect(result.exitReason).toBe('success');
+      expect(result.costEstimate.turnsUsed).toBe(0);
+    },
+    30_000,
+  );
+});
