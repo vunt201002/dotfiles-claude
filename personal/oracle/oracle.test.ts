@@ -10,7 +10,7 @@ import {
 import { verifyFixtures, runRedTestGate, runGuardGate, runLintGate, runTscGate, runTscRatchet, type Verdict } from './lib/gates';
 import { backendLabel, buildFixDiff, llmGatesEnabled, runSpecCheckGate, runReviewerGate, skippedLlmGate } from './lib/llm-gates';
 import {
-  backendFamily, claudeCliBackend, requireBackendRole, resolveBackends, type Backend,
+  backendFamily, claudeCliBackend, requireBackendRole, resolveBackends, type Backend, type BackendCallDiagnostic,
 } from './lib/llm-backends';
 import { writeRawReport, type RawReportRun } from './lib/raw-reports';
 import { rejudgeRepeat } from './lib/rejudge';
@@ -2406,6 +2406,66 @@ describe('oracle llm gate canaries', () => {
       expect(outcome.fp_denominator).toBe(0);
       expect(producerCalls).toBe(1);
       expect(judgeCalls).toBe(1);
+    }
+  });
+
+  test('a degraded judge pass leaves status timing and fixture evidence beside the raw run', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-degradation-'));
+    const run: RawReportRun = {
+      dir,
+      manifest: {
+        format_version: 1,
+        generated_at: '2026-08-21T00:00:00.000Z',
+        source_run: 'degraded-rejudge',
+        gate_backends: { 'spec-check': 'codex', reviewer: 'codex' },
+      },
+    };
+    try {
+      fs.writeFileSync(path.join(dir, 'manifest.json'), `${JSON.stringify(run.manifest, null, 2)}\n`);
+      writeRawReport(run, {
+        gate: 'spec-check',
+        fixture: 'llm-canary-unauthenticated-delete-all-customers',
+        variant: 'buggy',
+        gate_backend: 'codex',
+        report: 'The unauthenticated bulk delete remains.',
+      });
+      const judge: Backend = {
+        name: 'claude-cli',
+        family: 'anthropic',
+        hermetic: false,
+        available: () => ({ ok: true, reason: '' }),
+        callJson: async <T>(
+          _prompt: string,
+          _timeout?: number,
+          observe?: (diagnostic: BackendCallDiagnostic) => void,
+        ) => {
+          observe?.({ backend: 'claude-cli', status_code: 429, latency_ms: 812, timed_out: false, stderr: 'rate limit' });
+          return { detected: [], reasoning: 'No defect reported.' } as T;
+        },
+      };
+
+      const outcome = await runSpecCheckGate([], {
+        gate: backend(() => { throw new Error('rejudge must not call the gate'); }),
+        judge,
+      }, { rejudgeSource: run, judgePass: 3 });
+
+      expect(outcome.available).toBe(false);
+      const diagnostics = fs.readFileSync(path.join(dir, 'degradations.jsonl'), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        gate: 'spec-check',
+        fixture: 'llm-canary-unauthenticated-delete-all-customers',
+        variant: 'buggy',
+        stage: 'judge',
+        judge_pass: 3,
+        status_code: 429,
+        latency_ms: 812,
+        stderr: 'rate limit',
+      });
+      expect(diagnostics[0].elapsed_ms).toBeNumber();
+      expect(outcome.unavailable_reason).toContain('degradations.jsonl');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

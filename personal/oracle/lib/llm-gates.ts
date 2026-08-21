@@ -15,9 +15,12 @@ import { spawnSync } from 'node:child_process';
 import { outcomeJudgePrompt } from '../../../test/helpers/llm-judge';
 import type { FixtureCase } from './cases';
 import type { GateOutcome } from './gates';
-import { requireBackendRole, resolveBackends, type Backend } from './llm-backends';
 import {
-  readRawReport, writeRawReport, type CodeVariant, type LlmGateName, type RawReportRun,
+  requireBackendRole, resolveBackends, type Backend, type BackendCallDiagnostic, type BackendCallObserver,
+} from './llm-backends';
+import {
+  readRawReport, writeDegradationDiagnostics, writeRawReport, type CodeVariant, type DegradationDiagnostic,
+  type LlmGateName, type RawReportRun,
 } from './raw-reports';
 
 type ReviewCase = Pick<FixtureCase, 'bug' | 'entryName'> & Partial<Pick<FixtureCase, 'buggyDir' | 'fixedDir'>>;
@@ -121,7 +124,7 @@ function renderReport(r: FindingsReport): string {
     .join('\n');
 }
 
-async function specCheckReport(c: ReviewCase, code: string, gate: Backend): Promise<string> {
+async function specCheckReport(c: ReviewCase, code: string, gate: Backend, observe?: BackendCallObserver): Promise<string> {
   const out = await gate.callJson<FindingsReport>(
     `You are a fresh reviewer. You did not write this change and you have not seen the reasoning behind it. You get two things: the spec that was agreed, and the change that was produced.
 
@@ -138,11 +141,11 @@ ${code}
 
 Respond with ONLY valid JSON:
 {"findings": [{"title": "one line", "why_it_matters": "one line", "evidence": "the specific line or symbol"}]}
-Return an empty findings array if the change matches the spec.`);
+Return an empty findings array if the change matches the spec.`, undefined, observe);
   return renderReport(out);
 }
 
-async function reviewerReport(c: ReviewCase, code: string, gate: Backend): Promise<string> {
+async function reviewerReport(c: ReviewCase, code: string, gate: Backend, observe?: BackendCallObserver): Promise<string> {
   const out = await gate.callJson<FindingsReport>(
     `You are reviewing a change before it lands. You get the code and nothing else — no spec, no author notes. Report defects that would hurt in production: correctness, data loss, concurrency, boundary behaviour, and checks that cannot fail.
 
@@ -154,11 +157,18 @@ ${code}
 
 Respond with ONLY valid JSON:
 {"findings": [{"title": "one line", "why_it_matters": "one line", "evidence": "the specific line or symbol"}]}
-Return an empty findings array if you would approve this as is.`);
+Return an empty findings array if you would approve this as is.`, undefined, observe);
   return renderReport(out);
 }
 
-async function scoreOne(c: ReviewCase, report: string, judge: Backend, variant: CodeVariant = 'buggy', fixDiff?: string) {
+async function scoreOne(
+  c: ReviewCase,
+  report: string,
+  judge: Backend,
+  variant: CodeVariant = 'buggy',
+  fixDiff?: string,
+  observe?: BackendCallObserver,
+) {
   const groundTruth = {
     total_bugs: 1,
     bugs: [{
@@ -169,26 +179,68 @@ async function scoreOne(c: ReviewCase, report: string, judge: Backend, variant: 
       detection_hint: c.bug.detection_hint,
     }],
   };
-  return judge.callJson<{ detected: string[]; reasoning: string }>(outcomeJudgePrompt(groundTruth, report, variant, fixDiff));
+  return judge.callJson<{ detected: string[]; reasoning: string }>(
+    outcomeJudgePrompt(groundTruth, report, variant, fixDiff),
+    undefined,
+    observe,
+  );
 }
 
 export interface LlmGateRunOptions {
   rawReportOutput?: RawReportRun;
   rejudgeSource?: RawReportRun;
+  judgePass?: number;
+}
+
+interface CallEvidence {
+  fixture: string;
+  variant: CodeVariant;
+  stage: DegradationDiagnostic['stage'];
+  diagnostic: BackendCallDiagnostic;
 }
 
 async function runLlmGate(
   gate: LlmGateName,
   cases: FixtureCase[],
-  produce: (c: ReviewCase, code: string, gate: Backend) => Promise<string>,
+  produce: (c: ReviewCase, code: string, gate: Backend, observe?: BackendCallObserver) => Promise<string>,
   backends: LlmGateBackends,
   options: LlmGateRunOptions = {},
 ): Promise<GateOutcome> {
   const { gate: gateBackend, judge: judgeBackend } = backends;
   requireBackendRole(gateBackend, 'gate');
-  const obtainReport = async (c: ReviewCase, code: string, variant: CodeVariant): Promise<string> => {
+  const runStartedAt = Date.now();
+  const diagnosticRun = options.rejudgeSource ?? options.rawReportOutput;
+  const observeCall = (
+    evidence: CallEvidence[],
+    fixture: string,
+    variant: CodeVariant,
+    stage: DegradationDiagnostic['stage'],
+  ): BackendCallObserver => (diagnostic) => evidence.push({ fixture, variant, stage, diagnostic });
+  const persistDegradation = (reason: string, evidence: CallEvidence[]): string => {
+    if (!diagnosticRun || evidence.length === 0) return '';
+    const recordedAt = new Date().toISOString();
+    const diagnostics = evidence.map(({ fixture, variant, stage, diagnostic }): DegradationDiagnostic => ({
+      ...diagnostic,
+      recorded_at: recordedAt,
+      gate,
+      fixture,
+      variant,
+      stage,
+      judge_pass: options.judgePass ?? 1,
+      elapsed_ms: Date.now() - runStartedAt,
+      reason,
+    }));
+    const file = writeDegradationDiagnostics(diagnosticRun, diagnostics);
+    return ` Diagnostic evidence: ${file}.`;
+  };
+  const obtainReport = async (
+    c: ReviewCase,
+    code: string,
+    variant: CodeVariant,
+    evidence: CallEvidence[],
+  ): Promise<string> => {
     if (options.rejudgeSource) return readRawReport(options.rejudgeSource, gate, c.bug.id, variant).report;
-    const report = await produce(c, code, gateBackend);
+    const report = await produce(c, code, gateBackend, observeCall(evidence, c.bug.id, variant, 'gate'));
     if (options.rawReportOutput) {
       writeRawReport(options.rawReportOutput, {
         gate,
@@ -215,50 +267,79 @@ async function runLlmGate(
 
   let canaryReport: string;
   let canaryScore: { detected: string[]; reasoning: string };
+  const canaryEvidence: CallEvidence[] = [];
   try {
-    canaryReport = await obtainReport(CANARY_CASE, CANARY_CODE, 'buggy');
-    canaryScore = await scoreOne(CANARY_CASE, canaryReport, judgeBackend, 'buggy');
+    canaryReport = await obtainReport(CANARY_CASE, CANARY_CODE, 'buggy', canaryEvidence);
+    canaryScore = await scoreOne(
+      CANARY_CASE,
+      canaryReport,
+      judgeBackend,
+      'buggy',
+      undefined,
+      observeCall(canaryEvidence, CANARY_ID, 'buggy', 'judge'),
+    );
   } catch (err: any) {
     out.available = false;
-    out.unavailable_reason = `canary could not run through produce → scoreOne: ${err?.message ?? err}. Every "missed" would be indistinguishable from a broken LLM pipeline.`;
+    const reason = `canary could not run through produce → scoreOne: ${err?.message ?? err}. Every "missed" would be indistinguishable from a broken LLM pipeline.`;
+    out.unavailable_reason = reason + persistDegradation(reason, canaryEvidence);
     for (const c of cases) out.cells[c.bug.id] = { verdict: 'error', detail: out.unavailable_reason };
     return out;
   }
   if (canaryReport === 'No findings.') {
     out.available = false;
-    out.unavailable_reason = `canary did not trip: ${gate} did not report an unconditional unauthenticated delete of every customer record. Every "missed" would be indistinguishable from an LLM gate that could no longer see defects.`;
+    const reason = `canary did not trip: ${gate} did not report an unconditional unauthenticated delete of every customer record. Every "missed" would be indistinguishable from an LLM gate that could no longer see defects.`;
+    out.unavailable_reason = reason + persistDegradation(reason, canaryEvidence);
     for (const c of cases) out.cells[c.bug.id] = { verdict: 'error', detail: out.unavailable_reason };
     return out;
   }
   if (!canaryScore.detected.includes(CANARY_ID)) {
     out.available = false;
-    out.unavailable_reason = `canary attribution failed: the outcome judge did not trace ${gate}'s finding back to bug id "${CANARY_ID}". A finding that cannot be assigned to the defect it names cannot support fixture-level detection numbers.`;
+    const reason = `canary attribution failed: the outcome judge did not trace ${gate}'s finding back to bug id "${CANARY_ID}". A finding that cannot be assigned to the defect it names cannot support fixture-level detection numbers.`;
+    out.unavailable_reason = reason + persistDegradation(reason, canaryEvidence);
     for (const c of cases) out.cells[c.bug.id] = { verdict: 'error', detail: out.unavailable_reason };
     return out;
   }
 
   for (const c of cases) {
+    const buggyEvidence: CallEvidence[] = [];
     try {
-      const report = await obtainReport(c, readVariant(c, 'buggy'), 'buggy');
-      const scored = await scoreOne(c, report, judgeBackend, 'buggy');
+      const report = await obtainReport(c, readVariant(c, 'buggy'), 'buggy', buggyEvidence);
+      const scored = await scoreOne(
+        c,
+        report,
+        judgeBackend,
+        'buggy',
+        undefined,
+        observeCall(buggyEvidence, c.bug.id, 'buggy', 'judge'),
+      );
       out.cells[c.bug.id] = scored.detected.includes(c.bug.id)
         ? { verdict: 'caught', detail: scored.reasoning.slice(0, 240) }
         : { verdict: 'missed', detail: scored.reasoning.slice(0, 240) };
     } catch (err: any) {
-      out.cells[c.bug.id] = { verdict: 'error', detail: `${gate} failed on buggy: ${err?.message ?? err}` };
+      const reason = `${gate} failed on buggy: ${err?.message ?? err}`;
+      out.cells[c.bug.id] = { verdict: 'error', detail: reason + persistDegradation(reason, buggyEvidence) };
       continue;
     }
 
+    const fixedEvidence: CallEvidence[] = [];
     try {
       const fixDiff = buildFixDiff(c);
-      const report = await obtainReport(c, readVariant(c, 'fixed'), 'fixed');
-      const scored = await scoreOne(c, report, judgeBackend, 'fixed', fixDiff);
+      const report = await obtainReport(c, readVariant(c, 'fixed'), 'fixed', fixedEvidence);
+      const scored = await scoreOne(
+        c,
+        report,
+        judgeBackend,
+        'fixed',
+        fixDiff,
+        observeCall(fixedEvidence, c.bug.id, 'fixed', 'judge'),
+      );
       out.fp_denominator++;
       if (scored.detected.includes(c.bug.id)) {
         out.false_positives.push({ on: `${c.bug.id}/fixed`, detail: scored.reasoning.slice(0, 240) });
       }
     } catch (err: any) {
-      out.fp_errors.push({ on: `${c.bug.id}/fixed`, detail: `${gate} failed on fixed: ${err?.message ?? err}` });
+      const reason = `${gate} failed on fixed: ${err?.message ?? err}`;
+      out.fp_errors.push({ on: `${c.bug.id}/fixed`, detail: reason + persistDegradation(reason, fixedEvidence) });
     }
   }
 

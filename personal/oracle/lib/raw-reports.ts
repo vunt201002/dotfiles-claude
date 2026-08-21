@@ -26,6 +26,22 @@ export interface RawReportRun {
   manifest: RawReportManifest;
 }
 
+export interface DegradationDiagnostic {
+  recorded_at: string;
+  gate: LlmGateName;
+  fixture: string;
+  variant: CodeVariant;
+  stage: 'gate' | 'judge' | 'pipeline';
+  judge_pass: number;
+  elapsed_ms: number;
+  backend: BackendName;
+  status_code: number | null;
+  latency_ms: number;
+  timed_out: boolean;
+  stderr: string;
+  reason: string;
+}
+
 export function rawReportsRoot(): string {
   return process.env.ORACLE_REPORTS_ROOT
     ? path.resolve(process.env.ORACLE_REPORTS_ROOT)
@@ -55,6 +71,14 @@ export function writeRawReport(run: RawReportRun, record: RawReportRecord): void
   const file = recordPath(run.dir, record.gate, record.fixture, record.variant);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx' });
+}
+
+export function writeDegradationDiagnostics(run: RawReportRun, diagnostics: DegradationDiagnostic[]): string {
+  const file = path.join(run.dir, 'degradations.jsonl');
+  if (diagnostics.length > 0) {
+    fs.appendFileSync(file, diagnostics.map((diagnostic) => JSON.stringify(diagnostic)).join('\n') + '\n', 'utf-8');
+  }
+  return file;
 }
 
 export function readRawReport(run: RawReportRun, gate: LlmGateName, fixture: string, variant: CodeVariant): RawReportRecord {

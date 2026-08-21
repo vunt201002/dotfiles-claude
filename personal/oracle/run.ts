@@ -108,8 +108,8 @@ async function main(): Promise<number> {
         if (!availability.ok) throw new Error(`${gate} judge backend "${judge.name}" unusable: ${availability.reason}`);
         const backends = { gate: cachedGateBackend(rawRun, gate), judge };
         sampleOutcomes.push(gate === 'spec-check'
-          ? await runSpecCheckGate(cases, backends, { rejudgeSource: rawRun })
-          : await runReviewerGate(cases, backends, { rejudgeSource: rawRun }));
+          ? await runSpecCheckGate(cases, backends, { rejudgeSource: rawRun, judgePass: sample + 1 })
+          : await runReviewerGate(cases, backends, { rejudgeSource: rawRun, judgePass: sample + 1 }));
       }
       repeatedLlmOutcomes.push(sampleOutcomes);
     }
@@ -125,8 +125,8 @@ async function main(): Promise<number> {
       raw_report_run: rawRun.manifest.source_run,
       raw_report_dir: rawRun.dir,
     };
-    outcomes.push(await runSpecCheckGate(cases, specBackends, { rawReportOutput: rawRun }));
-    outcomes.push(await runReviewerGate(cases, reviewerBackends, { rawReportOutput: rawRun }));
+    outcomes.push(await runSpecCheckGate(cases, specBackends, { rawReportOutput: rawRun, judgePass: 1 }));
+    outcomes.push(await runReviewerGate(cases, reviewerBackends, { rawReportOutput: rawRun, judgePass: 1 }));
   } else {
     outcomes.push(skippedLlmGate('spec-check', cases, llm.reason));
     outcomes.push(skippedLlmGate('reviewer', cases, llm.reason));

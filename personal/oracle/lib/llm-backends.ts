@@ -31,13 +31,23 @@ export interface Availability {
   reason: string;
 }
 
+export interface BackendCallDiagnostic {
+  backend: BackendName;
+  status_code: number | null;
+  latency_ms: number;
+  timed_out: boolean;
+  stderr: string;
+}
+
+export type BackendCallObserver = (diagnostic: BackendCallDiagnostic) => void;
+
 export interface Backend {
   name: BackendName;
   family: ModelFamily;
   /** Whether the backend runs without reading the operator's real tool configuration. */
   hermetic: boolean;
   available(): Availability;
-  callJson<T>(prompt: string, timeoutMs?: number): Promise<T>;
+  callJson<T>(prompt: string, timeoutMs?: number, observe?: BackendCallObserver): Promise<T>;
 }
 
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -92,6 +102,38 @@ function run(cmd: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, t
       resolve({ stdout, stderr, code: code ?? -1, timedOut });
     });
   });
+}
+
+async function runObserved(
+  backend: BackendName,
+  cmd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  timeoutMs: number,
+  observe?: BackendCallObserver,
+): Promise<SpawnOutcome> {
+  const started = Date.now();
+  try {
+    const outcome = await run(cmd, args, env, cwd, timeoutMs);
+    observe?.({
+      backend,
+      status_code: outcome.code,
+      latency_ms: Date.now() - started,
+      timed_out: outcome.timedOut,
+      stderr: outcome.stderr.slice(0, 2_000),
+    });
+    return outcome;
+  } catch (err) {
+    observe?.({
+      backend,
+      status_code: null,
+      latency_ms: Date.now() - started,
+      timed_out: false,
+      stderr: String(err instanceof Error ? err.message : err).slice(0, 2_000),
+    });
+    throw err;
+  }
 }
 
 function binaryOnPath(bin: string): boolean {
@@ -175,14 +217,16 @@ export const codexBackend: Backend = {
     }
     return { ok: true, reason: '' };
   },
-  async callJson<T>(prompt: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  async callJson<T>(prompt: string, timeoutMs = DEFAULT_TIMEOUT_MS, observe?: BackendCallObserver): Promise<T> {
     const home = ensureCodexHome();
-    const outcome = await run(
+    const outcome = await runObserved(
+      'codex',
       'codex',
       ['exec', prompt, '--json', '-s', 'read-only', '--skip-git-repo-check'],
       hermeticChildEnv({ HOME: home }, { extraAllow: ['OPENAI_API_KEY', 'CODEX_*'] }),
       os.tmpdir(),
       timeoutMs,
+      observe,
     );
     if (outcome.timedOut) throw new Error(`codex timed out after ${timeoutMs}ms`);
     const parsed = parseCodexJSONL(outcome.stdout.split('\n'));
@@ -211,13 +255,15 @@ export const claudeCliBackend: Backend = {
     if (!binaryOnPath('claude')) return { ok: false, reason: 'claude is not on PATH' };
     return { ok: true, reason: '' };
   },
-  async callJson<T>(prompt: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
-    const outcome = await run(
+  async callJson<T>(prompt: string, timeoutMs = DEFAULT_TIMEOUT_MS, observe?: BackendCallObserver): Promise<T> {
+    const outcome = await runObserved(
+      'claude-cli',
       'claude',
       ['-p', prompt, '--model', 'claude-haiku-4-5-20251001'],
       process.env,
       os.tmpdir(),
       timeoutMs,
+      observe,
     );
     if (outcome.timedOut) throw new Error(`claude -p timed out after ${timeoutMs}ms`);
     if (!outcome.stdout.trim()) {
@@ -236,8 +282,22 @@ export const anthropicApiBackend: Backend = {
       ? { ok: true, reason: '' }
       : { ok: false, reason: 'ANTHROPIC_API_KEY is not set' };
   },
-  async callJson<T>(prompt: string): Promise<T> {
-    return callJudge<T>(prompt);
+  async callJson<T>(prompt: string, _timeoutMs?: number, observe?: BackendCallObserver): Promise<T> {
+    const started = Date.now();
+    try {
+      const value = await callJudge<T>(prompt);
+      observe?.({ backend: 'anthropic-api', status_code: null, latency_ms: Date.now() - started, timed_out: false, stderr: '' });
+      return value;
+    } catch (err) {
+      observe?.({
+        backend: 'anthropic-api',
+        status_code: null,
+        latency_ms: Date.now() - started,
+        timed_out: false,
+        stderr: String(err instanceof Error ? err.message : err).slice(0, 2_000),
+      });
+      throw err;
+    }
   },
 };
 
