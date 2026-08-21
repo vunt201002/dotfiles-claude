@@ -430,7 +430,11 @@ function cmdStats(args: string[]): void {
   const pendingSamples = unreviewedBlindSamples(projectScope);
   const completedReviews = readBlindSampleReviews().filter((review) => projectScope === undefined || review.project === projectScope);
   const reviewHumanTouches = completedReviews.reduce((sum, review) => sum + review.human_touches, 0);
-  const precisionPending = pendingSamples.length > 0;
+  const pendingPrecisionGates = new Set(
+    pendingSamples.flatMap((sample) =>
+      (sample.gate_reports ?? []).filter((report) => report.verdict === 'caught').map((report) => report.gate),
+    ),
+  );
 
   const withoutOrigin: Flags = { ...flags };
   delete withoutOrigin.origin;
@@ -465,6 +469,8 @@ function cmdStats(args: string[]): void {
   const decisive = (c: VerdictCounts): number => c.pass + c.caught + c['false-positive'];
 
   const precision = new Map(precisionByGate(entries).map((row) => [row.gate, row.precision]));
+  const precisionPendingForGate = (gate: string): boolean => pendingPrecisionGates.has(gate);
+  const scopePrecisionPending = [...byGate.keys()].some(precisionPendingForGate);
   const gateFilter = str(flags, 'gate');
   const sinceFilter = str(flags, 'since');
   const corrections = readGateLogCorrections(str(flags, 'project')).filter((c) => {
@@ -494,8 +500,8 @@ function cmdStats(args: string[]): void {
               g,
               {
                 ...c,
-                precision: precisionPending ? null : precision.get(g) ?? null,
-                precision_status: precisionPending ? 'pending-human-review' : 'measured',
+                precision: precisionPendingForGate(g) ? null : precision.get(g) ?? null,
+                precision_status: precisionPendingForGate(g) ? 'pending-human-review' : 'measured',
               },
             ]),
           ),
@@ -540,7 +546,7 @@ function cmdStats(args: string[]): void {
   if (entries.length === 0) return;
 
   const showPrecision = (gate: string): string => {
-    if (precisionPending) return 'pending review';
+    if (precisionPendingForGate(gate)) return 'pending review';
     const p = precision.get(gate);
     return p === null || p === undefined ? '    n/a' : `${(p * 100).toFixed(1).padStart(6)}%`;
   };
@@ -555,7 +561,7 @@ function cmdStats(args: string[]): void {
   }
   process.stdout.write(`${'-'.repeat(head.length)}\n`);
   const overallPrecision =
-    precisionPending
+    scopePrecisionPending
       ? 'pending review'
       : overall.caught + overall['false-positive'] === 0
       ? '    n/a'
@@ -565,7 +571,7 @@ function cmdStats(args: string[]): void {
   );
   const denominator = overall.caught + overall['false-positive'];
   process.stdout.write(`\nprecision = caught / (caught + false-positive); current overall denominator = ${denominator} rows\n`);
-  if (precisionPending) {
+  if (scopePrecisionPending) {
     process.stdout.write('precision is withheld for this scope: UNREVIEWED is not evidence of no false positives\n');
   }
   process.stdout.write('P8 needs false-positive < 10%\n');

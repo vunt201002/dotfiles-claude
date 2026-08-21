@@ -283,4 +283,23 @@ describe('manager review-sample CLI', () => {
       expect(gateRow.precision_status).toBe('pending-human-review');
     }
   });
+
+  test('one unreviewed blind sample withholds only the gate that sample ran', () => {
+    const sample = task({
+      gate_reports: [{ gate: 'spec-check', gate_family: 'llm', verdict: 'caught', caught: 'finding', attempt: 1 }],
+    });
+    saveTask(sample);
+    gate('H-1', 'caught', 'spec-check');
+    gate('H-2', 'caught', 'tech-review');
+    const result = spawnSync(process.execPath, [GATE_LOG, 'stats', '--project', 'joy', '--json'], {
+      encoding: 'utf8',
+      env: process.env,
+    });
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.by_gate['spec-check'].precision).toBeNull();
+    expect(parsed.by_gate['spec-check'].precision_status).toBe('pending-human-review');
+    expect(parsed.by_gate['tech-review'].precision).toBe(1);
+    expect(parsed.by_gate['tech-review'].precision_status).toBe('measured');
+  });
 });
