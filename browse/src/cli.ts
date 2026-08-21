@@ -18,6 +18,7 @@ import { resolveConfig, ensureStateDir, readVersionHash } from './config';
 import { parseProxyConfig, computeConfigHash, ProxyConfigError } from './proxy-config';
 import { redactProxyUrl } from './proxy-redact';
 import { spawnTerminalAgent } from './terminal-agent-control';
+import { CdpAttachConfigError, resolveCdpAttachEndpoint } from './cdp-attach';
 
 const config = resolveConfig();
 const IS_WINDOWS = process.platform === 'win32';
@@ -105,7 +106,46 @@ export function resolveNodeServerScript(
   return null;
 }
 
-const NODE_SERVER_SCRIPT = IS_WINDOWS ? resolveNodeServerScript() : null;
+const NODE_SERVER_SCRIPT = resolveNodeServerScript();
+
+export type ServerRuntime = 'bun' | 'node';
+
+/**
+ * A stale generated bundle would ignore BROWSE_CDP_ENDPOINT and launch a fresh
+ * browser. Require both sides of the attach contract before spawning anything.
+ */
+export function nodeServerSupportsCdp(nodeServerScript: string | null): boolean {
+  if (!nodeServerScript) return false;
+  try {
+    const source = fs.readFileSync(nodeServerScript, 'utf8');
+    return source.includes('BROWSE_CDP_ENDPOINT') && source.includes('attachOverCdp');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Playwright's CDP attach hangs when the server runs under Bun even though
+ * the same endpoint works under Node. Attach mode must therefore fail closed
+ * unless the Node-compatible server bundle is available.
+ */
+export function resolveServerRuntime(
+  platform: NodeJS.Platform,
+  cdpEndpoint: string | null,
+  nodeServerScript: string | null,
+  cdpCapableNodeServer: boolean = nodeServerSupportsCdp(nodeServerScript),
+): ServerRuntime {
+  if (cdpEndpoint) {
+    if (!nodeServerScript || !cdpCapableNodeServer) {
+      throw new CdpAttachConfigError(
+        'CDP attach requires a current Node-compatible server bundle. Run `bun run build` before using --cdp.',
+      );
+    }
+    return 'node';
+  }
+  if (platform === 'win32') return 'node';
+  return 'bun';
+}
 
 // On Windows, hard-fail if server-node.mjs is missing — the Bun path is known broken.
 if (IS_WINDOWS && !NODE_SERVER_SCRIPT) {
@@ -121,8 +161,9 @@ interface ServerState {
   startedAt: string;
   serverPath: string;
   binaryVersion?: string;
-  mode?: 'launched' | 'headed';
-  /** Hash of (proxyUrl + headed flag), used by D2 daemon-mismatch check. */
+  mode?: 'launched' | 'headed' | 'attached';
+  cdpEndpoint?: string;
+  /** Hash of browser startup configuration, used by D2 daemon-mismatch check. */
   configHash?: string;
   /** Xvfb child PID for cleanup on disconnect. */
   xvfbPid?: number;
@@ -282,7 +323,7 @@ async function probeHealthWithBackoff(port: number, attempts = 3, backoffMs = 25
 }
 
 /**
- * Build the env for an auto-restart after a crash. headed/proxy/configHash are
+ * Build the env for an auto-restart after a crash. Browser mode and proxy config are
  * reapplied from THIS invocation OR the persisted server state, so a restart
  * triggered by a plain command (goto/status, no --headed flag) never silently
  * downgrades a headed session to headless (#1781). Pure + exported for tests.
@@ -294,6 +335,8 @@ export function buildRestartEnv(
   const env: Record<string, string> = {};
   if (globalFlags?.proxyUrl) env.BROWSE_PROXY_URL = globalFlags.proxyUrl;
   if (globalFlags?.headed || oldState?.mode === 'headed') env.BROWSE_HEADED = '1';
+  const cdpEndpoint = globalFlags?.cdpEndpoint || oldState?.cdpEndpoint;
+  if (cdpEndpoint) env.BROWSE_CDP_ENDPOINT = cdpEndpoint;
   const configHash = globalFlags?.configHash || oldState?.configHash;
   if (configHash) env.BROWSE_CONFIG_HASH = configHash;
   return env;
@@ -338,8 +381,18 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
   // Parse as int so stray whitespace ("0\n") still opts out — matches the
   // server's own parseInt at server.ts:760.
   const parentPid = parseInt(process.env.BROWSE_PARENT_PID || '', 10) === 0 ? '0' : String(process.pid);
+  const serverRuntime = resolveServerRuntime(
+    process.platform,
+    extraEnv?.BROWSE_CDP_ENDPOINT ?? null,
+    NODE_SERVER_SCRIPT,
+    nodeServerSupportsCdp(NODE_SERVER_SCRIPT),
+  );
+  const nodeExecutable = serverRuntime === 'node' ? Bun.which('node') : null;
+  if (serverRuntime === 'node' && !nodeExecutable) {
+    throw new CdpAttachConfigError('CDP attach requires Node.js on PATH because Playwright connectOverCDP hangs under Bun.');
+  }
 
-  if (IS_WINDOWS && NODE_SERVER_SCRIPT) {
+  if (IS_WINDOWS && NODE_SERVER_SCRIPT && nodeExecutable) {
     // Windows: Bun.spawn() + proc.unref() doesn't truly detach on Windows —
     // when the CLI exits, the server dies with it. Use Node's child_process.spawn
     // with { detached: true } instead, which is the gold standard for Windows
@@ -350,7 +403,13 @@ async function startServer(extraEnv?: Record<string, string>): Promise<ServerSta
       `spawn(process.execPath,[${JSON.stringify(NODE_SERVER_SCRIPT)}],` +
       `{detached:true,stdio:['ignore','ignore','ignore'],env:Object.assign({},process.env,` +
       `${extraEnvStr})}).unref()`;
-    Bun.spawnSync(['node', '-e', launcherCode], { stdio: ['ignore', 'ignore', 'ignore'] });
+    Bun.spawnSync([nodeExecutable, '-e', launcherCode], { stdio: ['ignore', 'ignore', 'ignore'] });
+  } else if (serverRuntime === 'node' && NODE_SERVER_SCRIPT && nodeExecutable) {
+    nodeSpawn(nodeExecutable, [NODE_SERVER_SCRIPT], {
+      detached: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+      env: { ...process.env, BROWSE_STATE_FILE: config.stateFile, BROWSE_PARENT_PID: parentPid, ...extraEnv },
+    }).unref();
   } else {
     // macOS/Linux: Bun.spawn().unref() only removes the child from Bun's event
     // loop — it does NOT call setsid(), so the spawned server stays in the
@@ -479,6 +538,10 @@ async function ensureServer(flags?: GlobalFlags): Promise<ServerState> {
   const extraEnv: Record<string, string> = {};
   if (flags?.proxyUrl) extraEnv.BROWSE_PROXY_URL = flags.proxyUrl;
   if (flags?.headed) extraEnv.BROWSE_HEADED = '1';
+  if (flags?.cdpEndpoint) {
+    extraEnv.BROWSE_CDP_ENDPOINT = flags.cdpEndpoint;
+    extraEnv.BROWSE_PARENT_PID = '0';
+  }
   if (desiredHash) extraEnv.BROWSE_CONFIG_HASH = desiredHash;
 
   // Health-check-first: HTTP is definitive proof the server is alive and responsive.
@@ -491,15 +554,15 @@ async function ensureServer(flags?: GlobalFlags): Promise<ServerState> {
     // hint. No silent restart — that would drop tab state, cookies, and
     // logged-in sessions without warning.
     if (desiredHash && state.configHash && state.configHash !== desiredHash) {
-      console.error(`[browse] existing daemon has different config (proxy/headed mismatch).`);
-      console.error(`[browse] run 'browse disconnect' first to apply --proxy/--headed.`);
+      console.error(`[browse] existing daemon has different config (proxy/headed/CDP mismatch).`);
+      console.error(`[browse] run 'browse disconnect' first to apply browser startup flags.`);
       process.exit(1);
     }
     // Same path: existing daemon is plain (no flags) but caller passes
     // --proxy/--headed. Refuse for the same reason — apply explicitly via
     // disconnect+reconnect.
-    if (desiredHash && !state.configHash && (flags?.proxyUrl || flags?.headed)) {
-      console.error(`[browse] existing daemon was started without --proxy/--headed.`);
+    if (desiredHash && !state.configHash && (flags?.proxyUrl || flags?.headed || flags?.cdpEndpoint)) {
+      console.error(`[browse] existing daemon was started without the requested browser startup flags.`);
       console.error(`[browse] run 'browse disconnect' first to apply new flags.`);
       process.exit(1);
     }
@@ -560,7 +623,9 @@ async function ensureServer(flags?: GlobalFlags): Promise<ServerState> {
     if (state && state.pid) {
       await killServer(state.pid);
     }
-    if (flags?.redactedProxyUrl && flags.redactedProxyUrl !== '<no proxy>') {
+    if (flags?.cdpEndpoint) {
+      console.error(`[browse] Attaching to Chrome at ${flags.cdpEndpoint}...`);
+    } else if (flags?.redactedProxyUrl && flags.redactedProxyUrl !== '<no proxy>') {
       console.error(`[browse] Starting server with proxy ${flags.redactedProxyUrl}${flags.headed ? ' (headed)' : ''}...`);
     } else if (flags?.headed) {
       console.error('[browse] Starting server in headed mode...');
@@ -846,13 +911,15 @@ function hasFlag(args: string[], flag: string): boolean {
 }
 
 export interface GlobalFlags {
-  /** Cleaned argv with --proxy/--headed stripped out. */
+  /** Cleaned argv with browser-startup flags stripped out. */
   args: string[];
   /** Resolved BROWSE_PROXY_URL (with creds embedded) or null. */
   proxyUrl: string | null;
   /** Whether --headed was passed. */
   headed: boolean;
-  /** Hash of (proxy + headed) for daemon-mismatch check. */
+  /** Explicit loopback Chrome DevTools endpoint, or null. */
+  cdpEndpoint: string | null;
+  /** Hash of browser startup configuration for daemon-mismatch checks. */
   configHash: string;
   /** Redacted form of proxyUrl, safe for logs. */
   redactedProxyUrl: string;
@@ -869,6 +936,7 @@ export function extractGlobalFlags(rawArgs: string[], env: NodeJS.ProcessEnv): G
   const out: string[] = [];
   let proxyUrl: string | null = null;
   let headed = false;
+  let cdpEndpoint: string | null = null;
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i];
@@ -889,7 +957,27 @@ export function extractGlobalFlags(rawArgs: string[], env: NodeJS.ProcessEnv): G
       continue;
     }
     if (arg === '--headed') { headed = true; continue; }
+    if (arg === '--cdp') {
+      const value = rawArgs[i + 1];
+      if (!value) {
+        throw new CdpAttachConfigError('--cdp requires an endpoint such as http://127.0.0.1:9222');
+      }
+      cdpEndpoint = resolveCdpAttachEndpoint(value);
+      i++;
+      continue;
+    }
+    if (arg.startsWith('--cdp=')) {
+      cdpEndpoint = resolveCdpAttachEndpoint(arg.slice('--cdp='.length));
+      continue;
+    }
     out.push(arg);
+  }
+
+  if (cdpEndpoint && headed) {
+    throw new CdpAttachConfigError('--cdp and --headed are separate browser modes and cannot be combined');
+  }
+  if (cdpEndpoint && proxyUrl) {
+    throw new CdpAttachConfigError('--cdp cannot be combined with --proxy; configure the already-running Chrome instead');
   }
 
   // Compose the canonical proxyUrl with creds resolved from argv+env.
@@ -912,7 +1000,8 @@ export function extractGlobalFlags(rawArgs: string[], env: NodeJS.ProcessEnv): G
     args: out,
     proxyUrl: canonicalProxyUrl,
     headed,
-    configHash: computeConfigHash({ proxyUrl: canonicalProxyUrl, headed }),
+    cdpEndpoint,
+    configHash: computeConfigHash({ proxyUrl: canonicalProxyUrl, headed, cdpEndpoint }),
     redactedProxyUrl: redactProxyUrl(canonicalProxyUrl),
   };
 }
@@ -1074,6 +1163,10 @@ async function main() {
       console.error(`[browse] hint: ${err.hint}`);
       process.exit(1);
     }
+    if (err instanceof CdpAttachConfigError) {
+      console.error(`[browse] error: ${err.message}`);
+      process.exit(1);
+    }
     throw err;
   }
   _globalFlags = globalFlags;
@@ -1082,7 +1175,7 @@ async function main() {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(`gstack browse — Fast headless browser for AI coding agents
 
-Usage: browse <command> [args...]
+Usage: browse [--headed | --cdp http://127.0.0.1:9222] [--proxy <url>] <command> [args...]
 
 Navigation:     goto <url> | back | forward | reload | url
 Content:        text | html [sel] | links | forms | accessibility
@@ -1340,7 +1433,7 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     // up the bridge or Xvfb. So we skip the graceful path for those and
     // jump straight to force-cleanup, which kills the daemon process and
     // lets process.on('exit') in server.ts close the bridge + Xvfb.
-    if (existingState.mode === 'headed') {
+    if (existingState.mode === 'headed' || existingState.mode === 'attached') {
       try {
         const resp = await fetch(`http://127.0.0.1:${existingState.port}/command`, {
           method: 'POST',
@@ -1352,7 +1445,7 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
           signal: AbortSignal.timeout(3000),
         });
         if (resp.ok) {
-          console.log('Disconnected from real browser.');
+          console.log(existingState.mode === 'attached' ? 'Detached from Chrome; Chrome remains open.' : 'Disconnected from real browser.');
           process.exit(0);
         }
       } catch {
@@ -1370,8 +1463,10 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
     // #1781: killing the daemon can orphan its Chromium child tree, which keeps
     // holding the SingletonLock and makes the next `connect` fail to launch.
     // Reap the orphan via the lock, then clear the lock files + state.
-    await killOrphanChromium();
-    cleanChromiumProfileLocks();
+    if (existingState.mode !== 'attached') {
+      await killOrphanChromium();
+      cleanChromiumProfileLocks();
+    }
     // Xvfb orphan cleanup: if the recorded PID still matches our Xvfb (by
     // cmdline AND start-time), kill it. PID-only would risk killing a
     // recycled PID belonging to an unrelated process.

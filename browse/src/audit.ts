@@ -27,7 +27,7 @@ export interface AuditEntry {
   status: 'ok' | 'error';
   error?: string;
   hasCookies: boolean;
-  mode: 'launched' | 'headed';
+  mode: 'launched' | 'headed' | 'attached';
 }
 
 const MAX_ARGS_LENGTH = 200;

@@ -125,7 +125,7 @@ export function toUpstreamConfig(cfg: ParsedProxyConfig): UpstreamConfig {
 }
 
 /**
- * Compute a stable hash of (proxyUrl + headed flag) for daemon-mismatch
+ * Compute a stable hash of browser startup configuration for daemon-mismatch
  * detection (D2). The hash is deterministic across CLI invocations on the
  * same machine and survives daemon restarts via the state file.
  *
@@ -135,9 +135,10 @@ export function toUpstreamConfig(cfg: ParsedProxyConfig): UpstreamConfig {
 export function computeConfigHash(opts: {
   proxyUrl: string | null | undefined;
   headed: boolean;
+  cdpEndpoint?: string | null;
 }): string {
   const proxyKey = canonicalizeProxyUrl(opts.proxyUrl);
-  const input = JSON.stringify({ proxy: proxyKey, headed: opts.headed });
+  const input = JSON.stringify({ proxy: proxyKey, headed: opts.headed, cdp: opts.cdpEndpoint || null });
   return createHash('sha256').update(input).digest('hex').slice(0, 16);
 }
 

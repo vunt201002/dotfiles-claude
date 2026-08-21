@@ -790,13 +790,13 @@ export async function handleMetaCommand(
     }
 
     case 'disconnect': {
-      if (bm.getConnectionMode() !== 'headed') {
-        return 'Not in headed mode — nothing to disconnect.';
+      if (bm.getConnectionMode() === 'launched') {
+        return 'Not in headed or attached mode — nothing to disconnect.';
       }
-      // Signal that we want a restart in headless mode
-      console.log('[browse] Disconnecting headed browser. Restarting in headless mode.');
+      const priorMode = bm.getConnectionMode();
+      console.log(`[browse] Disconnecting ${priorMode} browser session. Restarting in headless mode.`);
       await shutdown();
-      return 'Disconnected. Server will restart in headless mode on next command.';
+      return `Disconnected from ${priorMode} session. Server will restart in headless mode on next command.`;
     }
 
     case 'focus': {

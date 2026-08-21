@@ -2202,6 +2202,22 @@ describe('Frame', () => {
     expect(mainTitleAgain).toBe('Main Page');
   });
 
+  test('frame switches through an iframe element attribute selector', async () => {
+    await handleWriteCommand('goto', [baseUrl + '/iframe.html'], bm);
+
+    const switchResult = await handleMetaCommand(
+      'frame',
+      ['iframe[name="app-iframe"]'],
+      bm,
+      async () => {},
+    );
+    expect(switchResult).toContain('Switched to frame');
+
+    const frameTitle = await handleReadCommand('js', ['document.getElementById("frame-title").textContent'], bm);
+    expect(frameTitle).toBe('Inside Frame');
+    await handleMetaCommand('frame', ['main'], bm, async () => {});
+  });
+
   test('snapshot shows frame context header', async () => {
     await handleWriteCommand('goto', [baseUrl + '/iframe.html'], bm);
     await handleMetaCommand('frame', ['#test-frame'], bm, async () => {});

@@ -23,7 +23,10 @@ import { validateNavigationUrl } from './url-validation';
 import { TabSession, type RefEntry } from './tab-session';
 import { resolveChromiumProfile, cleanSingletonLocks } from './config';
 import { withCdpSession } from './cdp-bridge';
+import { assertCdpAttachRuntime, formatCdpAttachFailure, resolveCdpAttachEndpoint } from './cdp-attach';
 import type { MemorySnapshot, MemoryStructureStats, MemoryTabSnapshot, MemoryProcess } from './memory-snapshot';
+
+export type BrowserConnectionMode = 'launched' | 'headed' | 'attached';
 
 /**
  * Detect whether GSTACK_CHROMIUM_PATH points at a custom Chromium build that
@@ -198,7 +201,7 @@ export class BrowserManager {
   private watchStartTime: number = 0;
 
   // ─── Headed State ────────────────────────────────────────
-  private connectionMode: 'launched' | 'headed' = 'launched';
+  private connectionMode: BrowserConnectionMode = 'launched';
   private intentionalDisconnect = false;
 
   // ─── Tab Count Guardrail (D5 + Codex single-tab flag) ───────
@@ -256,7 +259,9 @@ export class BrowserManager {
   // pipeline so process supervisors (gbrowser's gbd) read the right signal.
   public onDisconnect: ((exitCode?: number) => void | Promise<void>) | null = null;
 
-  getConnectionMode(): 'launched' | 'headed' { return this.connectionMode; }
+  getConnectionMode(): BrowserConnectionMode { return this.connectionMode; }
+
+  isCdpAttached(): boolean { return this.connectionMode === 'attached'; }
 
   // ─── Watch Mode Methods ─────────────────────────────────
   isWatching(): boolean { return this.watching; }
@@ -421,6 +426,90 @@ export class BrowserManager {
 
     // Create first tab
     await this.newTab();
+  }
+
+  /**
+   * Attach to the single existing Chrome profile context exposed by a
+   * loopback CDP endpoint. This adopts existing pages without creating a
+   * context, injecting scripts, or applying browser configuration. Closing
+   * the manager closes only Playwright's CDP transport; Chrome stays open.
+   *
+   * Operator measurements verified Node's Playwright attach and Shopify's
+   * selector-based iframe lookup separately. The generated Node server path
+   * remains unverified end-to-end.
+   */
+  async attachOverCdp(input: string): Promise<void> {
+    const endpoint = resolveCdpAttachEndpoint(input);
+    this.pages.clear();
+    this.tabSessions.clear();
+    this.tabOwnership.clear();
+    this.nextTabId = 1;
+
+    try {
+      assertCdpAttachRuntime();
+      this.browser = await chromium.connectOverCDP(endpoint, { timeout: 5000 });
+      const contexts = this.browser.contexts();
+      if (contexts.length !== 1) {
+        throw new Error(`expected exactly one Chrome profile context, found ${contexts.length}`);
+      }
+      this.context = contexts[0];
+      const existingPages = this.context.pages();
+      if (existingPages.length === 0) {
+        throw new Error('Chrome exposed no tabs; open the target tab before attaching');
+      }
+
+      this.connectionMode = 'attached';
+      this.intentionalDisconnect = false;
+      this.dialogAutoAccept = false;
+      this.isHeaded = true;
+      this.consecutiveFailures = 0;
+
+      this.context.on('page', (page) => {
+        const id = this.nextTabId++;
+        this.pages.set(id, page);
+        this.tabSessions.set(id, new TabSession(page));
+        this.activeTabId = id;
+        this.wirePageEvents(page);
+        this.checkTabGuardrails();
+      });
+
+      for (const page of existingPages) {
+        const id = this.nextTabId++;
+        this.pages.set(id, page);
+        this.tabSessions.set(id, new TabSession(page));
+        this.activeTabId = id;
+        this.wirePageEvents(page);
+      }
+      this.browser.on('disconnected', () => {
+        if (this.intentionalDisconnect) return;
+        console.error('[browse] Attached Chrome CDP connection closed. Server exiting (1).');
+        if (!this.onDisconnect) {
+          process.exit(1);
+          return;
+        }
+        try {
+          const result = this.onDisconnect(1);
+          if (result && typeof (result as Promise<void>).catch === 'function') {
+            void (result as Promise<void>).catch((err) => {
+              console.error('[browse] onDisconnect rejected:', err);
+              process.exit(1);
+            });
+          }
+        } catch (err) {
+          console.error('[browse] onDisconnect threw:', err);
+          process.exit(1);
+        }
+      });
+    } catch (err) {
+      if (this.browser) {
+        this.intentionalDisconnect = true;
+        this.browser.removeAllListeners('disconnected');
+        await this.browser.close().catch(() => undefined);
+      }
+      this.browser = null;
+      this.context = null;
+      throw new Error(formatCdpAttachFailure(endpoint, err));
+    }
   }
 
   // ─── Headed Mode ─────────────────────────────────────────────
@@ -737,6 +826,9 @@ export class BrowserManager {
           new Promise(resolve => setTimeout(resolve, 5000)),
         ]).catch(() => {});
       } else {
+        if (this.connectionMode === 'attached') {
+          this.intentionalDisconnect = true;
+        }
         // Launched mode: close the browser we spawned
         this.browser.removeAllListeners('disconnected');
         await Promise.race([
@@ -1410,8 +1502,8 @@ export class BrowserManager {
    * Falls back to a clean slate on any failure.
    */
   async recreateContext(): Promise<string | null> {
-    if (this.connectionMode === 'headed') {
-      throw new Error('Cannot recreate context in headed mode. Use disconnect first.');
+    if (this.connectionMode !== 'launched') {
+      throw new Error(`Cannot recreate context in ${this.connectionMode} mode. Use disconnect first.`);
     }
     if (!this.browser || !this.context) {
       throw new Error('Browser not launched');
@@ -1500,8 +1592,8 @@ export class BrowserManager {
     if (scale < 1 || scale > 3) {
       throw new Error(`viewport --scale: value must be between 1 and 3 (gstack policy cap), got ${scale}`);
     }
-    if (this.connectionMode === 'headed') {
-      throw new Error('viewport --scale is not supported in headed mode — scale is controlled by the real browser window.');
+    if (this.connectionMode !== 'launched') {
+      throw new Error(`viewport --scale is not supported in ${this.connectionMode} mode — scale is controlled by the real browser window.`);
     }
 
     const prevScale = this.deviceScaleFactor;

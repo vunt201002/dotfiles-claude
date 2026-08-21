@@ -53,6 +53,7 @@ import { writeReceipt } from '../../lib/egress-receipt';
 import { redactProxyUrl } from './proxy-redact';
 import { shouldSpawnXvfb, pickFreeDisplay, spawnXvfb, xvfbInstallHint, type XvfbHandle } from './xvfb';
 import { logTunnelDenial } from './tunnel-denial-log';
+import { isCdpAttachRestrictedCommand } from './cdp-attach';
 import {
   mintSseSessionToken, validateSseSessionToken, extractSseCookie,
   buildSseSetCookie, SSE_COOKIE_NAME,
@@ -650,7 +651,7 @@ function idleCheckTick() {
   // Only shut down when the user explicitly disconnects or closes the window.
   // Reads via the activeBrowserManager indirection so embedders that pass
   // their own BrowserManager into buildFetchHandler hit the right instance.
-  if (activeBrowserManager.getConnectionMode() === 'headed') return;
+  if (activeBrowserManager.getConnectionMode() !== 'launched') return;
   // Tunnel mode: remote agents may send commands sporadically. Never auto-die.
   if (tunnelActive) return;
   if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
@@ -1088,6 +1089,19 @@ async function handleCommandInternalImpl(
     };
   }
 
+  if (browserManager.isCdpAttached()) {
+    if (isCdpAttachRestrictedCommand(command, args)) {
+      return {
+        status: 400,
+        json: true,
+        result: JSON.stringify({
+          error: `Command "${command}" is disabled in CDP attach mode`,
+          hint: 'Attached Chrome profile mutation is conservative by default. Use normal page controls; browse will not import/set cookies, write storage directly, load/save state, or recreate the profile context.',
+        }),
+      };
+    }
+  }
+
   // Activity: emit command_start (skipped for chain subcommands)
   const startTime = Date.now();
   if (!opts?.skipActivity) {
@@ -1383,9 +1397,10 @@ if (import.meta.main) {
       console.log('[browse] Received SIGTERM but cookie picker is active, ignoring to avoid stranding the picker UI');
       return;
     }
-    const headed = activeBrowserManager.getConnectionMode() === 'headed';
-    if (headed || tunnelActive) {
-      console.log(`[browse] Received SIGTERM in ${headed ? 'headed' : 'tunnel'} mode, shutting down`);
+    const connectionMode = activeBrowserManager.getConnectionMode();
+    const interactive = connectionMode !== 'launched';
+    if (interactive || tunnelActive) {
+      console.log(`[browse] Received SIGTERM in ${interactive ? connectionMode : 'tunnel'} mode, shutting down`);
       activeShutdown?.();
     } else {
       console.log('[browse] Received SIGTERM (ignoring — use /stop or Ctrl+C for intentional shutdown)');
@@ -3038,7 +3053,11 @@ export async function start() {
   const skipBrowser = process.env.BROWSE_HEADLESS_SKIP === '1';
   if (!skipBrowser) {
     const headed = process.env.BROWSE_HEADED === '1';
-    if (headed) {
+    const cdpEndpoint = process.env.BROWSE_CDP_ENDPOINT;
+    if (cdpEndpoint) {
+      await browserManager.attachOverCdp(cdpEndpoint);
+      console.log(`[browse] Attached to Chrome at ${cdpEndpoint}`);
+    } else if (headed) {
       await browserManager.launchHeaded(envCfg.authToken);
       console.log(`[browse] Launched headed Chromium with extension`);
     } else {
@@ -3076,6 +3095,7 @@ export async function start() {
     serverPath: path.resolve(import.meta.dir, 'server.ts'),
     binaryVersion: readVersionHash() || undefined,
     mode: browserManager.getConnectionMode(),
+    ...(process.env.BROWSE_CDP_ENDPOINT ? { cdpEndpoint: process.env.BROWSE_CDP_ENDPOINT } : {}),
     // D2 daemon-mismatch detection: CLI computes the same hash from its
     // resolved flags and refuses if it differs from this stored value.
     ...(process.env.BROWSE_CONFIG_HASH ? { configHash: process.env.BROWSE_CONFIG_HASH } : {}),

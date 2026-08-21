@@ -278,6 +278,25 @@ browse --headed --proxy socks5://user:pass@host:1080 \
 
 **Failure modes.** SOCKS5 upstream rejected or unreachable → fail-fast at startup with a redacted error after 3 retries (5s budget). Mid-stream upstream drop → browse kills the affected client connection only; no transport retries (which could corrupt browser traffic). Mismatched daemon config → exit 1 with a `browse disconnect` hint.
 
+## Attach to an Existing Chrome over CDP
+
+Use `--cdp <endpoint>` when Chrome already owns the authenticated, device-bound session and browse needs Playwright frame access. The endpoint is an explicit flag rather than automatic discovery so browse cannot silently attach to the wrong local browser. Only loopback HTTP origins with an explicit port are accepted, and failure is fail-closed: browse prints the Chrome launch command and does not launch a fresh browser.
+
+Attach requires Node.js on `PATH` and a current `browse/dist/server-node.mjs`. The Bun CLI routes the attached server through Node because Playwright's `connectOverCDP` hangs under Bun; the server also rejects any direct Bun attach attempt. Browse rejects a missing or stale Node bundle before starting a browser. Run `bun run build` before using `--cdp` after source changes.
+
+The debug port follows the same security posture as cookie import: Chrome binds it to loopback, the same OS user is the trust boundary, and port secrecy is not a security control. Chrome is user-owned in this mode; `browse disconnect` detaches Playwright and leaves Chrome running. Do not combine `--cdp` with `--headed` or `--proxy`.
+
+Attached profile mutation is conservative by default. Browse rejects direct cookie import/set, `storage set`, state save/load, header/user-agent changes, and context-recreating viewport scale changes. Page interactions and page code can still cause the site itself to update cookies, storage, history, or server-side data; attach mode is not a read-only sandbox.
+
+Measured against a live Shopify admin: Playwright under Node connected to the same CDP endpoint in 52 ms, and selecting `iframe[name="app-iframe"]` by DOM attribute exposed the embedded frame. `frame --name app-iframe` does not work on this surface because Playwright reports the frame's own name as empty. The complete `browse --cdp` flow through the generated Node server bundle remains unverified. To verify it, run these commands after building; after command 1, sign in and open the embedded app in that Chrome window before continuing:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/.gstack/chrome-cdp-profile" https://admin.shopify.com
+browse --cdp http://127.0.0.1:9222 tabs
+browse --cdp http://127.0.0.1:9222 frame 'iframe[name="app-iframe"]'
+browse --cdp http://127.0.0.1:9222 snapshot -i
+```
+
 ## Snapshot Flags
 
 {{SNAPSHOT_FLAGS}}
