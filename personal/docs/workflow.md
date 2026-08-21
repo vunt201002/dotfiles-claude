@@ -59,18 +59,20 @@ Khi app có `.claude/skills` riêng → **skill generic của anh là phương p
 | Layer | Quan sát bằng |
 |---|---|
 | Storefront widget (shadow DOM/Lit) | debug-global nếu có · Playwright `eval`/`getComputedStyle`/`queryShadow` |
-| Admin (React/Polaris) | `console.log` · eval qua /my-chrome hoặc Playwright · React DevTools. **Cần login Admin → /my-chrome trên Chrome thật (đã login sẵn) — xem "Test trên browser" bên dưới.** |
+| Admin (React/Polaris) | Standalone Admin: `console.log` · eval qua /my-chrome · React DevTools. Embedded app: `/browse` + `frame --name app-iframe` (documented trong source, chưa live-verify ở máy này). **Login Admin và drive embedded iframe là hai capability khác nhau — xem "Test trên browser" bên dưới.** |
 | Backend (Cloud Functions) | **Firebase emulator: log stdout** — dùng cho bước prove, **đừng deploy staging để đọc log** |
 | DB / record state | emulator UI · firebase console |
 | Webhook | pubsub emulator trigger + log |
 
-### Test trên browser — mặc định /my-chrome (Chrome thật, group tab "Claude")
+### Test trên browser — route theo surface qua /my-chrome
 
 Bước test/verify nào cần browser (A7 / B8, QA, dogfood) → dùng **skill `/my-chrome`**
-(claude-in-chrome) điều khiển **Chrome thật anh đang mở**, không phải headless.
+để route theo surface. Storefront/theme editor/standalone Admin dùng
+`claude-in-chrome` trên Chrome thật; embedded Admin trong cross-origin iframe dùng
+`/browse` + `$B frame --name app-iframe`.
 (Đừng nhầm với built-in `/chrome` của Claude Code — lệnh đó chỉ bật/kết nối extension.)
-Chi tiết đầy đủ (load tools, surface map Shopify, safety) nằm trong skill; dưới đây
-là phần cứng phải nhớ:
+Chi tiết đầy đủ (load tools, surface map Shopify, safety) nằm trong skill; protocol
+tab-group dưới đây **chỉ áp dụng cho các row dùng `claude-in-chrome`**:
 
 - **Trước MỖI lần test: check group trước.** `tabs_context_mcp` (không tham số):
   1. **CÓ group** (kèm tab) → **DÙNG nó**: `navigate` tab sẵn có; chỉ `tabs_create_mcp`
@@ -83,28 +85,39 @@ là phần cứng phải nhớ:
 - **Dọn khi xong:** kết thúc phần test → `tabs_close_mcp` đóng các tab đã mở →
   group của session tự biến mất. Không để group rác sau khi xong việc.
 - **Không đụng tab ngoài group** — `navigate` cũng chỉ chạy với tab trong group.
-- **Login có sẵn.** Chrome thật đã đăng nhập Shopify Admin / store / Notion... →
-  hết hẳn vấn đề device-bound + Cloudflare; **không cần cookie-import**.
+- **Login có sẵn không đồng nghĩa drive được iframe.** Chrome thật đã đăng nhập
+  Shopify Admin / store / Notion nên `claude-in-chrome` mở được các page đó mà không
+  cookie-import; `find`/`read_page` vẫn không thấy controls trong cross-origin app iframe.
 
-#### Fallback — verify trên browser cần login (khi /my-chrome không khả dụng)
+#### HARD STOP browser — 2 attempts
 
-Chỉ khi /my-chrome không dùng được (extension chưa bật, máy khác, cần bulk/headless)
-→ ưu tiên **Chrome DevTools MCP**, sau đó **Playwright MCP** (dùng cái nào đang
-connect trong session; Chrome DevTools MCP trước vì nó attach thẳng vào 1 Chrome
-thật — nếu profile đó đã login sẵn thì không cần import gì cả). Lúc đó nếu trang
-cần login, đi bậc thang **rẻ → đắt**, dừng ở bậc đầu tiên cho ra bằng chứng:
+Sau **2 lần** không reach/act được cùng một control bằng browser tool đã chọn: **DỪNG,
+báo user, không retry lần 3, không thử browser tool thứ ba, không coordinate-click
+xuyên iframe**. Nếu UI không drive được, verify qua staging Firestore hoặc storefront
+trực tiếp và ghi rõ chưa verify embedded UI.
+
+#### Route/fallback cần login
+
+Chọn theo surface trước, không thử tool tuần tự theo thói quen:
 
 1. **Không cần login?** Trang công khai, hoặc test được ở **storefront** thay vì
    admin → cứ đi thẳng, không cần import.
-2. **Dùng lại browser/page context đang mở** trong phiên MCP nếu vừa test xong
+2. **Storefront/theme editor/standalone Admin:** dùng `/my-chrome`; extension không
+   khả dụng thì dùng `/browse` và prime bằng `/qa-login` khi thật sự cần.
+3. **Embedded Admin iframe:** dùng `/browse`, rồi `$B frame --name app-iframe` →
+   `$B snapshot -i` → act bằng `@ref`; `$B frame main` để quay lại shell. Capability
+   này đã xác nhận trong source nhưng **chưa live-verify Shopify ở máy này**.
+4. **Dùng lại browser/page context đang mở** nếu vừa test xong
    bước trước — đừng mở tab mới từ đầu.
-3. **Né Admin bằng đường khác**: app embed → **dev/preview URL** (`shopify app dev`) ·
+5. **Né Admin bằng đường khác**: app embed → **dev/preview URL** (`shopify app dev`) ·
    dựng data/state → **Admin API** · theme/storefront → **theme preview URL**.
-4. **Hết cách → `/qa-login`** (last resort). Chrome DevTools MCP **không có cơ chế
-   copy cookie** — nếu profile riêng của nó (`--user-data-dir`) chưa login, phải login
-   tay 1 lần (persist cho lần sau), hoặc rớt xuống Playwright MCP để `/qa-login` nạp
-   cookie thật (storage-state, đọc từ Chrome thật). Storefront gần như luôn pass;
+6. **Hết cách login → `/qa-login`** (last resort). Storefront thường carry được;
    **Admin device-bound/SSO có thể vẫn chặn** — giới hạn đã biết, không phải bug.
+
+**Dead ends đã chốt:** `claude-in-chrome` `find`/`read_page` không xuyên cross-origin
+embedded iframe; coordinate click không phải fallback. Chrome DevTools MCP
+`--autoConnect`/deviceId là **UNVERIFIED**, không route vào đó. Playwright MCP chỉ
+được biết là configured ở workspace `wishlist-3`; workspace khác không được giả định có.
 
 ---
 
@@ -136,7 +149,7 @@ Viết **acceptance criteria cụ thể**: "xong" = gì, input/output, edge case
 **A6. Implement — lát mỏng trước** — `/implement`  ·  build **lát dọc mỏng nhất chạy end-to-end** trước, rồi mở rộng. **Đừng big-bang.** Tới khi test xanh.
 
 **A7. Verify + blast radius** — `/my-verify` *(route theo layer: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*  ·  feature mới **có làm vỡ flow cũ không?** UI mới: qua **design-verify** (design-eye §B) như B8.
-*Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
+*Verify cần browser → **/my-chrome route theo surface** (mục "Test trên browser"); embedded Admin dùng `/browse frame`, không dùng `claude-in-chrome` coordinate click.*
 
 **A8. Đóng** — **spec-check** *(agent fresh, chỉ nhận spec A1 + diff: "có build đúng cái đã chốt không — thiếu gì, thừa gì, tự ý đổi gì?")* → `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` → `/deploy-staging` → QC
 *Spec-check đứng ĐẦU và tách khỏi review chất lượng: chấm diff theo SPEC bắt được lớp lỗi mà chấm theo code-quality bỏ sót (silent scope drift, tự lấp spec gap, feature không ai xin) — đo được ~60-70% lỗi thuộc lớp này. Reviewer fresh không được xem lý luận lúc build — chỉ spec + diff.*
@@ -167,7 +180,7 @@ Nhận findings theo framing **"reviewer ngoài nộp bản phân tích này —
 **B8. Verify + blast radius** — `/my-verify` *(route: `/my-frontend-fix` UI · emulator/Jest BE · `/verify`·`/qa` E2E)*
 Chống băng-dán (giá trị runtime đổi đúng, không hardcode/`!important` đè) + blast radius (mọi nơi cùng nguồn) + regression.
 Bug UI: thêm cổng **design-verify** (design-eye §B — cơ học trên DOM rồi taste rubric, 5 dimension chấm 0-10, mọi cái ≥8 mới đóng; [Medium]/[Nitpick] → polish, đổ về checklist C, không tự sửa).
-*Verify cần browser → **/my-chrome trên Chrome thật, group tab "Claude"** (mục "Test trên browser"); Chrome DevTools MCP / Playwright MCP + `/qa-login` chỉ là fallback.*
+*Verify cần browser → **/my-chrome route theo surface** (mục "Test trên browser"); embedded Admin dùng `/browse frame`, không dùng `claude-in-chrome` coordinate click.*
 
 **B9. Đóng** — **spec-check** *(agent fresh, chỉ nhận root cause B2 + scope B6/B7 + diff: "fix đúng NGUỒN đã chứng minh không? có drive-by refactor không?")* → `/tech-review` + `/impact-review` → `/review` → local verify → `/my-commit` (message = câu root cause) → `/deploy-staging` → QC
 *`/tech-review` (chất lượng code + merge-provenance) và `/impact-review` (dự đoán regression qua caller/dependent) là 2 lens nhẹ, 1-pass, chạy song song được — đứng trước `/review` (pipeline nặng — SQL/security/concurrency) để bắt sớm trước khi đầu tư vào pass nặng hơn.*

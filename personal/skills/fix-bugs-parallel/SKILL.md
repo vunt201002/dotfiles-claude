@@ -1,12 +1,12 @@
 ---
 name: fix-bugs-parallel
-description: Fix a BATCH of bugs concurrently — one Agent per bug running Workflow B, with browser-verify throttled since every agent shares one real Chrome. Main session coordinates, proposes a parallelism level for confirmation, and never edits code itself. NOT for a single bug — use /fix-bug. Never commits or pushes. Use when asked "fix these bugs in parallel", "sửa nhiều bug song song", "spawn agent cho từng bug", "áp workflow B cho list bug này", "/fix-bugs-parallel", or right after listing several bugs to fix concurrently.
+description: Fix a BATCH of bugs concurrently — one Agent per bug running Workflow B, with browser-verify throttled because agents share browser sessions and must route by surface. Storefront/theme/standalone Admin use claude-in-chrome; embedded Admin cross-origin iframes use /browse `frame --name app-iframe`, never coordinate-clicking. Main session coordinates, proposes parallelism, and never edits code itself. NOT for a single bug — use /fix-bug. Never commits or pushes. Use when asked "fix these bugs in parallel", "sửa nhiều bug song song", "spawn agent cho từng bug", "áp workflow B cho list bug này", "/fix-bugs-parallel", or right after listing several bugs to fix concurrently.
 ---
 
 # /fix-bugs-parallel — one agent per bug, Workflow B, coordinated verify
 
 Packages a recurring instruction into one command: "read `workflow.md`, spawn one agent
-per bug, each applies Workflow B, verify with `/my-chrome` against this store URL, you
+per bug, each applies Workflow B, route browser verify with `/my-chrome` against this store URL, you
 stay in the coordinator seat and report back." This exists so that instruction doesn't
 need to be typed out by hand every time a batch of bugs needs fixing.
 
@@ -22,7 +22,7 @@ investigation/fix/verify work happens inside each spawned agent.
 1. **Store URL — required.** A Shopify admin/storefront URL (e.g.
    `https://admin.shopify.com/store/<slug>/apps/<app-id>?dev-console=show`), passed
    right after the command. Every spawned agent verifies against this same URL via
-   `/my-chrome`. If it's missing, ask for it — don't guess a store or reuse one from a
+   `/my-chrome` theo surface. If it's missing, ask for it — don't guess a store or reuse one from a
    much earlier, possibly stale part of the conversation without confirming it's still
    the right one.
 
@@ -59,7 +59,7 @@ FIX BUGS IN PARALLEL — <N> bugs, store: <store-url>
 N. <bug N title/summary>
 ────────────────────────────────
 Each agent will read workflow.md and run Workflow B (Fix bug) against this repo,
-verifying with /my-chrome on the store above.
+verifying with /my-chrome surface routing on the store above.
 ```
 
 If the read-back doesn't match what the user meant (wrong bugs pulled from context,
@@ -86,10 +86,10 @@ blindly:
   terminal, its own file edits (assuming bugs don't touch the same files; flag it in
   Step 1's read-back if two bug titles look like they'll collide on the same
   file/feature area, and consider serializing just that pair).
-- **The browser-verify step (B8, `/my-chrome`) is the actual constraint** — every agent
-  shares the same real, physical Chrome window. This is what parallelism level actually
-  throttles: at most that many agents should be in their B8 verify step at the same
-  moment. Say this explicitly in your proposal.
+- **The browser-verify step (B8, `/my-chrome`) is the actual constraint** — agents
+  share real-Chrome tab groups or the `/browse` session selected by surface. This is
+  what parallelism level actually throttles: at most that many agents should be in
+  B8 at the same moment. Say this explicitly in your proposal.
 
 Propose a number and reasoning, e.g.:
 
@@ -99,13 +99,13 @@ Proposing 4 concurrent agents for this batch of 9 bugs:
   - 3 touch webhook/backend flows → want closer attention, would rather not have
     all 3 mid-investigation at once
   - Browser verify (B8) will be the pinch point — capping at 4 keeps at most 4
-    agents ever trying to drive Chrome at the same time
+    agents ever trying to drive the shared browser target at the same time
 Proceed with 4? Or a different number?
 ```
 
 Wait for the user's answer (a number, "go with your suggestion", or a correction) before
 dispatching. This is a real decision point, not a formality — skip it and you've
-silently decided how much of the user's Chrome session gets contended.
+silently decided how much of the shared browser session gets contended.
 
 ---
 
@@ -122,8 +122,15 @@ working directory).
 
 Bug: <full bug description — title, repro steps, whatever detail is available>
 
-When you reach a browser-verify step (B8 in Workflow B), use skill /my-chrome to drive
-the browser against this store: <store-url>
+When you reach a browser-verify step (B8 in Workflow B), use skill /my-chrome to route
+by surface against this store: <store-url>. Storefront/theme editor/standalone Admin
+use claude-in-chrome. Embedded Admin cross-origin iframe uses /browse:
+`$B frame --name app-iframe` → `$B snapshot -i` → act by `@ref` → `$B frame main`.
+That frame path is documented in source but not yet live-verified against Shopify here.
+Never use claude-in-chrome find/read_page or coordinate-clicking for embedded controls.
+After 2 failed attempts to reach the same control: STOP, report, do not retry a third
+time or try a third browser tool. If UI remains unreachable, verify staging Firestore
+or the storefront and state explicitly that embedded UI was not verified.
 
 If the bug is UI/frontend: read ~/.claude/skills/my-frontend-fix/references/design-eye.md
 and apply it — §A visual read (+ §D1 pattern table first) when opening the surface, §B
@@ -142,7 +149,7 @@ Follow Workflow B's gates exactly:
 - B4: red-team your own root cause (a codex challenge if that skill's available, or your
   own adversarial re-check if not) before implementing.
 - B5-B7: red test → minimal fix at the root, no drive-by refactor.
-- B8: verify + blast radius, using /my-chrome against the store URL above.
+- B8: verify + blast radius, using /my-chrome surface routing against the store URL above.
 - B9: run the closing sequence in workflow.md's order, don't collapse it — (1) spec-check
   FIRST: re-read your own diff against ONLY the root cause you proved at B2 and the scope
   you set at B6/B7, asking "did I fix the proven source, and did anything ride along that
@@ -240,11 +247,11 @@ does NOT get a fix applied.
   Step 1 always reads it back before committing to it.
 - **Parallelism is proposed and confirmed, not fixed or unlimited.** A hardcoded "2-3"
   under-uses a batch of 20 easy typo fixes; "spawn everything at once" contends the
-  user's one real Chrome window and makes root-cause investigations harder to attend to
+  user's shared browser sessions and makes root-cause investigations harder to attend to
   individually. Sizing it live off actual bug count and difficulty, then confirming,
   gets the batch-appropriate number without guessing wrong in either direction.
 - **Non-browser steps run fully parallel; only B8 throttles.** The shared-resource
-  constraint is real Chrome, not CPU or file I/O — B1-B7 (investigate, prove root cause,
+  constraint is the routed browser session, not CPU or file I/O — B1-B7 (investigate, prove root cause,
   implement) have no such constraint, so throttling the whole pipeline to the browser
   limit would waste the parallelism the skill exists to provide.
 - **Never commits/pushes.** Committing bug fixes from N different agents without the

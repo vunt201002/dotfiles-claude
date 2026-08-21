@@ -111,12 +111,13 @@ shortcut:
   DOM checks first, then taste rubric, scored 0-10 per dimension; every dimension
   ≥8 or remaining findings severity-triaged; [Medium]/[Nitpick] → reported as
   polish items, never fixed inline). B8 is not passed while design-verify hasn't.
-  Needs a browser?
-  Follow workflow.md's "Test trên browser" ladder: **/my-chrome** first (real Chrome,
-  already logged in) → if unavailable, **Chrome DevTools MCP** → **Playwright MCP**
-  (with `/qa-login` priming cookies if the target needs login and neither MCP is
-  already authenticated) — see that doc section for the full ladder. Only ask the
-  user for a target URL here, and only if genuinely needed and not already known.
+  Needs a browser? Follow `/my-chrome`'s **surface routing**, không theo tool ladder:
+  storefront/theme editor/standalone Admin → `claude-in-chrome`; embedded Admin
+  cross-origin iframe → `/browse` + `$B frame --name app-iframe` (documented trong
+  source, chưa live-verify Shopify ở máy này). Sau 2 lần không reach cùng control:
+  STOP, báo user, không retry lần 3/không thử tool thứ ba. UI không drive được thì
+  verify qua staging Firestore hoặc storefront và ghi rõ embedded UI chưa được verify.
+  Only ask the user for a target URL here, and only if genuinely needed and not known.
 - **B9. Ratchet, rồi stop.** Trước khi dừng, một câu hỏi (1 phút): *failure class
   này có đáng đẻ ra một CƠ CHẾ không?* — +1 dòng pattern design-eye §D1 hoặc
   negative list §D2 (**bắt buộc với bug UI**), +1 hook trong `personal/hooks/` nếu

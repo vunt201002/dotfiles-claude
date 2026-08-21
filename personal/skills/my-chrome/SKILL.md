@@ -1,22 +1,66 @@
 ---
 name: my-chrome
-description: Drive the user's REAL logged-in Chrome (claude-in-chrome MCP) to test any web app — the DEFAULT browser for every test/verify step, in every project. Real Chrome means Shopify Admin device-bound sessions and Cloudflare just work, no cookie import. Enforces tab-group discipline: check the session's Claude tab group first, create it at most once, reuse one tab across URLs, never touch outside tabs, close what you opened. NOT the built-in /chrome command (that only connects/manages the extension). Headless /browse + /qa-login are fallbacks. Use when asked "/my-chrome", "test trên browser", "test trên Chrome", "browser test", "mở browser", or whenever a verify step needs a real logged-in browser.
+description: Route browser verification by SURFACE. Use claude-in-chrome on the user's REAL Chrome for storefront, theme editor, and standalone admin pages; its existing Shopify login/device-bound session can open Admin without cookie import, but it CANNOT drive controls inside a cross-origin embedded-admin iframe. For an embedded admin app, route to /browse and its documented `frame --name app-iframe` context switch instead (documented in source, not yet verified against live Shopify here). Enforces tab-group discipline and a hard stop after 2 failed browser attempts. Use when asked "/my-chrome", "test trên browser", "test trên Chrome", "browser test", "mở browser", or whenever a verify step needs a browser.
 type: workflow
 ---
 
-# /my-chrome — test trên Chrome thật (claude-in-chrome)
+# /my-chrome — route browser theo surface
 
-> **Vai:** browser driver mặc định cho mọi bước test/verify cần browser (A7/B8 của
-> `workflow.md`, QA, dogfood). Chrome thật của anh **đã login sẵn** (Shopify Admin
-> device-bound + Cloudflare pass tự nhiên) → không cookie-import, không headless.
+> **Vai:** router theo **surface** cho mọi bước test/verify cần browser (A7/B8 của
+> `workflow.md`, QA, dogfood). Chrome thật của anh **đã login sẵn** nên mở được
+> Shopify Admin mà không cookie-import. Điều đó chỉ giải quyết **LOGIN**, không có
+> nghĩa `claude-in-chrome` drive được UI nằm trong cross-origin iframe.
 >
-> **KHÔNG dùng cho:** bulk/headless check hàng loạt hoặc khi extension không chạy →
-> fallback `/browse` (bậc thang login trong `workflow.md` § "Test trên browser").
+> **KHÔNG dùng `claude-in-chrome` cho:** embedded admin app trong cross-origin
+> iframe. Surface đó route thẳng sang `/browse` + `frame`; đừng thử coordinate click.
 >
 > **Đừng nhầm với built-in `/chrome`** của Claude Code — lệnh đó chỉ bật/kết nối/
 > reconnect extension. Extension chưa nối → bảo anh chạy `/chrome` (built-in) trước.
 
-## 0. Load tools (1 lần / session)
+## 0. Route theo SURFACE — chọn trước khi mở tool
+
+| Surface | Tool | Command / cách act |
+|---|---|---|
+| Storefront | `claude-in-chrome` trên Chrome thật | `find` + `read_page` → `computer` theo ref |
+| Theme editor (phần ngoài iframe) | `claude-in-chrome` trên Chrome thật | `find` + `read_page` → `computer` theo ref |
+| Standalone Admin page (không phải app embed) | `claude-in-chrome` trên Chrome thật | `find` + `read_page` → `computer` theo ref; login sẵn chỉ có nghĩa là mở được trang |
+| **Embedded Admin app trong cross-origin iframe** | **`/browse`** | **`$B goto <admin-app-url>` → `$B frame --name app-iframe` → `$B snapshot -i` → act bằng `@ref`; xong chạy `$B frame main`** |
+
+Trong frame, dùng `snapshot`/`text`/`click`/`fill` như bình thường; output snapshot có
+header `[Context: iframe src="..."]`. Nếu iframe không mang name đó, source còn hỗ trợ
+`$B frame <css-selector-or-@ref>` và `$B frame --url <literal-pattern>`; ưu tiên name
+đã biết, không đoán selector khi chưa đọc DOM.
+
+**Trạng thái xác minh:** route `$B frame --name app-iframe` là capability **đã đọc và
+xác nhận trong source** (`commands.ts`, `meta-commands.ts`, `snapshot.ts`,
+`tab-session.ts`), nhưng **chưa được verify trên live Shopify ở máy này**. Human confirm
+1 lần bằng session đã login: mở embedded app → chạy lệnh frame → `snapshot -i` phải thấy
+control của app → click một control non-destructive → `frame main` quay lại Admin shell.
+
+State/runtime ngoài iframe: `javascript_tool` + `read_console_messages` có `pattern`.
+API calls ngoài iframe: `read_network_requests`.
+
+### HARD STOP — 2 ATTEMPTS MAX
+
+> **Sau 2 lần không reach/act được cùng một control bằng browser tool đã chọn: DỪNG
+> NGAY và báo anh. Không retry lần 3, không nhảy sang browser tool thứ ba, không đổi
+> sang coordinate-click để cố xuyên iframe.**
+
+Report surface, tool + command đã dùng, hai kết quả fail, và bằng chứng còn thiếu.
+Chỉ đổi tool trước khi thử khi routing table trên chỉ ra tool hiện tại sai surface.
+
+### Dead ends đã chốt — không rediscover
+
+- **Cross-origin embedded iframe qua `claude-in-chrome` `find`/`read_page`: không
+  work. Không retry. Settled.** Hai tool chỉ thấy Admin shell, không thấy controls app.
+- **Screenshot + `computer` theo coordinate để drive embedded iframe:** dead end,
+  không phải fallback. Screenshot chỉ dùng làm bằng chứng hình ảnh.
+- **Chrome DevTools MCP `--autoConnect` chọn Chrome bằng deviceId:** **UNVERIFIED**;
+  không route test vào đây và không trình bày như solution.
+- **Playwright MCP:** chỉ được biết là configured trong workspace `wishlist-3`;
+  workspace khác không được giả định có tool này.
+
+## 1. Load tools (1 lần / session, chỉ khi route chọn `claude-in-chrome`)
 
 Nếu tool `mcp__claude-in-chrome__*` đang deferred → load **1 lần bằng 1 call
 ToolSearch duy nhất** (batch, không load lẻ từng tool):
@@ -27,7 +71,7 @@ ToolSearch "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome
 
 (Cần form thì thêm `form_input`; cần quay GIF thì thêm `gif_creator` vào cùng call.)
 
-## 1. Tab-group protocol — ĐIỀU KIỆN CỨNG, làm đúng thứ tự
+## 2. Tab-group protocol — chỉ cho route `claude-in-chrome`
 
 1. **Check trước:** `tabs_context_mcp` (không tham số).
 2. **CÓ group** (kèm tab) → **DÙNG nó**: `navigate` tab sẵn có theo tabId.
@@ -45,7 +89,7 @@ ToolSearch "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome
 > theo TỪNG session — session mới luôn "chưa có" nên tạo 1 group mới; không nhận
 > lại group cũ hay group tạo tay. Vì vậy bước 6 là bắt buộc, không phải lịch sự.
 
-## 2. Target URL — đọc config của project, đừng đoán
+## 3. Target URL — đọc config của project, đừng đoán
 
 - **Shopify app** (Joy, Wishlist...): đọc `shopify.app.toml` / config đang active
   → `dev_store_url` (store), `name`/handle. URL map:
@@ -54,15 +98,6 @@ ToolSearch "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome
 - **App khác**: dev URL/lệnh chạy theo `CLAUDE.md` của project (Project Adapter).
   Thiếu → hỏi rồi ghi vào CLAUDE.md của project đó — không hardcode ở đây.
 
-## 3. Đọc trang theo surface (chọn đúng đồ, đỡ mò)
-
-| Surface | Đọc/act bằng |
-|---|---|
-| Storefront / theme editor (KHÔNG iframe) | `find` (tìm element bằng NL) + `read_page` (a11y tree) → `computer` theo ref |
-| **Embedded admin app** (cross-origin **iframe**) | `find`/`read_page` KHÔNG thấy controls của app → screenshot + `computer` theo **coordinate**, zoom khi control nhỏ |
-| State/runtime | `javascript_tool` (console.log → đọc lại bằng `read_console_messages` với `pattern`) |
-| API calls | `read_network_requests` |
-
 ## 4. Verify — bằng chứng, không phải "nhìn ổn"
 
 - Screenshot → **Read ảnh** (chưa Read = chưa verify).
@@ -70,6 +105,9 @@ ToolSearch "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome
 - `read_network_requests` cho API; backend log theo adapter (Joy/Wishlist:
   `firebase-debug.log`, emulator UI).
 - Chống băng-dán + blast radius: theo `/my-verify`; fix loop UI: theo `/my-frontend-fix`.
+- Nếu UI không drive được sau hard stop: verify qua **data thay vì UI** — đọc staging
+  Firestore bằng adapter của project, hoặc kiểm trực tiếp output trên storefront.
+  Ghi rõ đây là data/storefront verification, không claim đã verify embedded UI.
 
 ## 5. Safety
 
@@ -77,13 +115,14 @@ ToolSearch "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome
   mất điều khiển. Debug bằng console.log + `read_console_messages`.
 - **Prod store** (đuôi `-prod` hoặc store thật): chỉ non-destructive — xem/verify;
   **confirm với anh trước mọi write/checkout/delete**. Order thật = tiền thật.
-- Click fail 2-3 lần / trang treo → **dừng và báo**, đừng retry mù.
+- Click/reach fail → áp dụng **HARD STOP 2 attempts** ở §0.
 
 ## Combine
 
 - **Được gọi từ:** `/my-verify` (route UI) · `/my-frontend-fix` (bước 2 mở surface) · QA flows.
 - **Project adapter:** Joy/Wishlist có `.claude/skills/shopify-testing` +
   `.claude/commands/browser-test.md` riêng — kịch bản đặc thù app defer xuống đó,
-  nhưng **tab-group protocol (§1) luôn theo skill này**.
-- **Fallback:** extension không khả dụng → `/browse` (headless); cần login trong
-  headless → bậc thang trong `workflow.md`, `/qa-login` là nước cuối.
+  nhưng **tab-group protocol (§2) chỉ áp dụng khi row chọn `claude-in-chrome`**.
+- **Fallback theo surface, không theo thói quen:** embedded Admin → `/browse frame`;
+  surface khác mà extension không khả dụng → `/browse`. Cần login trong headless →
+  `/qa-login` là nước cuối; Shopify Admin vẫn có thể chặn vì device-bound/SSO.

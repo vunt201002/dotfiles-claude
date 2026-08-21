@@ -46,13 +46,19 @@ Chỗ liên quan (gần fix, dùng chung code) còn chạy đúng không?
 
 > App-specific: lấy đồ từ **Project Adapter** (Joy: `__joyDebug` + emulator UI `:4012`; Wishlist: Jest + emulator UI `:4000`).
 
-> **Browser khi cần mở trang:** mặc định **/my-chrome** (claude-in-chrome) trên **Chrome thật
-> đang mở**. **Check group trước mỗi lần test:** `tabs_context_mcp` → **CÓ group thì DÙNG**
+> **Browser khi cần mở trang:** dùng **/my-chrome để route theo surface**. Storefront/
+> theme editor/standalone Admin dùng `claude-in-chrome` trên Chrome thật. Chỉ với các
+> surface này, **check group trước mỗi lần test:** `tabs_context_mcp` → **CÓ group thì DÙNG**
 > (`navigate` tab sẵn có; `tabs_create_mcp` chỉ khi cần thêm tab — vẫn vào group đó);
 > **CHƯA có thì tạo đúng 1 lần** rồi tái dùng suốt session. (Check chỉ thấy group của
 > session hiện tại — session mới luôn phải tạo; giới hạn extension #69542.) **Xong việc →
 > `tabs_close_mcp` đóng tab đã mở** để group tự biến mất. Không đụng tab ngoài group.
-> Login Admin/store có sẵn. Headless `/browse` chỉ là fallback khi /my-chrome không khả dụng.
+> Login Admin/store có sẵn chỉ giải quyết login. **Embedded Admin cross-origin iframe
+> route thẳng `/browse`: `$B frame --name app-iframe` → `$B snapshot -i` → act bằng
+> `@ref` → `$B frame main`** (documented trong source, chưa live-verify Shopify ở máy
+> này). Sau 2 lần không reach cùng control: STOP + báo user, không retry lần 3/không
+> thử tool thứ ba. UI không drive được → verify staging Firestore/storefront và ghi rõ
+> embedded UI chưa verify.
 
 ## Vòng lặp
 

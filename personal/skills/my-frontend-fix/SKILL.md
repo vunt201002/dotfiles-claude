@@ -1,6 +1,6 @@
 ---
 name: my-frontend-fix
-description: Generic frontend verification workflow, any web stack. Frontend bugs need visual + runtime verification - the agent can read code but cannot see the rendered UI or live state. Open the rendered surface and diagnose runtime BEFORE coding, fix at the root (not a visual band-aid), verify with a fix to re-render to compare loop, then check regressions + blast radius. Defers root-cause proof to my-bug-hunter; for project power-tools (e.g. Joy __joyDebug / widget v4 layers) points to the project adapter. Carries the design-eye layer (references/design-eye.md): visual read before diagnose, mandatory viewport matrix, design-verify gate (mechanical + taste, scored 0-10) before close, accumulating UI pattern library. Use for any UI/frontend bug fix. Skip for typos/copy/color one-liners.
+description: Generic frontend verification workflow, any web stack. Frontend bugs need visual + runtime verification - the agent can read code but cannot see the rendered UI or live state. Open the rendered surface and diagnose runtime BEFORE coding, fix at the root (not a visual band-aid), verify with a fix to re-render to compare loop, then check regressions + blast radius. Defers root-cause proof to my-bug-hunter; for project power-tools (e.g. Joy __joyDebug / widget v4 layers) points to the project adapter. Carries the design-eye layer (references/design-eye.md) — visual read before diagnose, mandatory viewport matrix, design-verify gate (mechanical + taste, scored 0-10) before close, accumulating UI pattern library. Use for any UI/frontend bug fix. Skip for typos/copy/color one-liners.
 type: workflow
 ---
 
@@ -58,13 +58,20 @@ Chạy app ở trạng thái lỗi, chụp **baseline** (đây cũng là *mốc 
   desktop → desktop + check nhanh 390. Chụp **CẢ CỤM xung quanh**, không chỉ element lỗi
   (visual read §A cần context). Verify cuối (bước 4) phải đủ lại đúng matrix này.
 - URL/lệnh chạy: theo adapter project (Joy: Vite `5173` / admin embed / storefront thật).
-- Browser: mặc định **/my-chrome** (claude-in-chrome) trên **Chrome thật đang mở**.
-  **Check group trước mỗi lần test:** `tabs_context_mcp` → **CÓ group thì DÙNG**
+- Browser: gọi **/my-chrome để route theo surface**. Storefront/theme editor/
+  standalone Admin dùng `claude-in-chrome` trên **Chrome thật đang mở**.
+  Với đúng các surface này, **check group trước mỗi lần test:** `tabs_context_mcp` → **CÓ group thì DÙNG**
   (`navigate` tab sẵn có; `tabs_create_mcp` chỉ khi cần thêm tab — vẫn vào group đó);
   **CHƯA có thì tạo đúng 1 lần** rồi tái dùng suốt session (session mới luôn phải tạo —
   giới hạn extension #69542). **Xong việc → `tabs_close_mcp` đóng tab đã mở** (group
-  tự biến mất). **Không đụng tab ngoài group**. Login Admin/store có sẵn → khỏi cookie-import.
-- Fallback headless (khi /my-chrome không khả dụng): `browse`/Playwright: `goto` → `screenshot` → Read ảnh.
+  tự biến mất). **Không đụng tab ngoài group**. Login Admin/store có sẵn chỉ giải
+  quyết login, không giúp `find`/`read_page` xuyên cross-origin iframe.
+- **Embedded Admin app:** route thẳng `/browse`: `$B goto <url>` →
+  `$B frame --name app-iframe` → `$B snapshot -i` → act bằng `@ref` → `$B frame main`.
+  Đây là capability documented trong source, **chưa live-verify Shopify ở máy này**.
+- **HARD STOP:** sau 2 lần không reach cùng control, dừng + báo user; không retry lần
+  3, không thử tool thứ ba, không coordinate-click xuyên iframe. Nếu UI không drive
+  được, verify staging Firestore/storefront và report rõ embedded UI chưa verify.
 
 ## 3. Diagnose runtime TRƯỚC khi code (diagnose-first, fix-second)
 
