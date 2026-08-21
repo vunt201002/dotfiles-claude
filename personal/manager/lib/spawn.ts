@@ -300,6 +300,7 @@ export const cliSpawnPort: SpawnPort = {
       workingDirectory: path.resolve(req.scope),
       model: resolveModelId(req.modelAlias),
       maxTurns: req.maxTurns ?? cfg.maxTurns[req.role],
+      timeout: cfg.cliRunTimeoutMs,
       allowedTools: toolsFor(req, policy).allowedTools,
       testName: `${req.taskId}:${req.role}`,
       env: childEnv(req),
@@ -314,7 +315,7 @@ export const cliSpawnPort: SpawnPort = {
       costUsd: cost.usd,
       costKnown: cost.known,
       model: result.model,
-      sessionId: '',
+      sessionId: result.sessionId,
       durationMs: result.duration,
       worktreeCreated: false,
     };

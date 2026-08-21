@@ -603,6 +603,18 @@ describe('human task mutations use one accounting choke point', () => {
     expect(serverSource).not.toMatch(/saveTask|applyTransition|\.state\s*=/);
   });
 
+  test('the cli spawn port sets its own run timeout and passes the session id through', () => {
+    const spawnSource = codeOnly(fs.readFileSync(path.join(MANAGER_DIR, SPAWN_MODULE), 'utf-8'));
+    const port = spawnSource.slice(spawnSource.indexOf('export const cliSpawnPort'));
+    const body = port.slice(0, port.indexOf('\n};') + 3);
+
+    expect(body, 'cliSpawnPort inherits the eval harness two-minute default').toContain(
+      'timeout: cfg.cliRunTimeoutMs',
+    );
+    expect(body, 'a hardcoded empty session id blinds agentStarted()').not.toMatch(/sessionId:\s*''/);
+    expect(body).toContain('sessionId: result.sessionId');
+  });
+
   test('all human mutation entrypoints call recordHumanTouch', () => {
     expect((orchestratorSource.match(/human_touches \+= 1/g) ?? []).length).toBe(1);
     for (const method of ['answer', 'approve', 'stop']) {

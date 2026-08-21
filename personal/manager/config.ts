@@ -132,6 +132,12 @@ export interface ManagerConfig {
   /** How long a pane has to register a session and start its first turn. */
   cmuxStartupMs: number;
   cmuxRunTimeoutMs: number;
+  /**
+   * How long a `claude -p` run may take. Without it the cli port inherits the
+   * eval harness default of two minutes, which kills real implementation work
+   * mid-edit and reports it as a run that produced nothing.
+   */
+  cliRunTimeoutMs: number;
   /** How long an agent may sit at needsInput before the task is handed back. */
   cmuxNeedsInputGraceMs: number;
   /**
@@ -208,6 +214,7 @@ export const DEFAULT_CONFIG: ManagerConfig = {
   cmuxClaudeArgs: [],
   cmuxStartupMs: 3 * 60_000,
   cmuxRunTimeoutMs: 45 * 60_000,
+  cliRunTimeoutMs: 45 * 60_000,
   cmuxNeedsInputGraceMs: 2 * 60_000,
   cmuxSlotWaitMs: 30 * 60_000,
   cmuxCloseOnSuccess: false,
