@@ -357,7 +357,7 @@
       "guard": "no tool call to judge — this bug never reaches the guard surface",
       "lint": "no eslint:recommended error",
       "tsc": "fixture is js, not typescript",
-      "red-test": "notes would be written to /private/var/folders/1r/19c4fwp94xb6_6t5z7h4fzbw0000gn/T/oracle-symlink-path-cDuKSn/home/.claude/brain-vault, outside the checkout, so they never get committed",
+      "red-test": "notes would be written to <temp>/oracle-symlink-path-<generated>/home/.claude/brain-vault, outside the checkout, so they never get committed",
       "spec-check": "The report correctly identifies the core defect: vault resolution is caller-dependent via defaultVaultDir(scriptPath), which causes the vault to resolve relative to the symlink location rather than the repo. The detection matches the plante",
       "reviewer": "The QA report contains no findings at all. The planted bug regarding symlink resolution causing the vault to be created outside the repository (not committed) was not detected. This is a legitimate defect that would require either running t"
     },

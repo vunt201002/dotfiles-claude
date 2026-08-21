@@ -2431,7 +2431,33 @@ describe.skipIf(!llm.enabled)('oracle llm gates (ORACLE_LLM=1)', () => {
   }, 1_800_000);
 });
 
-describe('writeBaseline symlink guard', () => {
+describe('writeBaseline', () => {
+  test('freezing identical measurements twice is byte-identical across generated temp paths', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-wb-stable-'));
+    const dest = path.join(dir, 'baseline.json');
+    const tempRoot = fs.realpathSync(os.tmpdir());
+    const report = reportWith([]);
+    try {
+      report.details = {
+        'symlink-path': {
+          'red-test': `notes would be written to ${path.join(tempRoot, 'oracle-symlink-path-AAAAAA', 'home', '.claude', 'brain-vault')}, outside the checkout`,
+        },
+      };
+      writeBaseline(report, dest);
+      const first = fs.readFileSync(dest, 'utf-8');
+
+      report.details['symlink-path']['red-test'] = `notes would be written to ${path.join(tempRoot, 'oracle-symlink-path-BBBBBB', 'home', '.claude', 'brain-vault')}, outside the checkout`;
+      writeBaseline(report, dest);
+      const second = fs.readFileSync(dest, 'utf-8');
+
+      expect(second).toBe(first);
+      expect(second).toContain('<temp>/oracle-symlink-path-<generated>/home/.claude/brain-vault');
+      expect(second).not.toContain(tempRoot);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('refuses to write when the baseline path is a symlink and leaves the link target untouched', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-wb-'));
     const real = path.join(dir, 'real.json');

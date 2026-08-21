@@ -4,6 +4,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { ORACLE_DIR, type CorpusFingerprint, type FixtureCase } from './cases';
 import type { GateOutcome, Verdict, FixtureIntegrity } from './gates';
@@ -683,6 +684,29 @@ function readBaseline(): OracleReport | null {
   return JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8')) as OracleReport;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizedBaselineDetails(details: OracleReport['details']): OracleReport['details'] {
+  const tempDir = os.tmpdir();
+  const tempRoots = new Set([tempDir, fs.realpathSync(tempDir)]);
+  const patterns = [...tempRoots]
+    .sort((a, b) => b.length - a.length)
+    .map(root => new RegExp(`${escapeRegExp(root)}[\\\\/]oracle-([^\\\\/\\s]+)-[A-Za-z0-9]{6}(?=[\\\\/\\s]|$)`, 'g'));
+
+  return Object.fromEntries(Object.entries(details).map(([fixture, gates]) => [
+    fixture,
+    Object.fromEntries(Object.entries(gates).map(([gate, detail]) => [
+      gate,
+      patterns.reduce(
+        (normalized, pattern) => normalized.replace(pattern, '<temp>/oracle-$1-<generated>'),
+        detail,
+      ),
+    ])),
+  ]));
+}
+
 /**
  * Freeze this run as the yardstick.
  *
@@ -700,7 +724,8 @@ export function writeBaseline(report: OracleReport, dest: string = BASELINE_PATH
   if (stat?.isSymbolicLink()) {
     throw new Error(`writeBaseline: ${dest} is a symbolic link — refusing to write`);
   }
-  fs.writeFileSync(dest, `${JSON.stringify(report, null, 2)}\n`);
+  const stored = { ...report, details: normalizedBaselineDetails(report.details) };
+  fs.writeFileSync(dest, `${JSON.stringify(stored, null, 2)}\n`);
 }
 
 const PAD = 16;
