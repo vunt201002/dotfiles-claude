@@ -204,10 +204,11 @@ export function checkDayCeiling(tasks: TaskRecord[], cfg: ManagerConfig = loadCo
   const today = tasks.filter((t) => localDayKey(t.created_at) === key);
   const partial = unmeasuredRunsAcross(today) > 0;
   const spent = spentToday(tasks, now);
-  if (spent <= cfg.dayCeilingUsd) return { ok: true, reason: '', partial };
+  if (spent < cfg.dayCeilingUsd) return { ok: true, reason: '', partial };
+  const boundary = spent === cfg.dayCeilingUsd ? 'reached' : 'exceeded';
   return {
     ok: false,
-    reason: `daily spend ${formatSpend(spent, unmeasuredRunsAcross(today))} exceeded ceiling $${cfg.dayCeilingUsd.toFixed(2)}`,
+    reason: `daily spend ${formatSpend(spent, unmeasuredRunsAcross(today))} ${boundary} ceiling $${cfg.dayCeilingUsd.toFixed(2)}`,
     partial,
   };
 }

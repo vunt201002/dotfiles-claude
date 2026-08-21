@@ -11,7 +11,7 @@ import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { resetConfigCache } from '../config';
 import { appendGateLog } from '../lib/gate-log';
 import { readEntries } from '../lib/gate-log-port';
-import { __clearWaiters, BROWSER_TOKEN, holderOf, projectLock } from '../lib/locks';
+import { __clearWaiters, BROWSER_TOKEN, holderOf, projectLock, queueFor } from '../lib/locks';
 import { Orchestrator } from '../lib/orchestrator';
 import type { ExecFn, ExecResult } from '../lib/assert-runner';
 import { approveCommands, isCommandApproved } from '../lib/assert-approvals';
@@ -20,7 +20,7 @@ import type { DiffResult } from '../lib/git';
 import { assertApprovalsFile, ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths';
 import { reconcile } from '../lib/reconcile';
 import type { SpawnPort, SpawnRequest } from '../lib/spawn';
-import { listTasks, loadTask, saveTaskAndIndex, writeState } from '../lib/store';
+import { listTasks, loadTask, newTaskRecord, saveTaskAndIndex, writeState } from '../lib/store';
 import { __resetEvents, subscribe } from '../lib/events';
 import { emptyState, type TaskEnvelope } from '../types';
 
@@ -139,7 +139,11 @@ interface MockCall {
  * claim has no independent witness.
  */
 function makePort(
-  reply: (phase: Phase, call: MockCall, callIndex: number) => string | { output: string; outputs: string[] },
+  reply: (
+    phase: Phase,
+    call: MockCall,
+    callIndex: number,
+  ) => string | { output: string; outputs: string[] } | Promise<string | { output: string; outputs: string[] }>,
   costUsd = 0.1,
   hookGates: string[] = ['tsc'],
 ): { port: SpawnPort; calls: MockCall[] } {
@@ -159,7 +163,7 @@ function makePort(
         projectLockHolder: holderOf(projectLock(req.project)),
       };
       calls.push(call);
-      const response = reply(call.phase, call, calls.length - 1);
+      const response = await reply(call.phase, call, calls.length - 1);
       const output = typeof response === 'string' ? response : response.output;
       return {
         output,
@@ -685,9 +689,130 @@ describe('scarce resources', () => {
     expect(holderOf(projectLock(PROJECT))).toBeNull();
     expect(holderOf(projectLock('other'))).toBeNull();
   }, 20_000);
+
+  test('a third task queued behind two slow live holders is not terminated for waiting', async () => {
+    fs.writeFileSync(
+      managerConfigFile(),
+      JSON.stringify({ browserTools: ['mcp__test-browser__navigate'], lockWaitTimeoutMs: 1_000 }),
+    );
+    resetConfigCache();
+
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let enteredFirst!: () => void;
+    let enteredSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve;
+    });
+    const secondEntered = new Promise<void>((resolve) => {
+      enteredSecond = resolve;
+    });
+    const { port, calls } = makePort(async (phase, call) => {
+      if (phase === 'size' && call.taskId.includes('-first-')) {
+        enteredFirst();
+        await firstGate;
+      }
+      if (phase === 'size' && call.taskId.includes('-second-')) {
+        enteredSecond();
+        await secondGate;
+      }
+      return happyReply(phase);
+    });
+    const manager = newOrchestrator(port);
+    const first = await manager.submit({ project: PROJECT, issue: 'first', source: 'cli' });
+    await firstEntered;
+    const second = await manager.submit({ project: PROJECT, issue: 'second', source: 'cli' });
+    const third = await manager.submit({ project: PROJECT, issue: 'third', source: 'cli' });
+
+    await Bun.sleep(600);
+    expect(queueFor(projectLock(PROJECT))).toEqual([second.taskId, third.taskId]);
+    releaseFirst();
+    await secondEntered;
+    await Bun.sleep(600);
+    releaseSecond();
+    await Promise.all([manager.settle(first.taskId), manager.settle(second.taskId), manager.settle(third.taskId)]);
+
+    expect(loadTask(third.taskId)?.state).toBe('REPORTED');
+    expect(calls.filter((call) => call.phase === 'size').map((call) => call.taskId)).toEqual([
+      first.taskId,
+      second.taskId,
+      third.taskId,
+    ]);
+  });
 });
 
 describe('cost ceilings', () => {
+  test('a single run that overshoots its ceiling is capped and records the breach loudly', async () => {
+    const requests: SpawnRequest[] = [];
+    const port: SpawnPort = {
+      async run(req) {
+        requests.push(req);
+        return {
+          output: 'no parseable envelope',
+          outputs: ['no parseable envelope'],
+          exitReason: 'success',
+          turnsUsed: 3,
+          costUsd: 6,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: 'overspend-session',
+          durationMs: 5,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'single-run-overspend', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.maxBudgetUsd).toBe(5);
+    const task = loadTask(taskId);
+    expect(task?.cost_usd_actual).toBe(6);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('envelope rejected');
+    expect(task?.report_lines.join(' ')).toContain('run breached task ceiling: spent $6.00 of $5.00');
+  });
+
+  test('a run is capped by remaining daily headroom and a daily breach is recorded', async () => {
+    const prior = newTaskRecord({ project: 'other', issue: 'prior-spend', source: 'cli', scope: REPO, ceilingUsd: 50 });
+    prior.cost_usd_actual = 38;
+    await saveTaskAndIndex(prior);
+    const requests: SpawnRequest[] = [];
+    const port: SpawnPort = {
+      async run(req) {
+        requests.push(req);
+        return {
+          output: 'no parseable envelope',
+          outputs: ['no parseable envelope'],
+          exitReason: 'success',
+          turnsUsed: 3,
+          costUsd: 3,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: 'daily-overspend-session',
+          durationMs: 5,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'daily-overspend', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.maxBudgetUsd).toBe(2);
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.report_lines.join(' ')).toContain('run breached daily ceiling: daily spend $41.00 exceeded ceiling $40.00');
+  });
+
   test('raising a budget counts once under the budget-raise kind', async () => {
     const { port } = makePort(happyReply, 4);
     const manager = newOrchestrator(port);

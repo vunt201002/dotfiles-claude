@@ -95,6 +95,7 @@ export interface RunAgentSdkOptions {
   workingDirectory: string;
   model?: string;
   maxTurns?: number;
+  maxBudgetUsd?: number;
   allowedTools?: string[];
   disallowedTools?: string[];
   permissionMode?: PermissionMode;
@@ -371,6 +372,7 @@ export async function runAgentSdkTest(
         model,
         cwd: opts.workingDirectory,
         maxTurns: opts.maxTurns ?? 5,
+        maxBudgetUsd: opts.maxBudgetUsd,
         tools: resolvedTools,
         disallowedTools: opts.disallowedTools,
         allowedTools: resolvedTools,

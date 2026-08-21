@@ -42,7 +42,7 @@ import {
   type ChainRun,
 } from './closing-chain';
 import { approveCommands } from './assert-approvals';
-import { checkDayCeiling, checkTaskCeiling, collectLaneSamples, laneCeiling, unmeasuredRuns } from './cost';
+import { checkDayCeiling, checkTaskCeiling, collectLaneSamples, laneCeiling, spentToday, unmeasuredRuns } from './cost';
 import { buildApprovalEvent, buildReportEvent, emit } from './events';
 import type { AssertRun } from './assert-runner';
 import { resolveProjectScope } from './paths';
@@ -156,6 +156,7 @@ export class Orchestrator {
   private readonly stopRequested = new Set<string>();
   private readonly running = new Map<string, Promise<void>>();
   private readonly roundTwoFail = new Set<string>();
+  private readonly budgetReservations = new Map<string, number>();
 
   constructor(deps: OrchestratorDeps = {}) {
     this.spawnPort = deps.spawnPort ?? defaultSpawnPort();
@@ -256,7 +257,9 @@ export class Orchestrator {
   /**
    * One main agent per repo (§6.3). Acquired inside the driver, never inside
    * an HTTP handler, so a phone waiting on `approve` is not held open while
-   * another task finishes with the same repo. Idempotent when already held.
+   * another task finishes with the same repo. A project wait has no deadline:
+   * FIFO time includes every live task ahead, while daemon boot reconciliation
+   * revokes a crashed holder. Idempotent when already held.
    */
   private async ensureProjectLock(task: TaskRecord): Promise<void> {
     await acquire(projectLock(task.project), task.id);
@@ -697,6 +700,7 @@ export class Orchestrator {
   ) {
     const cfg = loadConfig();
     const modelAlias = modelForRole(role, { lane: task.envelope?.lane, attempt: task.attempt, cfg });
+    const maxBudgetUsd = this.reserveBudget(task, cfg);
     const req: SpawnRequest = {
       role,
       taskId: task.id,
@@ -708,33 +712,57 @@ export class Orchestrator {
       modelAlias,
       lane: task.envelope?.lane,
       attempt: task.attempt,
+      maxBudgetUsd,
       signal: signalForTask(task.id),
       allowedTools: opts.readOnly ? [...READ_ONLY_TOOLS, ...(opts.extraTools ?? [])] : undefined,
       disallowedTools: opts.readOnly ? [...READ_ONLY_DISALLOWED] : undefined,
     };
     const startedAt = new Date().toISOString();
-    const result = await port.run(req);
-    const current = loadTask(task.id) ?? task;
-    current.run_started_at = startedAt;
-    if (agentStarted(result)) {
-      current.agents.push({
-        role,
-        model: result.model || modelAlias,
-        session: result.sessionId,
-        status: result.exitReason === 'success' ? 'done' : 'dead',
-        started_at: startedAt,
-        ended_at: new Date().toISOString(),
-      });
+    try {
+      const result = await port.run(req);
+      const current = loadTask(task.id) ?? task;
+      current.run_started_at = startedAt;
+      if (agentStarted(result)) {
+        current.agents.push({
+          role,
+          model: result.model || modelAlias,
+          session: result.sessionId,
+          status: result.exitReason === 'success' ? 'done' : 'dead',
+          started_at: startedAt,
+          ended_at: new Date().toISOString(),
+        });
+      }
+      current.cost_usd_actual = round6(current.cost_usd_actual + result.costUsd);
+      if (!result.costKnown) current.cost_unmeasured_runs = unmeasuredRuns(current) + 1;
+      if (result.worktreeCreated) current.worktree_created = true;
+      if (!result.worktreeCreated && !transportFailed(result.exitReason) && current.worktree_created === undefined) {
+        const isolationLine = `runner isolation: none; using main checkout ${path.resolve(req.scope)}`;
+        if (!current.report_lines.includes(isolationLine)) current.report_lines.push(isolationLine);
+      }
+      const taskCeiling = checkTaskCeiling(current);
+      if (!taskCeiling.ok) {
+        const boundary = current.cost_usd_actual === current.cost_ceiling_usd ? 'reached' : 'breached';
+        current.report_lines.push(
+          `BUDGET ${boundary === 'reached' ? 'EXHAUSTED' : 'BREACH'}: run ${boundary} task ceiling: spent $${current.cost_usd_actual.toFixed(2)} of $${current.cost_ceiling_usd.toFixed(2)}`,
+        );
+      }
+      const dayCeiling = checkDayCeiling([...listTasks().filter((saved) => saved.id !== current.id), current], cfg);
+      if (!dayCeiling.ok) current.report_lines.push(`BUDGET BREACH: run breached daily ceiling: ${dayCeiling.reason}`);
+      saveTask(current);
+      return result;
+    } finally {
+      this.budgetReservations.delete(task.id);
     }
-    current.cost_usd_actual = round6(current.cost_usd_actual + result.costUsd);
-    if (!result.costKnown) current.cost_unmeasured_runs = unmeasuredRuns(current) + 1;
-    if (result.worktreeCreated) current.worktree_created = true;
-    if (!result.worktreeCreated && !transportFailed(result.exitReason) && current.worktree_created === undefined) {
-      const isolationLine = `runner isolation: none; using main checkout ${path.resolve(req.scope)}`;
-      if (!current.report_lines.includes(isolationLine)) current.report_lines.push(isolationLine);
-    }
-    saveTask(current);
-    return result;
+  }
+
+  /** Reservations make concurrent runs divide daily headroom instead of each authorizing the same dollars. */
+  private reserveBudget(task: TaskRecord, cfg: ManagerConfig): number {
+    const taskHeadroom = task.cost_ceiling_usd <= 0 ? Number.POSITIVE_INFINITY : task.cost_ceiling_usd - task.cost_usd_actual;
+    const reserved = [...this.budgetReservations.values()].reduce((sum, amount) => sum + amount, 0);
+    const dayHeadroom = cfg.dayCeilingUsd - spentToday() - reserved;
+    const amount = round6(Math.max(0, Math.min(taskHeadroom, dayHeadroom)));
+    this.budgetReservations.set(task.id, amount);
+    return amount;
   }
 
   /**

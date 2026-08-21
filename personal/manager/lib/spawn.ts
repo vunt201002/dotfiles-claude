@@ -38,6 +38,7 @@ export interface SpawnRequest {
   lane?: Lane;
   attempt?: number;
   maxTurns?: number;
+  maxBudgetUsd?: number;
   /**
    * Replaces the source policy's tool list for this one run. Report-only gates
    * pass READ_ONLY_TOOLS so "do not change any file" is a missing tool rather
@@ -266,6 +267,7 @@ export const agentSdkSpawnPort: SpawnPort = {
       workingDirectory: path.resolve(req.scope),
       model: resolveModelId(req.modelAlias),
       maxTurns: req.maxTurns ?? cfg.maxTurns[req.role],
+      maxBudgetUsd: req.maxBudgetUsd,
       allowedTools: tools.allowedTools,
       disallowedTools: tools.disallowedTools,
       env: childEnv(req),
