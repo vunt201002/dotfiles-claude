@@ -1058,3 +1058,164 @@ tính theo từng máy cho tới khi có chỗ gộp sổ.
   (an toàn hơn), nhưng câu chữ nói rõ là cùng nhà — không được gọi đó là
   corroboration. Family không ghi được thì báo `không xác minh được`, không suy
   bừa là cùng nhà.
+
+---
+
+## 13. Mượn từ deepseek-harness
+
+Nguồn: [`github.com/deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)
+— MIT, `dsh 0.1.0-rc.7`, đọc 21/08. Agent harness của DeepSeek, kiến trúc "everything is a
+plugin" trên Cordis.
+
+**Phần đáng mượn không phải runtime.** Nó là cách họ ép kỷ luật văn bản thành thứ CI kiểm
+được: `AGENTS.md` phân tier có trần từ, `.agents/notes/` có vòng đời, `.agents/skills/`, và
+~40 gate `verify-*`. Mục này ghi cái mượn, cái không, và chỗ nối vào phase — để lần sau khỏi
+đọc lại 7.458 file.
+
+### 13.1 Con trỏ chết trong văn bản vĩnh viễn — phép đo đầu tiên
+
+Bệnh có tên trong repo đó: **chain-of-thought leakage** — văn viết từ điểm nhìn của phiên làm
+việc chứ không phải của repo. Một câu test: *người đọc ở HEAD, không có transcript hay draft
+chưa commit, có resolve được mọi tham chiếu không?*
+
+**Đo trên `05df5126`, máy này, chỉ mặt phẳng nguồn** (loại `node_modules/`, bản SKILL.md sinh
+ra cho 9 host, fixture ghi sẵn):
+
+| Dạng | Số site | Kết luận |
+|---|---|---|
+| `plan §X` trống chủ ngữ | **27** (21 ngoài mục này) | chết — trỏ vào `~/.gstack/.../ceo-plans/`, **không tồn tại trên máy này** |
+| Ordinal trần `(D4)` `(D8)` `per D1` | **96** (90 ngoài mục này) | chết — không file nào trong repo trả lời `(D4)` là gì |
+| `plan §X` có nêu path plan | **11** | resolve tốt — **khuôn đúng** |
+| `design-eye §D1` | **12** | resolve tốt — **khuôn đúng** |
+| `Source: this branch's ...` trong CHANGELOG | **6** (26 dòng mang điểm nhìn branch) | vi phạm luật CHANGELOG của chính repo |
+
+**Mục 13 này tự khớp 6 + 6 lần** qua chính các ví dụ nó trích, và góp 1 vào cột keep. Đọc
+chúng là bằng chứng, không phải là dùng sai — cùng cách deepseek xử lý note sở hữu luật của
+họ. Hệ quả: **sửa mục này là số đổi.** Đo lại sau mỗi lần sửa, đừng chép số cũ.
+
+Lệnh chạy lại. Dụng cụ là **`git grep`** — `ripgrep` KHÔNG có trên máy này (`rg` chỉ là shell
+function do Claude Code nạp, `which rg` không ra path), nên một lệnh viết bằng `rg` là con trỏ
+chết ngay trong mục nói về con trỏ chết. `git grep` còn khớp đúng định nghĩa cần đo: chỉ file
+đã commit, tức đúng thứ người đọc ở HEAD nhìn thấy.
+
+Mẫu số là **số site khớp**, không phải số dòng prose, và nó phụ thuộc hoàn toàn vào tập loại
+trừ, nên tập đó hiện ra chứ không giấu trong flag:
+
+```sh
+SCOPE=(':(exclude).*/**' ':(exclude)test/fixtures/golden/**'
+       ':(exclude)CHANGELOG.md' ':(exclude)TODOS.md')
+
+git grep -nE '(^|[^-a-z])plan §' -- $SCOPE \
+  | grep -Ev 'manager-layer plan|validate\.test\.ts' | wc -l   # 27
+git grep -noE '\(D[0-9]+\)|per D[0-9]+' -- $SCOPE \
+  | grep -v design-eye | wc -l                                   # 96
+git grep -nE 'manager-layer.plan.*§'   -- $SCOPE | wc -l         # 11  (keep)
+git grep -noE 'design-eye §D[0-9]'     -- $SCOPE | wc -l         # 12  (keep)
+git grep -ci 'Source: this branch'     -- CHANGELOG.md           # 6
+```
+
+`:(exclude).*/**` gom mọi thư mục host sinh ra (`.claude/skills/`, `.factory/`, `.slate/`,
+`.opencode/`, `.kiro/`, `.cursor/`, `.gbrain/`, `.hermes/`, `.openclaw/`, `.agents/skills/`)
+thành một dòng. Mảng `SCOPE` là cú pháp zsh; bash thì bỏ ngoặc và dùng `$SCOPE` không nháy.
+
+**Khuôn đúng đã có sẵn trong repo — hai cái, cùng nằm ở nửa `personal/`.** Cả hai đều trích
+một file **đã commit**, bằng path hoặc bằng tên tìm được:
+
+```
+✅ personal/manager/lib/gate-log.ts:4
+     Schema is the data contract in `personal/docs/manager-layer-plan-2026-08-12.md` §3.3.
+✅ personal/skills/my-frontend-fix/SKILL.md:78
+     mở bảng pattern §D1 (design-eye §D1)
+❌ browse/src/security.ts:34
+     See plan §"Threshold Spec" for calibration methodology.
+❌ browse/src/browser-manager.ts:423
+     faking those to fixed values flags more bot-like, not less (D7).
+```
+
+Nặng nhất là `security.ts:34`: ba ngưỡng an ninh `BLOCK 0.85 / WARN 0.75 /
+SOLO_CONTENT_BLOCK 0.92`, và lý do chọn chúng nằm sau một con trỏ chết. Ai chỉnh ngưỡng sáu
+tháng nữa sẽ chỉnh mù. Phần lớn số site còn lại rẻ hơn nhiều — mệnh đề sự kiện **đã nằm ngay
+sau citation**, xoá citation là xong.
+
+**111 site là một pattern hệ thống, không phải vài chỗ lỡ tay.** Nó là dạng bệnh riêng của
+văn do agent viết: lúc viết, agent đang giữ cả design session trong context nên `(D7)` hoàn
+toàn rõ ràng — với chính nó, ngay lúc đó. Và harness này ship prose cho **9 host adapter** cộng
+ClawHub cộng `~/.claude/skills/gstack/` trên máy khác; mọi reader đó đều là "người đọc ở HEAD
+không có transcript". Ở đây nó là lỗi đúng-sai của thứ đang ship, không phải chuyện văn phong.
+
+**Luật rút ra, dạng dùng được:** văn bản vĩnh viễn chỉ trích artifact **đã commit**. Ordinal
+của phiên làm việc ở lại trong phiên. Nêu path một lần mỗi file, các lần sau dùng tên tìm
+được. Ba kho quyết định hiện tại — `decisions.jsonl`, `ceo-plans/`, `~/.gstack-dev/plans/` —
+đều máy-local, nên trích chúng **không** sửa được gì; quyết định phải hạ cánh vào một file
+đã commit (`personal/docs/` hoặc `docs/designs/`) trước khi code được phép trích.
+
+**Giới hạn đã biết:** 4 site `plan §` và 12 site ordinal đã mở ra đọc — cả 16 đều chết đúng
+như pattern đoán. Số còn lại phán theo pattern, chưa mở từng cái, nên **111 là cận trên**. Chưa
+đo lại sau `05df5126`.
+
+**Một luật về chính cách đo:** batteries chạy lần đầu ra **zero hit** vì biến shell làm hỏng
+glob — suýt báo "repo sạch". Đúng luật của họ: *một pattern không khớp gì không chứng minh gì
+cho tới khi thấy nó khớp một chuỗi biết chắc là dương.* Áp cho mọi cổng grep trong sổ cổng.
+
+### 13.2 Ba thứ mượn — xếp theo ROI
+
+| Mượn gì | Nó làm gì | Nối vào đâu |
+|---|---|---|
+| **Skill `/trim-leak`** | Một câu test + taxonomy 8 loại + keep-rules + 4 bẫy cắt-hỏng. Bắt loại văn mà chỉ phiên viết ra nó mới đọc được | Việc độc lập. Chạy trước, purge sau, gate cuối — gate viết trước purge sẽ đỏ 40 chỗ ngay rồi bị tắt |
+| **Luật "quyết định phải hạ cánh trước khi được trích"** | Trị gốc của §13.1 | Ràng buộc lên chính doc này và `docs/designs/` |
+| **Bộ đếm tool-call lặp thành hook** | Đếm call liên tiếp trùng argument đã canonicalize, ngưỡng `[3,5,8]`, inject nhắc leo thang. **Không veto, không block** — quyết định vẫn của model | **P1/P8.** Đây là một cổng `gate_family: deterministic` thuần: không token, không oracle, cộng thẳng vào sàn ≥20% mà P8 đòi. Cơ khí hoá tripwire "3-4 lần fail cùng một thứ thì DỪNG" đang dựa vào model tự nhớ |
+
+### 13.3 Nhặt lẻ
+
+- **`## Alternatives considered` bắt buộc trong mọi decision record.** Lý do họ ghi: *một quyết
+  định ghi lại mà không kèm cái nó đã thắng thì mời người ta cãi lại.* `decisions.jsonl` hiện
+  ghi "đã quyết gì", không ghi "nó thắng cái gì".
+- **Vòng đời note:** `proposed` → `implemented` → `rejected` → `archived`. `implemented` viết ở
+  **thì hiện tại, mô tả cái đã ship**; gate của họ từ chối `## Proposal` / `## Migration plan`
+  trong một note đã implement. `archived` đông cứng, có hash, **không được coi là authority cho
+  hành vi hiện tại**.
+- **Công thức counterfactual-present**: `"without the byte-length guard, X double-encodes"` thay
+  cho `"this used to double-encode"`. Giữ được thông tin regression mà không thành khảo cổ repo.
+- **Chữ `measured` là load-bearing.** `security.ts:220` ghi đủ (`25 TPs, 0 FPs`);
+  `security-classifier.ts:446` ghi `~70%` không nguồn — không ai đo lại trước khi tune. Cùng
+  một luật với `71,4%` ở §8/P8.
+- **"Verify the world, not the self-report"**: e2e phải chạy lại lệnh / đọc lại file **từ
+  ngoài**; probe từ khoá trên output của chính agent là để nó gian lận qua. Đúng tinh thần
+  `B8-assert`, viết thành một câu.
+- **"This skill is guidance, not a checklist"** đặt trong mọi skill — chặn agent đọc skill như
+  bash script.
+- **Model Experience**: mỗi package khai *model thấy gì / tốn token thế nào / **có phá KV cache
+  không***, có gate ép. Phần KV cache là thứ chưa ai đo ở đây.
+- **Spill**: tool output quá lớn ghi ra file, trả locator + gợi ý cách lấy lại, không nhồi vào
+  context.
+- **Sửa từ owner trước**: `SKILL.md` sinh từ `.tmpl` — vá bản `.md` sẽ bị `gen:skill-docs` ghi
+  đè. `sync-gbrain` hiện dính lỗi ở **cả hai** bản.
+
+### 13.4 Không mượn
+
+Song ngữ EN/ZH có hash gate · per-file 100% coverage · Cordis. Quá nặng cho một người.
+
+### 13.5 Chỗ plan này đã đi trước — đừng "cải tiến" ngược
+
+Repo đó **không có một con số nào**: zero eval, zero benchmark, `BENCHMARK.md` dài 231 byte.
+Toàn kiến trúc và kỷ luật văn bản, không có bằng chứng nó làm agent tốt hơn.
+
+Bốn thứ ở đây mạnh hơn, và không được đánh đổi lấy thứ gì trong §13.2–13.3:
+
+- Tiêu chí giết viết trước, lúc còn khách quan (§0)
+- Precision có nêu mẫu số, và ghi rõ cách đọc kia bị loại vì sao (§8/P8)
+- Từ chối cập nhật `71,4%` bằng suy diễn vì hai phép đo khác mẫu số (§8/P8)
+- Nói thẳng cái gì không đi theo repo, thay vì để người sau tự vấp (§11c)
+
+**Lấy kỷ luật văn bản của họ. Không lấy thói quen không đo.**
+
+### 13.6 Một điều về chính mục 11b/11c/12
+
+Chúng đang tích lũy lịch sử phiên bản của bản thân — `Bản 1 bị 5 blocker`, `cập nhật 13/08`,
+`~~Cài lại codex?~~ ĐÃ TRẢ LỜI 13/08`, `ĐÃ ĐÓNG NỐT 14/08`. Vẫn dùng được, nhưng doc đang trôi
+từ **decision record** sang **nhật ký của chính nó** — đúng thứ luật `implemented` ở §13.3 cấm.
+
+Chưa cần đụng. Khi có thêm vài lớp "cập nhật ngày X" nữa thì tách, và luật supersession cho
+cách tách mà không mất rationale: chuyển mọi lý do, phương án, hệ quả, bằng chứng đã ship sang
+chủ sở hữu mới rồi mới xoá bản cũ; sửa mọi link trỏ vào. Giữ cả hai và nối chéo nếu chỉ thay
+thế một phần.
