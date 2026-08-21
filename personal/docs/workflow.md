@@ -59,7 +59,7 @@ Khi app có `.claude/skills` riêng → **skill generic của anh là phương p
 | Layer | Quan sát bằng |
 |---|---|
 | Storefront widget (shadow DOM/Lit) | debug-global nếu có · Playwright `eval`/`getComputedStyle`/`queryShadow` |
-| Admin (React/Polaris) | Standalone Admin: `console.log` · eval qua /my-chrome · React DevTools. Embedded app: `/browse` + `frame --name app-iframe` (documented trong source, chưa live-verify ở máy này). **Login Admin và drive embedded iframe là hai capability khác nhau — xem "Test trên browser" bên dưới.** |
+| Admin (React/Polaris) | Standalone Admin: `console.log` · eval qua /my-chrome · React DevTools. Embedded app: `/browse` + `frame 'iframe[name="app-iframe"]'`. Selector path đã xác nhận trong source và selector này đã đo trên live Shopify; full `browse --cdp` path vẫn chưa verify. **Login Admin và drive embedded iframe là hai capability khác nhau — xem "Test trên browser" bên dưới.** |
 | Backend (Cloud Functions) | **Firebase emulator: log stdout** — dùng cho bước prove, **đừng deploy staging để đọc log** |
 | DB / record state | emulator UI · firebase console |
 | Webhook | pubsub emulator trigger + log |
@@ -69,7 +69,7 @@ Khi app có `.claude/skills` riêng → **skill generic của anh là phương p
 Bước test/verify nào cần browser (A7 / B8, QA, dogfood) → dùng **skill `/my-chrome`**
 để route theo surface. Storefront/theme editor/standalone Admin dùng
 `claude-in-chrome` trên Chrome thật; embedded Admin trong cross-origin iframe dùng
-`/browse` + `$B frame --name app-iframe`.
+`/browse` + `$B frame 'iframe[name="app-iframe"]'`.
 (Đừng nhầm với built-in `/chrome` của Claude Code — lệnh đó chỉ bật/kết nối extension.)
 Chi tiết đầy đủ (load tools, surface map Shopify, safety) nằm trong skill; protocol
 tab-group dưới đây **chỉ áp dụng cho các row dùng `claude-in-chrome`**:
@@ -104,9 +104,10 @@ Chọn theo surface trước, không thử tool tuần tự theo thói quen:
    admin → cứ đi thẳng, không cần import.
 2. **Storefront/theme editor/standalone Admin:** dùng `/my-chrome`; extension không
    khả dụng thì dùng `/browse` và prime bằng `/qa-login` khi thật sự cần.
-3. **Embedded Admin iframe:** dùng `/browse`, rồi `$B frame --name app-iframe` →
+3. **Embedded Admin iframe:** dùng `/browse`, rồi `$B frame 'iframe[name="app-iframe"]'` →
    `$B snapshot -i` → act bằng `@ref`; `$B frame main` để quay lại shell. Capability
-   này đã xác nhận trong source nhưng **chưa live-verify Shopify ở máy này**.
+   selector này đã xác nhận trong source và đo trên live Shopify, nhưng full
+   `browse --cdp` path **chưa được verify end-to-end**.
 4. **Dùng lại browser/page context đang mở** nếu vừa test xong
    bước trước — đừng mở tab mới từ đầu.
 5. **Né Admin bằng đường khác**: app embed → **dev/preview URL** (`shopify app dev`) ·

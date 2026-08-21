@@ -1,6 +1,6 @@
 ---
 name: fix-bugs-parallel
-description: Fix a BATCH of bugs concurrently — one Agent per bug running Workflow B, with browser-verify throttled because agents share browser sessions and must route by surface. Storefront/theme/standalone Admin use claude-in-chrome; embedded Admin cross-origin iframes use /browse `frame --name app-iframe`, never coordinate-clicking. Main session coordinates, proposes parallelism, and never edits code itself. NOT for a single bug — use /fix-bug. Never commits or pushes. Use when asked "fix these bugs in parallel", "sửa nhiều bug song song", "spawn agent cho từng bug", "áp workflow B cho list bug này", "/fix-bugs-parallel", or right after listing several bugs to fix concurrently.
+description: Fix a BATCH of bugs concurrently — one Agent per bug running Workflow B, with browser-verify throttled because agents share browser sessions and must route by surface. Storefront/theme/standalone Admin use claude-in-chrome; embedded Admin cross-origin iframes use /browse `frame 'iframe[name="app-iframe"]'`, never coordinate-clicking. Main session coordinates, proposes parallelism, and never edits code itself. NOT for a single bug — use /fix-bug. Never commits or pushes. Use when asked "fix these bugs in parallel", "sửa nhiều bug song song", "spawn agent cho từng bug", "áp workflow B cho list bug này", "/fix-bugs-parallel", or right after listing several bugs to fix concurrently.
 ---
 
 # /fix-bugs-parallel — one agent per bug, Workflow B, coordinated verify
@@ -125,8 +125,9 @@ Bug: <full bug description — title, repro steps, whatever detail is available>
 When you reach a browser-verify step (B8 in Workflow B), use skill /my-chrome to route
 by surface against this store: <store-url>. Storefront/theme editor/standalone Admin
 use claude-in-chrome. Embedded Admin cross-origin iframe uses /browse:
-`$B frame --name app-iframe` → `$B snapshot -i` → act by `@ref` → `$B frame main`.
-That frame path is documented in source but not yet live-verified against Shopify here.
+`$B frame 'iframe[name="app-iframe"]'` → `$B snapshot -i` → act by `@ref` → `$B frame main`.
+That selector was measured against live Shopify; the full `browse --cdp` path remains
+unverified end-to-end.
 Never use claude-in-chrome find/read_page or coordinate-clicking for embedded controls.
 After 2 failed attempts to reach the same control: STOP, report, do not retry a third
 time or try a third browser tool. If UI remains unreachable, verify staging Firestore

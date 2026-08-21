@@ -29,8 +29,8 @@ Chrome once, then run this whenever you're about to test.
 - **Chrome DevTools MCP `--autoConnect`/deviceId path is UNVERIFIED.** Skill này
   không route hoặc prime target đó; đừng trình bày nó như solution.
 - Prime login **không** giải quyết cross-origin iframe control. Embedded Admin sau
-  login phải dùng `/browse` + `$B frame --name app-iframe`; capability này documented
-  trong source nhưng chưa live-verify Shopify ở máy này.
+  login phải dùng `/browse` + `$B frame 'iframe[name="app-iframe"]'`; selector này đã
+  đo trên live Shopify, nhưng full `browse --cdp` path chưa verify end-to-end.
 
 ## The browse binary
 
@@ -261,7 +261,7 @@ on a machine after pulling the repo, run **/sync-skills** to link it.
 - This **primes login state**; it does not test. After it, use **/qa** (test + fix),
   **/qa-only** (report only), **/browse** (drive the browser), or **/design-review**
   — all of these expect the `/browse` target. Embedded Admin phải switch bằng
-  `$B frame --name app-iframe` trước khi snapshot/act; nếu frame path fail 2 lần thì
+  `$B frame 'iframe[name="app-iframe"]'` trước khi snapshot/act; nếu frame path fail 2 lần thì
   stop + báo user, không coordinate-click hoặc thử tool thứ ba.
 - It is **not** `/setup-browser-cookies` (the gstack/aov-lab built-in). This is a
   thin, Shopify-aware wrapper that knows the admin/accounts host set and asks which

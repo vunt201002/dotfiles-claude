@@ -1,6 +1,6 @@
 ---
 name: my-chrome
-description: Route browser verification by SURFACE. Use claude-in-chrome on the user's REAL Chrome for storefront, theme editor, and standalone admin pages; its existing Shopify login/device-bound session can open Admin without cookie import, but it CANNOT drive controls inside a cross-origin embedded-admin iframe. For an embedded admin app, route to /browse and its documented `frame --name app-iframe` context switch instead (documented in source, not yet verified against live Shopify here). Enforces tab-group discipline and a hard stop after 2 failed browser attempts. Use when asked "/my-chrome", "test trên browser", "test trên Chrome", "browser test", "mở browser", or whenever a verify step needs a browser.
+description: Route browser verification by SURFACE. Use claude-in-chrome on the user's REAL Chrome for storefront, theme editor, and standalone admin pages; its existing Shopify login/device-bound session can open Admin without cookie import, but it CANNOT drive controls inside a cross-origin embedded-admin iframe. For an embedded admin app, route to /browse and select the iframe element with `frame 'iframe[name="app-iframe"]'`; that selector was measured on live Shopify, while the full browse CDP path remains unverified. Enforces tab-group discipline and a hard stop after 2 failed browser attempts. Use when asked "/my-chrome", "test trên browser", "test trên Chrome", "browser test", "mở browser", or whenever a verify step needs a browser.
 type: workflow
 ---
 
@@ -24,16 +24,17 @@ type: workflow
 | Storefront | `claude-in-chrome` trên Chrome thật | `find` + `read_page` → `computer` theo ref |
 | Theme editor (phần ngoài iframe) | `claude-in-chrome` trên Chrome thật | `find` + `read_page` → `computer` theo ref |
 | Standalone Admin page (không phải app embed) | `claude-in-chrome` trên Chrome thật | `find` + `read_page` → `computer` theo ref; login sẵn chỉ có nghĩa là mở được trang |
-| **Embedded Admin app trong cross-origin iframe** | **`/browse`** | **`$B goto <admin-app-url>` → `$B frame --name app-iframe` → `$B snapshot -i` → act bằng `@ref`; xong chạy `$B frame main`** |
+| **Embedded Admin app trong cross-origin iframe** | **`/browse`** | **`$B goto <admin-app-url>` → `$B frame 'iframe[name="app-iframe"]'` → `$B snapshot -i` → act bằng `@ref`; xong chạy `$B frame main`** |
 
 Trong frame, dùng `snapshot`/`text`/`click`/`fill` như bình thường; output snapshot có
-header `[Context: iframe src="..."]`. Nếu iframe không mang name đó, source còn hỗ trợ
-`$B frame <css-selector-or-@ref>` và `$B frame --url <literal-pattern>`; ưu tiên name
-đã biết, không đoán selector khi chưa đọc DOM.
+header `[Context: iframe src="..."]`. Source hỗ trợ `$B frame <css-selector-or-@ref>`
+và `$B frame --url <literal-pattern>`. Không dùng `$B frame --name app-iframe` cho
+Shopify embedded Admin: lệnh đó đọc frame name, trong khi surface đã đo chỉ expose
+`name="app-iframe"` trên iframe element.
 
-**Trạng thái xác minh:** route `$B frame --name app-iframe` là capability **đã đọc và
-xác nhận trong source** (`commands.ts`, `meta-commands.ts`, `snapshot.ts`,
-`tab-session.ts`), nhưng **chưa được verify trên live Shopify ở máy này**. Human confirm
+**Trạng thái xác minh:** selector `iframe[name="app-iframe"]` đã resolve frame trên live
+Shopify, và selector-to-`contentFrame()` path đã đọc trong `meta-commands.ts`. Full
+`browse --cdp` qua generated Node server bundle **chưa verify end-to-end**. Human confirm
 1 lần bằng session đã login: mở embedded app → chạy lệnh frame → `snapshot -i` phải thấy
 control của app → click một control non-destructive → `frame main` quay lại Admin shell.
 

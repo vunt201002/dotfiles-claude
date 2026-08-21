@@ -113,8 +113,8 @@ shortcut:
   polish items, never fixed inline). B8 is not passed while design-verify hasn't.
   Needs a browser? Follow `/my-chrome`'s **surface routing**, không theo tool ladder:
   storefront/theme editor/standalone Admin → `claude-in-chrome`; embedded Admin
-  cross-origin iframe → `/browse` + `$B frame --name app-iframe` (documented trong
-  source, chưa live-verify Shopify ở máy này). Sau 2 lần không reach cùng control:
+  cross-origin iframe → `/browse` + `$B frame 'iframe[name="app-iframe"]'` (selector
+  đã đo trên live Shopify; full `browse --cdp` path chưa verify end-to-end). Sau 2 lần không reach cùng control:
   STOP, báo user, không retry lần 3/không thử tool thứ ba. UI không drive được thì
   verify qua staging Firestore hoặc storefront và ghi rõ embedded UI chưa được verify.
   Only ask the user for a target URL here, and only if genuinely needed and not known.

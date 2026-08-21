@@ -67,8 +67,8 @@ Chạy app ở trạng thái lỗi, chụp **baseline** (đây cũng là *mốc 
   tự biến mất). **Không đụng tab ngoài group**. Login Admin/store có sẵn chỉ giải
   quyết login, không giúp `find`/`read_page` xuyên cross-origin iframe.
 - **Embedded Admin app:** route thẳng `/browse`: `$B goto <url>` →
-  `$B frame --name app-iframe` → `$B snapshot -i` → act bằng `@ref` → `$B frame main`.
-  Đây là capability documented trong source, **chưa live-verify Shopify ở máy này**.
+  `$B frame 'iframe[name="app-iframe"]'` → `$B snapshot -i` → act bằng `@ref` → `$B frame main`.
+  Selector này đã đo trên live Shopify; full `browse --cdp` path **chưa verify end-to-end**.
 - **HARD STOP:** sau 2 lần không reach cùng control, dừng + báo user; không retry lần
   3, không thử tool thứ ba, không coordinate-click xuyên iframe. Nếu UI không drive
   được, verify staging Firestore/storefront và report rõ embedded UI chưa verify.
