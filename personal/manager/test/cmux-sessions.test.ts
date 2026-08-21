@@ -174,6 +174,15 @@ describe('counting the fleet, including agents the manager never started', () =>
     expect(busyCount(fleet('claude', HOME), long, ABANDONED_AFTER_MS)).toBe(1);
   });
 
+  test('an unknown pane stays conservative while fresh but releases its seat when stale', () => {
+    writeStore({
+      a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'unknown' }),
+    });
+    const long = FRESH_NOW_MS + 3 * ABANDONED_AFTER_MS;
+    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(1);
+    expect(busyCount(fleet('claude', HOME), long, ABANDONED_AFTER_MS)).toBe(0);
+  });
+
   test('a pane that is still working never ages out, however long it runs', () => {
     writeStore({
       a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'running' }),

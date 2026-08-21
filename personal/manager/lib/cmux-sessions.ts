@@ -187,9 +187,9 @@ export function sessionsUnder(root: string, entries: FleetEntry[]): FleetEntry[]
 }
 
 /**
- * A pane a human was asked to answer and did not, for long enough that the
- * answer is not coming. Measured from `updatedAt`, which is the last time
- * anything about the pane changed at all.
+ * A pane waiting on a human, or one whose lifecycle is unknown, for long
+ * enough that its conservative claim on a seat has expired. Measured from
+ * `updatedAt`, which is the last time anything about the pane changed at all.
  *
  * It stays in the fleet report, because the operator needs to see it. It stops
  * reserving a seat, because a cap that a forgotten pane holds forever is not a
@@ -197,7 +197,7 @@ export function sessionsUnder(root: string, entries: FleetEntry[]): FleetEntry[]
  * machine's capacity every week after.
  */
 export function isAbandoned(entry: FleetEntry, nowMs: number, afterMs: number): boolean {
-  return needsHuman(entry.health) && nowMs - entry.updatedAt * 1000 > afterMs;
+  return (needsHuman(entry.health) || entry.lifecycle === 'unknown') && nowMs - entry.updatedAt * 1000 > afterMs;
 }
 
 /**
