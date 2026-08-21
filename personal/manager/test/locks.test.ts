@@ -190,6 +190,23 @@ describe('revokeOrphans', () => {
       'reconcile made live-waiter the holder but never resolved its acquire(); the task owns the only browser token and waits forever',
     ).toBe(true);
   });
+
+  test('a crashed project-lock holder is revoked and the queue advances', async () => {
+    const lock = projectLock('kivora');
+    await tryAcquire(lock, 'dead-holder', 999_999);
+    let woken = false;
+    const waiting = acquire(lock, 'live-waiter', process.pid, { timeoutMs: 0 }).then(() => {
+      woken = true;
+    });
+    await new Promise((r) => setTimeout(r, 5));
+
+    const result = await revokeOrphans((id) => id === 'live-waiter');
+    await Promise.race([waiting, new Promise((r) => setTimeout(r, 200))]);
+
+    expect(result.revoked.map((entry) => entry.task_id)).toContain('dead-holder');
+    expect(holderOf(lock)).toBe('live-waiter');
+    expect(woken).toBe(true);
+  });
 });
 
 describe('boot nonce — pid reuse must not disguise a dead daemon', () => {

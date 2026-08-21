@@ -262,7 +262,7 @@ export class Orchestrator {
    * revokes a crashed holder. Idempotent when already held.
    */
   private async ensureProjectLock(task: TaskRecord): Promise<void> {
-    await acquire(projectLock(task.project), task.id);
+    await acquire(projectLock(task.project), task.id, process.pid, { timeoutMs: 0 });
   }
 
   private async phaseSize(task: TaskRecord): Promise<boolean> {
