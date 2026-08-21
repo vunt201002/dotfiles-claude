@@ -34,7 +34,10 @@ interface StoreSession {
 function writeStore(sessions: StoreSession[]): void {
   fs.mkdirSync(path.join(HOME, '.cmuxterm'), { recursive: true });
   const byId = Object.fromEntries(
-    sessions.map((s, i) => [String(i), { updatedAt: 1000, startedAt: 900, transcriptPath: '', lastSubtitle: '', ...s }]),
+    sessions.map((s, i) => [
+      String(i),
+      { updatedAt: Date.now() / 1000, startedAt: 900, transcriptPath: '', lastSubtitle: '', ...s },
+    ]),
   );
   fs.writeFileSync(cmuxStorePath('claude', HOME), JSON.stringify({ sessions: byId }));
 }
@@ -145,6 +148,18 @@ describe('the fleet is every agent on the machine, not every task the manager st
     expect(report.waiting.map((m) => m.sessionId)).toEqual(['perm']);
     expect(report.busy).toBe(1);
     expect(renderFleet(report)).toContain('stuck on a permission prompt');
+  });
+
+  // Releasing the seat must not also hide the pane: the operator is the only
+  // one who can close it, and they cannot close what the report stopped showing.
+  test('a pane abandoned at a prompt stops counting as busy but stays in the report', () => {
+    const longAgo = Date.now() / 1000 - 48 * 60 * 60;
+    writeStore([
+      { sessionId: 'forgotten', cwd: MINE, pid: ALIVE, agentLifecycle: 'needsInput', updatedAt: longAgo },
+    ]);
+    const report = fleetReport({ home: HOME });
+    expect(report.busy).toBe(0);
+    expect(report.waiting.map((m) => m.sessionId)).toEqual(['forgotten']);
   });
 
   test('a dead pid recorded as running is listed as crashed, not as running', () => {

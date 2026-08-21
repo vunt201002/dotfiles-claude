@@ -107,7 +107,7 @@ export function fleetReport(opts: { now?: number; home?: string } = {}): FleetRe
 
   return {
     members,
-    busy: busyCount(entries),
+    busy: busyCount(entries, now, cfg.abandonedPaneAfterMs),
     cap: resolveMaxAgents(cfg),
     waiting: members.filter((m) => needsHuman(m.health)),
     crashed: members.filter((m) => m.health === 'crashed'),

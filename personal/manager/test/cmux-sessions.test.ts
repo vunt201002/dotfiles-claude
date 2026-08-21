@@ -25,6 +25,9 @@ function writeStore(sessions: Record<string, unknown>): void {
   fs.writeFileSync(cmuxStorePath('claude', HOME), JSON.stringify({ version: 1, sessions }));
 }
 
+const FRESH_NOW_MS = 100_000;
+const ABANDONED_AFTER_MS = 2 * 60 * 60_000;
+
 function session(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
     sessionId: 's1',
@@ -143,7 +146,7 @@ describe('a permission prompt is a human blocking, whatever the lifecycle says',
       a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'running', lastSubtitle: 'Permission' }),
       b: session({ sessionId: 'b', pid: ALIVE, agentLifecycle: 'idle', lastSubtitle: 'Completed' }),
     });
-    expect(busyCount(fleet('claude', HOME))).toBe(1);
+    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(1);
   });
 });
 
@@ -155,7 +158,28 @@ describe('counting the fleet, including agents the manager never started', () =>
       c: session({ sessionId: 'c', pid: ALIVE, agentLifecycle: 'idle' }),
       d: session({ sessionId: 'd', pid: DEAD, agentLifecycle: 'running' }),
     });
-    expect(busyCount(fleet('claude', HOME))).toBe(2);
+    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(2);
+  });
+
+  // Three panes left open on a Friday must not silently halve the machine's
+  // capacity every week after.
+  test('a pane waiting on a human past the cutoff stops holding a seat', () => {
+    writeStore({
+      a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'running' }),
+      b: session({ sessionId: 'b', pid: ALIVE, agentLifecycle: 'needsInput' }),
+      c: session({ sessionId: 'c', pid: ALIVE, agentLifecycle: 'running', lastSubtitle: 'Permission' }),
+    });
+    const long = FRESH_NOW_MS + 3 * ABANDONED_AFTER_MS;
+    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(3);
+    expect(busyCount(fleet('claude', HOME), long, ABANDONED_AFTER_MS)).toBe(1);
+  });
+
+  test('a pane that is still working never ages out, however long it runs', () => {
+    writeStore({
+      a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'running' }),
+    });
+    const long = FRESH_NOW_MS + 1000 * ABANDONED_AFTER_MS;
+    expect(busyCount(fleet('claude', HOME), long, ABANDONED_AFTER_MS)).toBe(1);
   });
 });
 

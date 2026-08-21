@@ -391,13 +391,14 @@ export type SlotOutcome = 'free' | 'aborted' | 'timeout';
  */
 export async function waitForSlot(
   cap: number,
-  opts: { signal?: AbortSignal; pollMs?: number; timeoutMs?: number; home?: string } = {},
+  opts: { signal?: AbortSignal; pollMs?: number; timeoutMs?: number; home?: string; abandonedAfterMs?: number } = {},
 ): Promise<SlotOutcome> {
   const deadline = Date.now() + (opts.timeoutMs ?? 30 * 60_000);
   const pollMs = opts.pollMs ?? 2_000;
+  const abandonedAfterMs = opts.abandonedAfterMs ?? loadConfig().abandonedPaneAfterMs;
   while (true) {
     if (opts.signal?.aborted) return 'aborted';
-    if (busyCount(fleet('claude', opts.home)) < cap) return 'free';
+    if (busyCount(fleet('claude', opts.home), Date.now(), abandonedAfterMs) < cap) return 'free';
     if (Date.now() >= deadline) return 'timeout';
     await sleep(pollMs);
   }

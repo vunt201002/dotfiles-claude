@@ -187,12 +187,30 @@ export function sessionsUnder(root: string, entries: FleetEntry[]): FleetEntry[]
 }
 
 /**
+ * A pane a human was asked to answer and did not, for long enough that the
+ * answer is not coming. Measured from `updatedAt`, which is the last time
+ * anything about the pane changed at all.
+ *
+ * It stays in the fleet report, because the operator needs to see it. It stops
+ * reserving a seat, because a cap that a forgotten pane holds forever is not a
+ * cap, it is a deadlock: three panes left open on a Friday silently halve the
+ * machine's capacity every week after.
+ */
+export function isAbandoned(entry: FleetEntry, nowMs: number, afterMs: number): boolean {
+  return needsHuman(entry.health) && nowMs - entry.updatedAt * 1000 > afterMs;
+}
+
+/**
  * The concurrency number §6.3 wanted. Counts agents that are actually holding a
  * seat — including ones the operator started by hand, which the manager's own
  * semaphore could never see.
+ *
+ * `nowMs` and `abandonedAfterMs` are required rather than defaulted: a caller
+ * that forgets them would silently get the old count-everything behaviour, and
+ * that is the failure this argument exists to prevent.
  */
-export function busyCount(entries: FleetEntry[]): number {
-  return entries.filter((e) => isLive(e.health)).length;
+export function busyCount(entries: FleetEntry[], nowMs: number, abandonedAfterMs: number): number {
+  return entries.filter((e) => isLive(e.health) && !isAbandoned(e, nowMs, abandonedAfterMs)).length;
 }
 
 export interface TranscriptUsage {

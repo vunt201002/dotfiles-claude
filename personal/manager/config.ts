@@ -138,6 +138,11 @@ export interface ManagerConfig {
    * mid-edit and reports it as a run that produced nothing.
    */
   cliRunTimeoutMs: number;
+  /**
+   * How long a pane may sit waiting on a human before it stops reserving an
+   * agent slot. It keeps showing in the fleet report either way.
+   */
+  abandonedPaneAfterMs: number;
   /** How long an agent may sit at needsInput before the task is handed back. */
   cmuxNeedsInputGraceMs: number;
   /**
@@ -215,6 +220,7 @@ export const DEFAULT_CONFIG: ManagerConfig = {
   cmuxStartupMs: 3 * 60_000,
   cmuxRunTimeoutMs: 45 * 60_000,
   cliRunTimeoutMs: 45 * 60_000,
+  abandonedPaneAfterMs: 2 * 60 * 60_000,
   cmuxNeedsInputGraceMs: 2 * 60_000,
   cmuxSlotWaitMs: 30 * 60_000,
   cmuxCloseOnSuccess: false,
