@@ -1219,3 +1219,127 @@ Chưa cần đụng. Khi có thêm vài lớp "cập nhật ngày X" nữa thì 
 cách tách mà không mất rationale: chuyển mọi lý do, phương án, hệ quả, bằng chứng đã ship sang
 chủ sở hữu mới rồi mới xoá bản cũ; sửa mọi link trỏ vào. Giữ cả hai và nối chéo nếu chỉ thay
 thế một phần.
+
+---
+
+## 14. `/explain-diff` — cổng đặt lên người, không đặt lên code
+
+Nguồn: Geoffrey Litt, [_Understanding is the new bottleneck_](https://www.geoffreylitt.com/2026/07/02/understanding-is-the-new-bottleneck)
+(02/07/2026), lưu trong `personal/tech-digest/saved.md` mục 5. Skill gốc:
+[gist `geoffreylitt/a29df1b5f9865506e8952488eac3d524`](https://gist.github.com/geoffreylitt/a29df1b5f9865506e8952488eac3d524),
+hai biến thể xuất HTML hoặc Notion.
+
+### 14.1 Vì sao nó chạm đúng BLOCKER 1
+
+Luận điểm của Litt: khi viết code đã rẻ, nút thắt chuyển sang **hiểu** code agent vừa đẻ ra.
+Không phải để verify — agent tự kiểm khá tốt — mà để **còn tham gia được vào vòng lặp**. Không
+hiểu thì tích **cognitive debt**, và tới lúc cần dẫn dắt dự án thì không dẫn được.
+
+Plan này đã đặt tên đúng nửa vấn đề từ 12/08. BLOCKER 1 (§11): *`human_touches` bị chính cuộc
+di cư nó canh gác làm hỏng — đo độ suy giảm chú ý rồi gọi đó là chất lượng oracle.* Cách vá:
+mẫu mù 1/5 + `review_depth` bắt buộc (§3.2).
+
+**Nhưng `review_depth: "full-diff"` là một lời tự khai.** Người đọc lướt full diff, không thấy
+gì, ghi `human_touches: 0` — và dòng đó đọc thành *"cổng tốt"* trong khi nó có thể là *"tôi
+không thực sự đọc"*. Hai trạng thái khác hẳn nhau, cùng một dòng log. Litt gọi đúng tên:
+
+> fool yourself into thinking you did the reading when you really didn't retain or understand
+
+Và luật vừa mượn ở §13.3 nói thẳng điều kiện để không bị lừa: **verify the world, not the
+self-report.** `review_depth` hiện là self-report. Quiz là the world.
+
+### 14.2 Skill làm gì
+
+Bốn phần, xếp theo thứ tự sư phạm — nền trước, trực giác giữa, chi tiết sau:
+
+| # | Phần | Nội dung |
+|---|---|---|
+| 1 | **Background** | hệ thống đang có, phần liên quan tới thay đổi — dạy nền TRƯỚC khi nói thay đổi |
+| 2 | **Intuition** | mục tiêu + khái niệm cốt lõi bằng toy data và hình, **trước khi hiện code** |
+| 3 | **Code** | *literate diff*: đi qua thay đổi theo thứ tự có nghĩa, prose bao quanh, snippet nhúng |
+| 4 | **Quiz** | 5 câu trắc nghiệm mức trung bình, **random thứ tự đáp án độc lập từng câu**, distractor dài tương đương và hợp lý |
+
+Xuất một file HTML self-contained (CSS + JS inline), `/tmp/YYYY-MM-DD-explanation-<slug>.html`.
+Litt in ra giấy đọc ngoài quán — *"AI turns an interactive activity into a static paper report
+I can focus on deeply."* Biến thể cộng đồng chuyển quiz sang chat: hỏi **từng câu một**, tự
+luận, chấm theo nội dung — khó đoán mò hơn trắc nghiệm.
+
+Đối lập mà nó nhắm tới: *"a typical diff is a pile of files edited in alphabetical order with
+no explanation."*
+
+**Quiz là cái van, không phải phần trang trí:**
+
+> A quiz is a speed regulator. Working with AI, it's easy for the loop to run faster than the
+> speed of human understanding.
+
+Luật cá nhân của Litt: *"I won't send code to others until I can pass the quiz."* Và ông vẫn
+đọc diff — *"I still read the code diff but I always read this first."* Đây là thứ đọc **trước**
+diff, không phải thứ thay diff.
+
+### 14.3 Nối vào đâu
+
+| Chỗ nối | Đổi gì |
+|---|---|
+| **§3.2 mẫu mù** | Task trúng xổ số chạy `/explain-diff` **trước** khi đọc diff, rồi làm quiz. `review_depth` thêm giá trị thứ ba: `full-diff+quiz` |
+| **§3.3 gate log** | Thêm `quiz_score` (`n/5`, rỗng khi không chạy). Không có điểm thì `review_depth: "full-diff"` vẫn chỉ là tự khai như cũ |
+| **`gate_family`** | Family thứ ba: **`human`**. Mọi cổng hiện tại — `deterministic`, `llm` — đo **output của agent**. Cái này đo **hiểu biết của người vận hành**. Khác chủ thể, cùng kỷ luật |
+| **§8 / P8** | Xem §14.4 |
+| **§0 tiêu chí giết** | Xem §14.4 |
+
+**Ba ràng buộc thiết kế, chốt trước khi xây:**
+
+1. **Không chạy mọi task.** Chỉ lô mẫu mù (1/5) và lane vừa tắt review theo P8. Một lượt
+   `/explain-diff` là một lệnh gọi model sinh ra trang HTML dài — tốn thật, và §6.5 đã có trần
+   chi phí, codex đã làm `costKnown: false`. Chạy mọi task là tự bơm nhiễu vào đúng chỗ đang
+   thiếu mẫu.
+2. **Quiz không chặn agent, nó chặn người.** Agent cứ chạy tiếp. Cái bị chặn là `git push` /
+   merge — đúng lằn ranh §1 đã vạch: việc không đảo ngược được thì cần anh gật. Nay "gật" có
+   thêm một điều kiện đo được.
+3. **Agent sinh đề, người trả lời.** Agent chấm được vì đề nó sinh có đáp án, nhưng **người phải
+   là bên trả lời** — agent tự làm quiz của chính nó rồi ghi `pass` thì cả cơ chế thành vô
+   nghĩa, y hệt luật ensemble §7.3 cấm một model tự xác nhận mình.
+
+### 14.4 P8 đang thiếu một điều kiện
+
+Điều kiện mở lane hiện tại (§8/P8): ≥15 task mẫu mù `human_touches = 0` · `precision ≥ 90%` ·
+`deterministic` chiếm ≥20% `caught`.
+
+**Cả ba đều đo máy.** Không cái nào chặn được viễn cảnh này: máy chạy đúng hết, ba số đều xanh,
+và người vận hành **không còn hiểu hệ thống mình đang chịu trách nhiệm**. Tới lần đầu có sự cố
+nằm ngoài vùng phủ của cổng, người không đỡ được — mà đó chính là lúc cần người.
+
+Tiêu chí giết ở §0 cũng vậy: thời gian bỏ ra, `human_touches` trong lô mẫu mù, số lần phải sửa
+tay sau khi agent báo xong. Ba điều kiện đều đọc XANH trong viễn cảnh trên.
+
+**Đề xuất: điều kiện thứ tư, đo trên lô mẫu mù, và nó là điều kiện có thể ĐÓNG lane lại** — y
+như luật hiện hành *"tắt rồi mà lô mẫu mù có `human_touches > 0` → bật lại ngay, không thương
+lượng"*.
+
+**Chưa đặt ngưỡng.** Không có phân bố thì mọi con số đều là bịa — đúng luật §8/P8 đã áp cho
+`71,4%`. Phải chạy tay vài lượt lấy phân bố trước, xem §14.5.
+
+### 14.5 Trạng thái bằng chứng — nói thẳng
+
+Bài của Litt là **n = 1, không có số**. Trải nghiệm cá nhân, không benchmark, không đối chứng.
+Bài **không** nói chi phí một lượt, **không** nói mất bao lâu, **không** nói khi nào không nên
+dùng. Cái duy nhất cụ thể là cấu trúc 4 phần và luật cá nhân "chưa pass quiz thì chưa gửi code".
+
+Ghi đúng như vậy, cùng cách CLAUDE.md ghi về codex-as-builder: **một cái cược vào việc chia vai
+là đúng, không phải một kết luận từ dữ liệu.**
+
+**Đo trước khi ràng buộc.** Chạy tay trên 3-5 task mẫu mù và ghi lại:
+
+- một lượt tốn bao nhiêu (token, USD nếu đo được) và mất bao lâu để đọc + làm quiz
+- điểm quiz phân bố thế nào khi anh **thật sự** đã đọc diff
+- có lần nào bắt được chỗ anh tưởng đã hiểu mà không hiểu không — **đây mới là con số đáng
+  giá**, không phải điểm trung bình
+
+Chưa có ba thứ đó thì `/explain-diff` là công cụ đọc, chưa phải cổng. Đừng nối vào P8 sớm.
+
+### 14.6 Ba thứ khác trong bài, chưa lấy
+
+- **Micro-worlds** — debugger và command center tương tác để hiểu bằng tay (tinh thần Papert).
+  Gần với hướng `gstack browser` + inspector đã có, nhưng là việc riêng.
+- **Shared spaces** — không gian chung cho cả nhóm dựng mental model chung. Chưa hợp: harness
+  này đang là một người.
+- **In ra giấy đọc offline** — rẻ, thử được ngay, không cần xây gì.
