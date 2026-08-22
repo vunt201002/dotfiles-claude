@@ -46,6 +46,8 @@ export interface CmuxSession {
   subtitle: string;
 }
 
+export type CmuxSessionsRead = CmuxSession[] & ({ ok: true } | { ok: false; reason: string });
+
 export function cmuxStorePath(agent = 'claude', home = os.homedir()): string {
   return path.join(home, '.cmuxterm', `${agent}-hook-sessions.json`);
 }
@@ -64,25 +66,25 @@ function asLifecycle(value: unknown): AgentLifecycle {
 }
 
 /**
- * Never throws. A missing or half-written store means "no sessions", because a
- * reader that dies takes the manager's whole view of the fleet with it, and
- * this file is watched in a loop.
+ * Never throws. ENOENT is an observed empty fleet; every other read or parse
+ * failure stays explicit so a caller can keep running without mistaking lost
+ * visibility for spare capacity.
  */
-export function readCmuxSessions(agent = 'claude', home = os.homedir()): CmuxSession[] {
+export function readCmuxSessions(agent = 'claude', home = os.homedir()): CmuxSessionsRead {
   let raw: string;
   try {
     raw = fs.readFileSync(cmuxStorePath(agent, home), 'utf8');
-  } catch {
-    return [];
+  } catch (error) {
+    return observedArray([], (error as NodeJS.ErrnoException).code === 'ENOENT', errorReason(error));
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return [];
+  } catch (error) {
+    return observedArray([], false, errorReason(error));
   }
   const sessions = (parsed as { sessions?: Record<string, unknown> })?.sessions;
-  if (!sessions || typeof sessions !== 'object') return [];
+  if (!sessions || typeof sessions !== 'object') return observedArray([], true);
 
   const out: CmuxSession[] = [];
   for (const value of Object.values(sessions)) {
@@ -104,7 +106,19 @@ export function readCmuxSessions(agent = 'claude', home = os.homedir()): CmuxSes
       subtitle: asString(s.lastSubtitle),
     });
   }
-  return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  return observedArray(out.sort((a, b) => b.updatedAt - a.updatedAt), true);
+}
+
+function errorReason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function observedArray<T>(values: T[], ok: boolean, reason = ''): T[] & ({ ok: true } | { ok: false; reason: string }) {
+  Object.defineProperties(values, {
+    ok: { value: ok, enumerable: false },
+    ...(ok ? {} : { reason: { value: reason, enumerable: false } }),
+  });
+  return values as T[] & ({ ok: true } | { ok: false; reason: string });
 }
 
 /** Signal 0: asks the kernel whether the pid exists, without touching it. */
@@ -172,8 +186,12 @@ export interface FleetEntry extends CmuxSession {
   health: SessionHealth;
 }
 
-export function fleet(agent = 'claude', home = os.homedir()): FleetEntry[] {
-  return readCmuxSessions(agent, home).map((session) => ({ ...session, health: healthOf(session) }));
+export type FleetRead = FleetEntry[] & ({ ok: true } | { ok: false; reason: string });
+
+export function fleet(agent = 'claude', home = os.homedir()): FleetRead {
+  const sessions = readCmuxSessions(agent, home);
+  const entries = sessions.map((session) => ({ ...session, health: healthOf(session) }));
+  return sessions.ok ? observedArray(entries, true) : observedArray(entries, false, sessions.reason);
 }
 
 /** Sessions whose cwd is inside `root` — one repo's share of the fleet. */
@@ -237,6 +255,8 @@ const EMPTY_USAGE: TranscriptUsage = {
   model: '',
 };
 
+export type TranscriptUsageRead = TranscriptUsage & ({ ok: true } | { ok: false; reason: string });
+
 /**
  * Sums usage across a transcript, which is what makes a pane accountable.
  *
@@ -245,14 +265,14 @@ const EMPTY_USAGE: TranscriptUsage = {
  * every long session — exactly the kind of number that looks measured and is
  * not.
  */
-export function usageFromTranscript(transcriptPath: string): TranscriptUsage {
+export function usageFromTranscript(transcriptPath: string): TranscriptUsageRead {
   let raw: string;
   try {
     raw = fs.readFileSync(transcriptPath, 'utf8');
-  } catch {
-    return { ...EMPTY_USAGE };
+  } catch (error) {
+    return { ...EMPTY_USAGE, ok: false, reason: errorReason(error) };
   }
-  const total = { ...EMPTY_USAGE };
+  const total: TranscriptUsageRead = { ...EMPTY_USAGE, ok: true };
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;

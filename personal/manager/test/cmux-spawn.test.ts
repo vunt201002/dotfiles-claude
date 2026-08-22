@@ -236,6 +236,16 @@ describe('the agent cap counts panes the manager never started', () => {
     expect(await waitForSlot(1, { home: HOME, pollMs: 20, timeoutMs: 150 })).toBe('timeout');
   });
 
+  test('an unreadable fleet refuses admission with its read error instead of granting a slot', async () => {
+    fs.mkdirSync(cmuxStorePath('claude', HOME), { recursive: true });
+    expect(
+      await waitForSlot(2, {
+        home: HOME,
+        now: () => 0,
+      }),
+    ).toMatchObject({ outcome: 'unreadable', reason: expect.stringContaining('EISDIR') });
+  });
+
   test('stop is honoured while queued for a slot', async () => {
     writeStore('running');
     const controller = new AbortController();

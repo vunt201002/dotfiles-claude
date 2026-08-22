@@ -39,7 +39,7 @@ import {
   waitForSession,
   writePromptFile,
 } from './cmux-control';
-import { busyCount, fleet, healthOf, needsHuman, usageFromTranscript, type SessionHealth } from './cmux-sessions';
+import { busyCount, fleet, healthOf, needsHuman, usageFromTranscript, type FleetEntry, type SessionHealth } from './cmux-sessions';
 import { atomicWriteJson, managerDir } from './paths';
 import { agentSdkSpawnPort, scopeDirective, type SpawnPort, type SpawnRequest, type SpawnResult } from './spawn';
 import { ensureTaskWorktree } from './worktrees';
@@ -373,7 +373,7 @@ const EXIT_REASON: Record<string, string> = {
   working: 'timeout',
 };
 
-export type SlotOutcome = 'free' | 'aborted' | 'timeout';
+export type SlotOutcome = 'free' | 'aborted' | 'timeout' | { outcome: 'unreadable'; reason: string };
 
 /**
  * Blocks until the fleet has room.
@@ -398,7 +398,7 @@ export async function waitForSlot(
     home?: string;
     abandonedAfterMs?: number;
     now?: () => number;
-    fleet?: typeof fleet;
+    fleet?: (agent?: string, home?: string) => ReturnType<typeof fleet> | FleetEntry[];
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<SlotOutcome> {
@@ -410,7 +410,9 @@ export async function waitForSlot(
   const abandonedAfterMs = opts.abandonedAfterMs ?? loadConfig().abandonedPaneAfterMs;
   while (true) {
     if (opts.signal?.aborted) return 'aborted';
-    if (busyCount(readFleet('claude', opts.home), now(), abandonedAfterMs) < cap) return 'free';
+    const entries = readFleet('claude', opts.home);
+    if ('ok' in entries && entries.ok === false) return { outcome: 'unreadable', reason: entries.reason };
+    if (busyCount(entries, now(), abandonedAfterMs) < cap) return 'free';
     if (now() >= deadline) return 'timeout';
     await wait(pollMs);
   }
@@ -474,6 +476,12 @@ export const cmuxSpawnPort: SpawnPort = {
     const cap = resolveMaxAgents(cfg);
     const slot = await waitForSlot(cap, { signal: req.signal, timeoutMs: cfg.cmuxSlotWaitMs });
     if (slot === 'aborted') return { ...refusal('aborted', 'stopped while waiting for a free agent slot'), worktreeCreated };
+    if (typeof slot === 'object') {
+      return {
+        ...refusal('fleet_unreadable', `cmux fleet is unreadable; refusing a new agent slot: ${slot.reason}`),
+        worktreeCreated,
+      };
+    }
     if (slot === 'timeout') {
       return {
         ...refusal(

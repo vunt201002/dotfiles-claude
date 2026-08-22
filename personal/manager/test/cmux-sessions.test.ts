@@ -54,14 +54,28 @@ afterAll(() => {
 });
 
 describe('reading the store never takes the manager down with it', () => {
-  test('a missing store is no sessions, not a throw', () => {
-    expect(readCmuxSessions('claude', HOME)).toEqual([]);
+  test('a missing store is an observed empty fleet while an unreadable store stays explicit without throwing', () => {
+    const missing = readCmuxSessions('claude', HOME);
+    expect(missing.ok).toBe(true);
+    expect([...missing]).toEqual([]);
+
+    fs.mkdirSync(cmuxStorePath('claude', HOME), { recursive: true });
+    let unreadable: ReturnType<typeof readCmuxSessions> | undefined;
+    expect(() => {
+      unreadable = readCmuxSessions('claude', HOME);
+    }).not.toThrow();
+    expect(unreadable).toMatchObject({ ok: false, reason: expect.stringContaining('EISDIR') });
+    expect([...(unreadable ?? [])]).toEqual([]);
   });
 
-  test('a half-written store is no sessions, not a throw', () => {
+  test('a half-written store stays explicitly unreadable without throwing', () => {
     fs.mkdirSync(path.join(HOME, '.cmuxterm'), { recursive: true });
     fs.writeFileSync(cmuxStorePath('claude', HOME), '{"sessions": {"a": {"sessionId"');
-    expect(readCmuxSessions('claude', HOME)).toEqual([]);
+    let result: ReturnType<typeof readCmuxSessions> | undefined;
+    expect(() => {
+      result = readCmuxSessions('claude', HOME);
+    }).not.toThrow();
+    expect(result).toMatchObject({ ok: false });
   });
 
   test('an entry with no sessionId is skipped, the rest survive', () => {
@@ -235,6 +249,7 @@ describe('cost comes from the transcript, a channel the agent does not write for
       cacheCreationTokens: 10,
       turns: 2,
       model: '',
+      ok: true,
     });
   });
 
@@ -252,7 +267,15 @@ describe('cost comes from the transcript, a channel the agent does not write for
     expect(usageFromTranscript(transcript).model).toBe('claude-opus-4-7');
   });
 
-  test('a transcript that is not there reads as zero, not as a throw', () => {
-    expect(usageFromTranscript(path.join(HOME, 'nope.jsonl')).turns).toBe(0);
+  test('an unreadable transcript is distinct from an observed zero-turn transcript without throwing', () => {
+    const empty = path.join(HOME, 'empty.jsonl');
+    fs.writeFileSync(empty, '');
+    const observedZero = usageFromTranscript(empty);
+    let unreadable: ReturnType<typeof usageFromTranscript> | undefined;
+    expect(() => {
+      unreadable = usageFromTranscript(path.join(HOME, 'nope.jsonl'));
+    }).not.toThrow();
+    expect(observedZero).toMatchObject({ ok: true, turns: 0 });
+    expect(unreadable).toMatchObject({ ok: false, reason: expect.stringContaining('ENOENT') });
   });
 });
