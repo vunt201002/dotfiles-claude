@@ -207,6 +207,12 @@ describe('watching a pane to a state worth reporting', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
+  test('an unreadable fleet ends the watch explicitly instead of becoming a missing session', async () => {
+    fs.mkdirSync(cmuxStorePath('claude', HOME), { recursive: true });
+    const outcome = await watchSession(WORK, FAST);
+    expect(outcome).toMatchObject({ health: 'fleet-unreadable', reason: expect.stringContaining('EISDIR') });
+  });
+
   test('stop is honoured mid-run', async () => {
     writeStore('running');
     const controller = new AbortController();

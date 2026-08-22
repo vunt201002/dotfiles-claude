@@ -39,7 +39,16 @@ import {
   waitForSession,
   writePromptFile,
 } from './cmux-control';
-import { busyCount, fleet, healthOf, needsHuman, usageFromTranscript, type FleetEntry, type SessionHealth } from './cmux-sessions';
+import {
+  busyCount,
+  fleet,
+  healthOf,
+  needsHuman,
+  usageFromTranscript,
+  type FleetEntry,
+  type SessionHealth,
+  type TranscriptUsageRead,
+} from './cmux-sessions';
 import { atomicWriteJson, managerDir } from './paths';
 import { agentSdkSpawnPort, scopeDirective, type SpawnPort, type SpawnRequest, type SpawnResult } from './spawn';
 import { ensureTaskWorktree } from './worktrees';
@@ -289,11 +298,12 @@ export function assistantTexts(transcriptPath: string): string[] {
 }
 
 export interface WatchOutcome {
-  health: SessionHealth | 'never-started' | 'aborted' | 'timeout';
+  health: SessionHealth | 'never-started' | 'aborted' | 'timeout' | 'fleet-unreadable';
   /** Set once the session was observed doing work, so idle-at-boot is not read as done. */
   everWorked: boolean;
   turns: number;
   transcriptPath: string;
+  reason?: string;
 }
 
 /**
@@ -328,7 +338,11 @@ export async function watchSession(
     if (opts.signal?.aborted) {
       return { health: 'aborted', everWorked, turns, transcriptPath };
     }
-    const session = fleet(opts.agent, opts.home).find((s) => s.cwd && path.resolve(s.cwd) === path.resolve(dir));
+    const entries = fleet(opts.agent, opts.home);
+    if ('ok' in entries && entries.ok === false) {
+      return { health: 'fleet-unreadable', everWorked, turns, transcriptPath, reason: entries.reason };
+    }
+    const session = entries.find((s) => s.cwd && path.resolve(s.cwd) === path.resolve(dir));
     if (session) {
       transcriptPath = session.transcriptPath || transcriptPath;
       const health = healthOf(session);
@@ -356,7 +370,10 @@ export async function watchSession(
     if (Date.now() - started >= opts.timeoutMs) {
       return { health: 'timeout', everWorked, turns, transcriptPath };
     }
-    if (transcriptPath) turns = usageFromTranscript(transcriptPath).turns;
+    if (transcriptPath) {
+      const usage = usageFromTranscript(transcriptPath);
+      if (usage.ok) turns = usage.turns;
+    }
     await sleep(pollMs);
   }
 }
@@ -370,6 +387,7 @@ const EXIT_REASON: Record<string, string> = {
   aborted: 'aborted',
   timeout: 'timeout',
   'never-started': 'never_started',
+  'fleet-unreadable': 'fleet_unreadable',
   working: 'timeout',
 };
 
@@ -447,6 +465,19 @@ function refusal(reason: string, detail: string): SpawnResult {
  */
 function launchFailure(reason: string, detail: string): SpawnResult {
   return { ...refusal(reason, detail), costKnown: false };
+}
+
+export function measuredTranscriptCost(usage: TranscriptUsageRead | null): ReturnType<typeof measuredCost> {
+  if (!usage?.ok) return { usd: 0, known: false, model: usage?.model ?? '' };
+  return measuredCost(
+    {
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      cache_read_input_tokens: usage.cacheReadTokens,
+      cache_creation_input_tokens: usage.cacheCreationTokens,
+    },
+    usage.model,
+  );
 }
 
 export const cmuxSpawnPort: SpawnPort = {
@@ -538,15 +569,7 @@ export const cmuxSpawnPort: SpawnPort = {
     const output = transcriptPath ? lastAssistantText(transcriptPath) : '';
     const outputs = transcriptPath ? assistantTexts(transcriptPath) : [];
     const exitReason = EXIT_REASON[outcome.health] ?? outcome.health;
-    const cost = measuredCost(
-      {
-        input_tokens: usage?.inputTokens ?? 0,
-        output_tokens: usage?.outputTokens ?? 0,
-        cache_read_input_tokens: usage?.cacheReadTokens ?? 0,
-        cache_creation_input_tokens: usage?.cacheCreationTokens ?? 0,
-      },
-      usage?.model ?? '',
-    );
+    const cost = measuredTranscriptCost(usage);
 
     // A pane that finished cleanly has nothing left to show; one that failed
     // is the operator's only account of what happened, so it stays open and
@@ -569,6 +592,7 @@ export const cmuxSpawnPort: SpawnPort = {
       output:
         output ||
         screen ||
+        (outcome.reason ? `cmux fleet became unreadable while watching ${created.ref}: ${outcome.reason}` : '') ||
         (screenResult && !screenResult.ok
           ? `cmux pane ${created.ref} ended as "${exitReason}": screen was unreadable (${screenResult.error})`
           : `cmux pane ${created.ref} ended as "${exitReason}" with nothing in its transcript.`),

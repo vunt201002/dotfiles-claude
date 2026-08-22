@@ -78,9 +78,23 @@ describe('reading the store never takes the manager down with it', () => {
     expect(result).toMatchObject({ ok: false });
   });
 
-  test('an entry with no sessionId is skipped, the rest survive', () => {
+  test('an invalid row makes the fleet observation unreadable without throwing, while valid rows remain inspectable', () => {
     writeStore({ bad: { cwd: '/repo/joy' }, good: session({ sessionId: 'keep' }) });
-    expect(readCmuxSessions('claude', HOME).map((s) => s.sessionId)).toEqual(['keep']);
+    let result: ReturnType<typeof readCmuxSessions> | undefined;
+    expect(() => {
+      result = readCmuxSessions('claude', HOME);
+    }).not.toThrow();
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('invalid session row') });
+    expect((result ?? []).map((s) => s.sessionId)).toEqual(['keep']);
+  });
+
+  test('a parsed store without a sessions object is explicitly unreadable', () => {
+    fs.mkdirSync(path.join(HOME, '.cmuxterm'), { recursive: true });
+    fs.writeFileSync(cmuxStorePath('claude', HOME), JSON.stringify({ version: 1 }));
+    expect(readCmuxSessions('claude', HOME)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('no valid sessions object'),
+    });
   });
 
   test('an unknown lifecycle string degrades to unknown rather than being trusted', () => {
@@ -267,15 +281,27 @@ describe('cost comes from the transcript, a channel the agent does not write for
     expect(usageFromTranscript(transcript).model).toBe('claude-opus-4-7');
   });
 
-  test('an unreadable transcript is distinct from an observed zero-turn transcript without throwing', () => {
+  test('missing or schema-invalid usage stays unmeasured without throwing', () => {
     const empty = path.join(HOME, 'empty.jsonl');
     fs.writeFileSync(empty, '');
-    const observedZero = usageFromTranscript(empty);
+    const emptyUsage = usageFromTranscript(empty);
+    const missingUsage = path.join(HOME, 'missing-usage.jsonl');
+    fs.writeFileSync(missingUsage, JSON.stringify({ message: { model: 'claude-sonnet-4-6', usage: {} } }));
+    const wrongType = path.join(HOME, 'wrong-usage.jsonl');
+    fs.writeFileSync(
+      wrongType,
+      JSON.stringify({ message: { model: 'claude-sonnet-4-6', usage: { input_tokens: '10', output_tokens: 2 } } }),
+    );
+    const noUsageKey = path.join(HOME, 'no-usage-key.jsonl');
+    fs.writeFileSync(noUsageKey, JSON.stringify({ message: { model: 'claude-sonnet-4-6' } }));
     let unreadable: ReturnType<typeof usageFromTranscript> | undefined;
     expect(() => {
       unreadable = usageFromTranscript(path.join(HOME, 'nope.jsonl'));
     }).not.toThrow();
-    expect(observedZero).toMatchObject({ ok: true, turns: 0 });
+    expect(emptyUsage).toMatchObject({ ok: false, turns: 0, reason: expect.stringContaining('no usage') });
+    expect(usageFromTranscript(missingUsage)).toMatchObject({ ok: false, turns: 0 });
+    expect(usageFromTranscript(wrongType)).toMatchObject({ ok: false, turns: 0 });
+    expect(usageFromTranscript(noUsageKey)).toMatchObject({ ok: false, turns: 0 });
     expect(unreadable).toMatchObject({ ok: false, reason: expect.stringContaining('ENOENT') });
   });
 });

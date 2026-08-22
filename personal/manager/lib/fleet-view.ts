@@ -35,6 +35,7 @@ export interface FleetMember {
   costUsd: number;
   /** False when the model has no pricing row, so costUsd is absence not zero. */
   costKnown: boolean;
+  costStatus: 'known' | 'unpriced' | 'unmeasured';
   model: string;
   /** Set when the cwd matches a worktree the manager created. */
   taskId: string;
@@ -43,7 +44,7 @@ export interface FleetMember {
   managerOwned: boolean;
 }
 
-export interface FleetReport {
+interface FleetReportValue {
   members: FleetMember[];
   busy: number;
   cap: number;
@@ -55,9 +56,12 @@ export interface FleetReport {
   totalCostUsd: number;
   /** Models seen in flight with no pricing row. totalCostUsd excludes them. */
   unpricedModels: string[];
+  unmeasuredSessions: number;
   /** Tasks the manager thinks are live but which have no pane behind them. */
   orphanTasks: Array<{ id: string; project: string; state: string }>;
 }
+
+export type FleetReport = FleetReportValue & ({ ok: true } | { ok: false; reason: string });
 
 function secondsSince(epochSeconds: number, now: number): number {
   if (!epochSeconds) return 0;
@@ -67,15 +71,17 @@ function secondsSince(epochSeconds: number, now: number): number {
 function memberFrom(entry: FleetEntry, byDir: Map<string, WorktreeRecord>, now: number): FleetMember {
   const record = entry.cwd ? byDir.get(path.resolve(entry.cwd)) : undefined;
   const usage = entry.transcriptPath ? usageFromTranscript(entry.transcriptPath) : null;
-  const cost = measuredCost(
-    {
-      input_tokens: usage?.inputTokens ?? 0,
-      output_tokens: usage?.outputTokens ?? 0,
-      cache_read_input_tokens: usage?.cacheReadTokens ?? 0,
-      cache_creation_input_tokens: usage?.cacheCreationTokens ?? 0,
-    },
-    usage?.model ?? '',
-  );
+  const cost = usage?.ok
+    ? measuredCost(
+        {
+          input_tokens: usage.inputTokens,
+          output_tokens: usage.outputTokens,
+          cache_read_input_tokens: usage.cacheReadTokens,
+          cache_creation_input_tokens: usage.cacheCreationTokens,
+        },
+        usage.model,
+      )
+    : { usd: 0, known: false, model: usage?.model ?? '' };
   return {
     sessionId: entry.sessionId,
     health: entry.health,
@@ -88,6 +94,7 @@ function memberFrom(entry: FleetEntry, byDir: Map<string, WorktreeRecord>, now: 
     turns: usage?.turns ?? 0,
     costUsd: cost.usd,
     costKnown: cost.known,
+    costStatus: usage?.ok ? (cost.known ? 'known' : 'unpriced') : 'unmeasured',
     model: cost.model,
     taskId: record?.taskId ?? '',
     project: record?.project ?? '',
@@ -105,7 +112,7 @@ export function fleetReport(opts: { now?: number; home?: string } = {}): FleetRe
   const live = members.filter((m) => isLive(m.health));
   const covered = new Set(members.map((m) => m.taskId).filter(Boolean));
 
-  return {
+  const report: FleetReportValue = {
     members,
     busy: busyCount(entries, now, cfg.abandonedPaneAfterMs),
     cap: resolveMaxAgents(cfg),
@@ -114,11 +121,14 @@ export function fleetReport(opts: { now?: number; home?: string } = {}): FleetRe
     worktrees,
     stale: staleRecords(),
     totalCostUsd: +live.reduce((sum, m) => sum + m.costUsd, 0).toFixed(4),
-    unpricedModels: [...new Set(live.filter((m) => !m.costKnown && m.model).map((m) => m.model))],
+    unpricedModels: [...new Set(live.filter((m) => m.costStatus === 'unpriced' && m.model).map((m) => m.model))],
+    unmeasuredSessions: live.filter((m) => m.costStatus === 'unmeasured').length,
     orphanTasks: listTasks()
       .filter((t) => ACTIVE_STATES.includes(t.state) && !covered.has(t.id))
       .map((t) => ({ id: t.id, project: t.project, state: t.state })),
   };
+  if (entries.ok) return { ...report, ok: true };
+  return { ...report, ok: false, reason: entries.reason };
 }
 
 const MARK: Record<SessionHealth, string> = {
@@ -155,13 +165,14 @@ function duration(sec: number): string {
  * a screen the operator had open the whole time.
  */
 export function renderFleet(report: FleetReport): string {
+  if (!report.ok) return `fleet: unreadable · ${report.reason}`;
   const lines: string[] = [];
   // "$0.00" beside a fleet of unpriced agents reads as "nothing is being
   // spent", which is the one conclusion the number cannot support.
   const spend =
-    report.unpricedModels.length > 0
+    report.unpricedModels.length > 0 || report.unmeasuredSessions > 0
       ? report.totalCostUsd > 0
-        ? `$${report.totalCostUsd.toFixed(2)} + unpriced`
+        ? `$${report.totalCostUsd.toFixed(2)} + unknown`
         : 'spend unknown'
       : `$${report.totalCostUsd.toFixed(2)}`;
   lines.push(`fleet: ${report.busy}/${report.cap} busy · ${spend} in flight`);
@@ -169,6 +180,9 @@ export function renderFleet(report: FleetReport): string {
     lines.push(
       `  (no price on file for ${report.unpricedModels.join(', ')} — add a row to test/helpers/pricing.ts to turn cost accounting on)`,
     );
+  }
+  if (report.unmeasuredSessions > 0) {
+    lines.push(`  (${report.unmeasuredSessions} live session${report.unmeasuredSessions === 1 ? '' : 's'} has no observed usage)`);
   }
 
   if (report.waiting.length > 0) {
@@ -194,7 +208,7 @@ export function renderFleet(report: FleetReport): string {
     lines.push('');
     for (const m of rest) {
       const owner = m.managerOwned ? m.taskId : 'yours';
-      const cost = m.costKnown ? ` $${m.costUsd.toFixed(2)}` : m.turns > 0 ? ' $?' : '';
+      const cost = m.costKnown ? ` $${m.costUsd.toFixed(2)}` : m.costStatus === 'unmeasured' || m.turns > 0 ? ' $?' : '';
       lines.push(
         `  ${MARK[m.health]} ${m.where.padEnd(24)} ${owner.padEnd(20)} ${duration(m.ageSec)}${cost} · ${m.subtitle}`,
       );

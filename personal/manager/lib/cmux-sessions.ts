@@ -83,15 +83,27 @@ export function readCmuxSessions(agent = 'claude', home = os.homedir()): CmuxSes
   } catch (error) {
     return observedArray([], false, errorReason(error));
   }
-  const sessions = (parsed as { sessions?: Record<string, unknown> })?.sessions;
-  if (!sessions || typeof sessions !== 'object') return observedArray([], true);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return observedArray([], false, 'cmux store root is not an object');
+  }
+  const sessions = (parsed as { sessions?: unknown }).sessions;
+  if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) {
+    return observedArray([], false, 'cmux store has no valid sessions object');
+  }
 
   const out: CmuxSession[] = [];
+  let invalidRows = 0;
   for (const value of Object.values(sessions)) {
-    if (!value || typeof value !== 'object') continue;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      invalidRows += 1;
+      continue;
+    }
     const s = value as Record<string, unknown>;
     const sessionId = asString(s.sessionId);
-    if (!sessionId) continue;
+    if (!sessionId) {
+      invalidRows += 1;
+      continue;
+    }
     out.push({
       sessionId,
       surfaceId: asString(s.surfaceId),
@@ -106,7 +118,10 @@ export function readCmuxSessions(agent = 'claude', home = os.homedir()): CmuxSes
       subtitle: asString(s.lastSubtitle),
     });
   }
-  return observedArray(out.sort((a, b) => b.updatedAt - a.updatedAt), true);
+  const sorted = out.sort((a, b) => b.updatedAt - a.updatedAt);
+  return invalidRows === 0
+    ? observedArray(sorted, true)
+    : observedArray(sorted, false, `cmux store contains ${invalidRows} invalid session row${invalidRows === 1 ? '' : 's'}`);
 }
 
 function errorReason(error: unknown): string {
@@ -272,7 +287,9 @@ export function usageFromTranscript(transcriptPath: string): TranscriptUsageRead
   } catch (error) {
     return { ...EMPTY_USAGE, ok: false, reason: errorReason(error) };
   }
-  const total: TranscriptUsageRead = { ...EMPTY_USAGE, ok: true };
+  const total = { ...EMPTY_USAGE };
+  let observedUsage = false;
+  let invalidUsage = false;
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -286,12 +303,36 @@ export function usageFromTranscript(transcriptPath: string): TranscriptUsageRead
     const model = asString(message?.model);
     if (model) total.model = model;
     const usage = message?.usage;
-    if (!usage || typeof usage !== 'object') continue;
-    total.inputTokens += asNumber(usage.input_tokens);
-    total.outputTokens += asNumber(usage.output_tokens);
-    total.cacheReadTokens += asNumber(usage.cache_read_input_tokens);
-    total.cacheCreationTokens += asNumber(usage.cache_creation_input_tokens);
+    if (!usage || typeof usage !== 'object') {
+      if (model) invalidUsage = true;
+      continue;
+    }
+    const inputTokens = tokenCount(usage.input_tokens);
+    const outputTokens = tokenCount(usage.output_tokens);
+    const cacheReadTokens = optionalTokenCount(usage, 'cache_read_input_tokens');
+    const cacheCreationTokens = optionalTokenCount(usage, 'cache_creation_input_tokens');
+    if (inputTokens === null || outputTokens === null || cacheReadTokens === null || cacheCreationTokens === null) {
+      invalidUsage = true;
+      continue;
+    }
+    observedUsage = true;
+    total.inputTokens += inputTokens;
+    total.outputTokens += outputTokens;
+    total.cacheReadTokens += cacheReadTokens;
+    total.cacheCreationTokens += cacheCreationTokens;
     total.turns += 1;
   }
-  return total;
+  if (!observedUsage || invalidUsage) {
+    return { ...total, ok: false, reason: invalidUsage ? 'transcript contains invalid usage' : 'transcript contains no usage' };
+  }
+  return { ...total, ok: true };
+}
+
+function tokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function optionalTokenCount(usage: Record<string, unknown>, key: string): number | null {
+  if (!Object.prototype.hasOwnProperty.call(usage, key)) return 0;
+  return tokenCount(usage[key]);
 }

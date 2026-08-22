@@ -152,6 +152,17 @@ describe('the fleet is every agent on the machine, not every task the manager st
     writeStore([]);
     expect(renderFleet(fleetReport({ home: HOME }))).toContain('no agent sessions');
   });
+
+  test('an unreadable fleet report never claims zero busy, zero spend, or no sessions', () => {
+    fs.mkdirSync(cmuxStorePath('claude', HOME), { recursive: true });
+    const report = fleetReport({ home: HOME });
+    expect(report).toMatchObject({ ok: false, reason: expect.stringContaining('EISDIR') });
+    const text = renderFleet(report);
+    expect(text).toContain('fleet: unreadable');
+    expect(text).not.toContain('0/');
+    expect(text).not.toContain('$0.00');
+    expect(text).not.toContain('no agent sessions');
+  });
 });
 
 describe('money the manager cannot price is reported as missing, not as zero', () => {
@@ -191,6 +202,17 @@ describe('money the manager cannot price is reported as missing, not as zero', (
     expect(report.unpricedModels).toEqual([]);
     expect(report.totalCostUsd).toBeGreaterThan(0);
     expect(report.members[0].costKnown).toBe(true);
+  });
+
+  test('a priced model without observed usage is unmeasured, not a measured zero', () => {
+    const transcript = path.join(HOME, 'missing-usage.jsonl');
+    fs.writeFileSync(transcript, JSON.stringify({ message: { model: 'claude-sonnet-4-6', usage: {} } }));
+    writeStore([{ sessionId: 'unknown-cost', cwd: MINE, pid: ALIVE, agentLifecycle: 'running', transcriptPath: transcript }]);
+    const report = fleetReport({ home: HOME });
+    expect(report.members[0]).toMatchObject({ costKnown: false, costStatus: 'unmeasured', costUsd: 0 });
+    expect(report.unpricedModels).toEqual([]);
+    expect(report.unmeasuredSessions).toBe(1);
+    expect(renderFleet(report)).toContain('spend unknown');
   });
 
   // Only live agents are still spending. A finished pane's bill belongs to the
