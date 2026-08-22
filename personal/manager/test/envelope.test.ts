@@ -251,9 +251,86 @@ describe('parseEnvelope', () => {
   });
 
   test('reports the missing JSON rather than inventing an envelope', () => {
-    const result = parseEnvelope('I could not size this.');
+    for (const text of ['I could not size this.', '{ not json }']) {
+      const result = parseEnvelope(text);
+      expect(result.ok).toBe(false);
+      expect(result.errors[0]).toContain('no JSON object');
+    }
+  });
+
+  test('falls back when a valid object is followed by a stray brace or malformed object', () => {
+    const valid = JSON.stringify(goodEnvelope({ title: 'valid before damaged suffix' }));
+
+    for (const suffix of ['}', '{"project": }']) {
+      const result = parseEnvelope(`${valid}\n${suffix}`);
+      expect(result.ok).toBe(true);
+      expect(result.envelope?.title).toBe('valid before damaged suffix');
+    }
+  });
+
+  test('falls back through multiple bare objects when the newest is malformed', () => {
+    const valid = JSON.stringify(goodEnvelope({ title: 'middle valid envelope' }));
+    const result = parseEnvelope(`{"note":"older non-envelope"}\n${valid}\n{"project": }`);
+
+    expect(result.ok).toBe(true);
+    expect(result.envelope?.title).toBe('middle valid envelope');
+  });
+
+  test('a later fenced JSON object that is not an envelope does not hide a valid fenced envelope', () => {
+    const valid = JSON.stringify(goodEnvelope({ title: 'earlier fenced envelope' }));
+    const result = parseEnvelope(`\`\`\`json\n${valid}\n\`\`\`\n\`\`\`json\n{"note":"not an envelope"}\n\`\`\``);
+
+    expect(result.ok).toBe(true);
+    expect(result.envelope?.title).toBe('earlier fenced envelope');
+  });
+
+  test('a top-level array is not mined for an envelope object', () => {
+    const result = parseEnvelope(JSON.stringify([goodEnvelope()]));
+
     expect(result.ok).toBe(false);
-    expect(result.errors[0]).toContain('no JSON object');
+    expect(result.envelope).toBeNull();
+    expect(result.errors).toContain('envelope is not a JSON object');
+  });
+
+  test('accepts uppercase JSON fence labels', () => {
+    const valid = JSON.stringify(goodEnvelope({ title: 'uppercase fence' }));
+    const result = parseEnvelope(`\`\`\`JSON\n${valid}\n\`\`\`\n{"project": }`);
+
+    expect(result.ok).toBe(true);
+    expect(result.envelope?.title).toBe('uppercase fence');
+  });
+
+  test('the last of multiple valid envelope candidates still wins', () => {
+    const earlier = JSON.stringify(goodEnvelope({ title: 'earlier valid envelope' }));
+    const later = JSON.stringify(goodEnvelope({ title: 'later valid envelope' }));
+    const result = parseEnvelope(`${earlier}\n${later}`);
+
+    expect(result.ok).toBe(true);
+    expect(result.envelope?.title).toBe('later valid envelope');
+  });
+
+  test('a malformed newest candidate falls back to the previous valid envelope', () => {
+    const valid = JSON.stringify(goodEnvelope({ title: 'fallback target' }));
+    const result = parseEnvelope(`${valid}\n{"title":"broken",}`);
+
+    expect(result.ok).toBe(true);
+    expect(result.envelope?.title).toBe('fallback target');
+  });
+
+  test('does not accept a parseable non-envelope when the newest candidate is malformed', () => {
+    const parseableButInvalid = JSON.stringify(goodEnvelope({ size: 'XXL' as never }));
+    const result = parseEnvelope(`${parseableButInvalid}\n{"title":"broken",}`);
+
+    expect(result.ok).toBe(false);
+    expect(result.envelope).toBeNull();
+    expect(result.errors.join(' ')).toContain('size');
+  });
+
+  test('rejects output when no candidate validates as an envelope', () => {
+    const result = parseEnvelope('{"verdict":"pass"}\n{"project":"still incomplete"}');
+
+    expect(result.ok).toBe(false);
+    expect(result.envelope).toBeNull();
   });
 });
 

@@ -81,48 +81,81 @@ export function preserveRejectedOutput(
   }
 }
 
-/**
- * Pull the last JSON object out of agent output. Prefers a fenced ```json
- * block; falls back to the last balanced brace span so a model that forgot the
- * fence still parses.
- */
-export function extractJsonBlock(text: string): unknown | null {
-  const fenced = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)];
-  for (let i = fenced.length - 1; i >= 0; i--) {
-    try {
-      return JSON.parse(fenced[i][1]);
-    } catch {
-      continue;
-    }
+type JsonCandidate = { parsed: true; value: unknown } | { parsed: false };
+
+function jsonCandidate(source: string): JsonCandidate {
+  try {
+    return { parsed: true, value: JSON.parse(source) };
+  } catch {
+    return { parsed: false };
   }
-  const end = text.lastIndexOf('}');
-  if (end === -1) return null;
-  let depth = 0;
+}
+
+function extractBareJsonCandidates(text: string): JsonCandidate[] {
+  const candidates: JsonCandidate[] = [];
+  const stack: string[] = [];
+  let start = -1;
   let inString = false;
   let escaped = false;
-  for (let i = end; i >= 0; i--) {
+
+  for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') inString = !inString;
-    if (inString) continue;
-    if (ch === '}') depth++;
-    else if (ch === '{') {
-      depth--;
-      if (depth === 0) {
-        try {
-          return JSON.parse(text.slice(i, end + 1));
-        } catch {
-          return null;
-        }
+    if (stack.length === 0) {
+      if (ch === '{' || ch === '[') {
+        start = i;
+        stack.push(ch);
       }
+      continue;
     }
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{' || ch === '[') {
+      stack.push(ch);
+      continue;
+    }
+    if (ch !== '}' && ch !== ']') continue;
+    const opener = stack.at(-1);
+    if ((ch === '}' && opener !== '{') || (ch === ']' && opener !== '[')) {
+      stack.length = 0;
+      start = -1;
+      continue;
+    }
+    stack.pop();
+    if (stack.length === 0) {
+      candidates.push(jsonCandidate(text.slice(start, i + 1)));
+      start = -1;
+    }
+  }
+  return candidates.reverse();
+}
+
+/** JSON candidates in the same priority order as the old extractor. */
+function extractJsonCandidates(text: string): JsonCandidate[] {
+  const candidates: JsonCandidate[] = [];
+  const fenced = [...text.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)];
+  for (let i = fenced.length - 1; i >= 0; i--) {
+    candidates.push(jsonCandidate(fenced[i][1]));
+  }
+
+  candidates.push(...extractBareJsonCandidates(text));
+  return candidates;
+}
+
+/**
+ * Pull the highest-priority parseable JSON value out of agent output. Fenced
+ * blocks win over bare values, and later candidates win within each group.
+ */
+export function extractJsonBlock(text: string): unknown | null {
+  for (const candidate of extractJsonCandidates(text)) {
+    if (candidate.parsed) return candidate.value;
   }
   return null;
 }
@@ -306,12 +339,27 @@ export function applyRouterOverrides(input: TaskEnvelope, ctx: OverrideContext =
 
 /** Parse + validate + override in one call. */
 export function parseEnvelope(text: string, ctx: OverrideContext = {}): ValidationResult {
-  const raw = extractJsonBlock(text);
-  if (raw === null) {
+  const candidates = extractJsonCandidates(text);
+  if (candidates.length === 0) {
     return { ok: false, errors: ['no JSON object found in agent output'], envelope: null, overrides: [] };
   }
-  const validated = validateEnvelope(raw);
-  if (!validated.ok || !validated.envelope) return validated;
-  const { envelope, overrides } = applyRouterOverrides(validated.envelope, ctx);
-  return { ok: true, errors: [], envelope, overrides };
+  let firstFailure: ValidationResult | null = null;
+  for (const candidate of candidates) {
+    if (!candidate.parsed) continue;
+    const validated = validateEnvelope(candidate.value);
+    if (!validated.ok || !validated.envelope) {
+      firstFailure ??= validated;
+      continue;
+    }
+    const { envelope, overrides } = applyRouterOverrides(validated.envelope, ctx);
+    return { ok: true, errors: [], envelope, overrides };
+  }
+  return (
+    firstFailure ?? {
+      ok: false,
+      errors: ['no JSON object found in agent output'],
+      envelope: null,
+      overrides: [],
+    }
+  );
 }
