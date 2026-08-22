@@ -13,7 +13,7 @@ import { loadTask, writeState } from '../../lib/store';
 import { emptyState, type TaskEnvelope, type TaskRecord } from '../../types';
 
 export const PROJECT = 'fault-fixture';
-export const ASSERT_COMMAND = 'fault-suite';
+export const ASSERT_COMMAND = 'bun test fault-suite';
 
 export class FakeClock {
   constructor(private current = Date.parse('2026-08-22T00:00:00.000Z')) {}
@@ -40,7 +40,11 @@ export interface FaultWorld {
   dispose(): void;
 }
 
-export type RunnerReply = (request: SpawnRequest, callIndex: number, world: FaultWorld) => Partial<SpawnResult>;
+export type RunnerReply = (
+  request: SpawnRequest,
+  callIndex: number,
+  world: FaultWorld,
+) => Partial<SpawnResult> | Promise<Partial<SpawnResult>>;
 
 function envelope(): string {
   const value: TaskEnvelope = {
@@ -144,7 +148,7 @@ export async function runOrchestrator(world: FaultWorld, reply: RunnerReply, bli
     async run(request) {
       const callIndex = world.calls.length;
       world.calls.push(request);
-      const value = reply(request, callIndex, world);
+      const value = await reply(request, callIndex, world);
       const result = {
         output: value.output ?? '',
         outputs: value.outputs ?? [],

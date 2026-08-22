@@ -1,6 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { readScreen, type CmuxExecutor } from '../../lib/cmux-control';
+import type { FleetEntry } from '../../lib/cmux-sessions';
+import { waitForSlot } from '../../lib/cmux-spawn';
 import { gateLogPath } from '../../lib/gate-log';
 import type { SpawnRequest, SpawnResult } from '../../lib/spawn';
 import type { TaskRecord } from '../../types';
@@ -33,17 +36,31 @@ function prepareUnreadableGateLog(target: harness.FaultWorld, collapse: boolean)
   target.observations.add('gate-log:EISDIR-collapsed');
 }
 
-function staleUnknownClaimsSlot(): Partial<SpawnResult> {
-  return {
-    output: 'stale lifecycle=unknown occupied the last slot',
-    outputs: [],
-    exitReason: 'no_free_slot',
-    worktreeCreated: false,
-  };
+function staleUnknownFleet(lifecycle: 'running' | 'unknown'): FleetEntry[] {
+  return [{ health: 'working', lifecycle, updatedAt: 0 }] as FleetEntry[];
 }
 
-function staleUnknownReleasesSlot(request: SpawnRequest): Partial<SpawnResult> {
-  return harness.healthyReply(request);
+function admissionReply(lifecycle: 'running' | 'unknown'): harness.RunnerReply {
+  return async (request) => {
+    if (request.prompt.startsWith('Size issue')) return harness.healthyReply(request);
+    let time = 20_000;
+    const outcome = await waitForSlot(1, {
+      timeoutMs: 10_000,
+      abandonedAfterMs: 10_000,
+      now: () => time,
+      fleet: () => staleUnknownFleet(lifecycle),
+      sleep: async () => {
+        time = 30_000;
+      },
+    });
+    if (outcome === 'free') return harness.healthyReply(request);
+    return {
+      output: 'stale lifecycle=unknown occupied the last slot',
+      outputs: [],
+      exitReason: 'no_free_slot',
+      worktreeCreated: false,
+    };
+  };
 }
 
 function transportFailureWithPhantomRun(): Partial<SpawnResult> {
@@ -74,23 +91,81 @@ function passingWithWorktree(request: SpawnRequest): Partial<SpawnResult> {
   return { ...harness.healthyReply(request), worktreeCreated: true };
 }
 
-function unreadableScreenCollapsed(): Partial<SpawnResult> {
-  return {
-    output: 'cmux pane workspace:77 ended as "crashed" with nothing in its transcript.',
-    outputs: [],
-    exitReason: 'crashed',
-    sessionId: '',
-    worktreeCreated: true,
+function screenFailureReply(executor: CmuxExecutor): harness.RunnerReply {
+  return (request) => {
+    if (request.prompt.startsWith('Size issue')) return harness.healthyReply(request);
+    const screen = readScreen('workspace:77', 120, executor);
+    return {
+      output: screen.ok
+        ? screen.screen || 'cmux pane workspace:77 ended as "crashed" with nothing in its transcript.'
+        : `cmux pane workspace:77 ended as "crashed": screen was unreadable (${screen.error})`,
+      outputs: [],
+      exitReason: 'crashed',
+      sessionId: '',
+      worktreeCreated: true,
+    };
   };
 }
 
-function unreadableScreenExplicit(): Partial<SpawnResult> {
+function precisionEnvelope(): string {
+  return `\`\`\`json\n${JSON.stringify({
+    project: harness.PROJECT,
+    issue: 'fault-contract',
+    title: 'Precision fault contract fixture',
+    size: 'S',
+    uncertainty: 'low',
+    lane: 'bug-nho',
+    why: 'exercise blind-sample precision reporting',
+    oracle_available: true,
+    oracle_kind: ['bun-test'],
+    needs_human: false,
+    blocking_questions: [],
+    assumptions: [],
+    assumption_count: 0,
+    est_cost_usd: 0,
+    est_turns: 1,
+  })}\n\`\`\``;
+}
+
+function precisionFinding(): string {
+  return `\`\`\`json\n${JSON.stringify({
+    verdict: 'pass',
+    reason: 'observed review finding',
+    gates: [{ gate: 'spec-check', gate_family: 'llm', verdict: 'caught', caught: 'observed finding' }],
+    findings: ['observed finding'],
+    assumptions: [],
+    questions: [],
+  })}\n\`\`\``;
+}
+
+function precisionReply(request: SpawnRequest): Partial<SpawnResult> {
+  if (request.prompt.startsWith('Size issue')) {
+    const output = precisionEnvelope();
+    return { ...harness.healthyReply(request), output, outputs: [output] };
+  }
+  if (request.prompt.includes('Report this as gate "spec-check"')) {
+    const output = precisionFinding();
+    return { ...harness.healthyReply(request), output, outputs: [output] };
+  }
+  return harness.healthyReply(request);
+}
+
+interface PrecisionReport {
+  precision: number | null;
+  precision_status: 'measured' | 'pending-human-review';
+}
+
+async function reportPrecision(task: TaskRecord, withholdUnreviewed: boolean): Promise<PrecisionReport> {
+  const gateLogModule = '../../../../bin/gate-log';
+  const { calculatePrecision } = await import(gateLogModule);
+  if (withholdUnreviewed && task.blind_sample) {
+    return { precision: null, precision_status: 'pending-human-review' };
+  }
+  const caught = task.gate_reports.filter((report) => report.verdict === 'caught').length;
+  const falsePositive = task.gate_reports.filter((report) => report.verdict === 'false-positive').length;
   return {
-    output: 'cmux pane workspace:77 ended as "crashed": screen was unreadable (read-screen failed)',
-    outputs: [],
-    exitReason: 'crashed',
-    sessionId: '',
-    worktreeCreated: true,
+    precision: calculatePrecision({ caught, falsePositive }),
+    precision_status: 'measured',
   };
 }
 
@@ -112,6 +187,12 @@ function detectC5(task: TaskRecord): string[] {
     : [];
 }
 
+function detectC6(task: TaskRecord, report: PrecisionReport): string[] {
+  return task.blind_sample && report.precision === 1 && report.precision_status === 'measured'
+    ? ['unreviewed blind sample published 100% precision']
+    : [];
+}
+
 function detectC8(task: TaskRecord): string[] {
   return task.state === 'REPORTED' && task.worktree_created === undefined
     ? ['task reached REPORTED without observed worktree creation']
@@ -127,13 +208,13 @@ function detectC9(task: TaskRecord): string[] {
 describe('known missing-evidence fault detectors', () => {
   test('C2 fault→kêu: stale unknown lifecycle claims a working slot', async () => {
     world = harness.createWorld();
-    const task = await harness.runOrchestrator(world, staleUnknownClaimsSlot);
+    const task = await harness.runOrchestrator(world, admissionReply('running'));
     expect(detectC2(task)).toEqual(['stale lifecycle=unknown claimed a working slot without current evidence']);
   });
 
   test('C2 healthy→im: stale unknown lifecycle releases the working slot', async () => {
     world = harness.createWorld();
-    const task = await harness.runOrchestrator(world, staleUnknownReleasesSlot);
+    const task = await harness.runOrchestrator(world, admissionReply('unknown'));
     expect(detectC2(task)).toEqual([]);
   });
 
@@ -177,13 +258,33 @@ describe('known missing-evidence fault detectors', () => {
 
   test('C9 fault→kêu: unreadable screen becomes an empty-transcript report', async () => {
     world = harness.createWorld();
-    const task = await harness.runOrchestrator(world, unreadableScreenCollapsed);
+    const task = await harness.runOrchestrator(
+      world,
+      screenFailureReply(() => ({ ok: true, stdout: '', stderr: '' })),
+    );
     expect(detectC9(task)).toEqual(['unreadable screen was reported as an empty transcript']);
   });
 
   test('C9 healthy→im: unreadable screen remains explicit in the report', async () => {
     world = harness.createWorld();
-    const task = await harness.runOrchestrator(world, unreadableScreenExplicit);
+    const task = await harness.runOrchestrator(
+      world,
+      screenFailureReply(() => ({ ok: false, stdout: '', stderr: 'read-screen failed' })),
+    );
     expect(detectC9(task)).toEqual([]);
+  });
+
+  test('C6 fault→kêu: unreviewed blind sample publishes 100% precision', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, precisionReply, true);
+    const report = await reportPrecision(task, false);
+    expect(detectC6(task, report)).toEqual(['unreviewed blind sample published 100% precision']);
+  });
+
+  test('C6 healthy→im: unreviewed blind sample withholds precision', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, precisionReply, true);
+    const report = await reportPrecision(task, true);
+    expect(detectC6(task, report)).toEqual([]);
   });
 });
