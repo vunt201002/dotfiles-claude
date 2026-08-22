@@ -45,7 +45,11 @@ export class PendingStore {
   }
 
   static load(file: string): PendingStore {
-    const shape = readJson<PendingShape>(file, { questions: [], approvals: [], seq: 0 });
+    const result = readJson<PendingShape>(file);
+    if (!result.ok && result.kind === 'error') {
+      throw new Error(`cannot read pending Telegram actions: ${result.reason}`);
+    }
+    const shape = result.ok ? result.value : { questions: [], approvals: [], seq: 0 };
     return new PendingStore(file, {
       questions: Array.isArray(shape.questions) ? shape.questions : [],
       approvals: Array.isArray(shape.approvals) ? shape.approvals : [],

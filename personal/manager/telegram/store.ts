@@ -5,13 +5,21 @@ export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-export function readJson<T>(file: string, fallback: T): T {
+export type ReadJsonResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; kind: 'missing' | 'empty' }
+  | { ok: false; kind: 'error'; reason: string };
+
+export function readJson<T>(file: string): ReadJsonResult<T> {
   try {
     const raw = fs.readFileSync(file, 'utf8');
-    if (!raw.trim()) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
+    if (!raw.trim()) return { ok: false, kind: 'empty' };
+    return { ok: true, value: JSON.parse(raw) as T };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return { ok: false, kind: 'missing' };
+    }
+    return { ok: false, kind: 'error', reason: error instanceof Error ? error.message : String(error) };
   }
 }
 

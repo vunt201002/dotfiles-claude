@@ -38,7 +38,11 @@ export class Outbox {
   }
 
   static load(file: string, maxItems = 500): Outbox {
-    const shape = readJson<OutboxShape>(file, { items: [], seq: 0 });
+    const result = readJson<OutboxShape>(file);
+    if (!result.ok && result.kind === 'error') {
+      throw new Error(`cannot read Telegram outbox: ${result.reason}`);
+    }
+    const shape = result.ok ? result.value : { items: [], seq: 0 };
     const items = Array.isArray(shape.items) ? shape.items.filter((item) => item && typeof item.text === 'string') : [];
     return new Outbox(file, maxItems, { items, seq: Number.isFinite(shape.seq) ? shape.seq : 0 });
   }

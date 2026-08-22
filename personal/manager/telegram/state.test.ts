@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createBot, type Bot } from './bot';
+import { loadConfig } from './config';
 import { Outbox } from './outbox';
 import { PendingStore } from './pending';
 import { UpdateLog } from './update-log';
 import { decodeFrame } from './manager-client';
-import { chunkText } from './telegram-api';
+import { chunkText, TelegramApi } from './telegram-api';
 
 let tmp: string;
 
@@ -44,11 +46,10 @@ describe('UpdateLog — chống xử lý trùng update_id', () => {
     expect(second.offset).toBe(102);
   });
 
-  test('file state hỏng thì khởi động sạch chứ không crash', () => {
+  test('update-log không đọc được thì không tiếp tục với offset 0', () => {
     const file = path.join(tmp, 'updates.json');
     fs.writeFileSync(file, '{ không phải json');
-    const log = UpdateLog.load(file);
-    expect(log.offset).toBe(0);
+    expect(() => UpdateLog.load(file)).toThrow('cannot read Telegram update log');
   });
 });
 
@@ -101,6 +102,12 @@ describe('Outbox — hàng đợi outbound sống sót qua restart', () => {
     expect(evicted).toEqual(['report cũ']);
     expect(outbox.list().map((i) => i.kind)).toEqual(['approval', 'question', 'report']);
   });
+
+  test('outbox không đọc được thì không bị coi là không có tin để gửi', () => {
+    const file = path.join(tmp, 'outbox.json');
+    fs.writeFileSync(file, '{ không phải json');
+    expect(() => Outbox.load(file)).toThrow('cannot read Telegram outbox');
+  });
 });
 
 describe('PendingStore', () => {
@@ -136,6 +143,57 @@ describe('PendingStore', () => {
     expect(store.resolveApproval(approval.shortId)).toBe(false);
     expect(PendingStore.load(file).getApproval(approval.shortId)?.resolved).toBe(true);
   });
+
+  test('pending không đọc được thì bot không bắt đầu xử lý update hay phê duyệt', async () => {
+    const botToken = '8123456789:AAH1yQxK9zL0mNoPqRsTuVwXyZabcdefghi';
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: botToken,
+      TELEGRAM_ALLOWED_CHAT_IDS: '424242',
+      TELEGRAM_API_BASE: 'https://telegram.test',
+      GSTACK_HOME: tmp,
+      TELEGRAM_POLL_TIMEOUT_SEC: '0',
+    });
+    fs.mkdirSync(path.dirname(config.paths.pendingFile), { recursive: true });
+    fs.writeFileSync(config.paths.pendingFile, '{ không phải json');
+    let getUpdatesCalls = 0;
+    const api = new TelegramApi({
+      botToken,
+      apiBase: config.apiBase,
+      fetchImpl: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        if ('offset' in body) getUpdatesCalls += 1;
+        return Response.json({ ok: true, result: [] });
+      },
+    });
+    let bot: Bot | undefined;
+
+    try {
+      expect(() => {
+        bot = createBot(config, { api });
+        bot.start();
+      }).toThrow('cannot read pending Telegram actions');
+      expect(getUpdatesCalls).toBe(0);
+    } finally {
+      await bot?.stop();
+    }
+  });
+});
+
+test('ENOENT và file rỗng vẫn là chưa có state cho cả ba store', () => {
+  const missing = path.join(tmp, 'missing');
+  expect(PendingStore.load(path.join(missing, 'pending.json')).questionCount).toBe(0);
+  expect(Outbox.load(path.join(missing, 'outbox.json')).size).toBe(0);
+  expect(UpdateLog.load(path.join(missing, 'updates.json')).offset).toBe(0);
+
+  const pendingFile = path.join(tmp, 'pending-empty.json');
+  const outboxFile = path.join(tmp, 'outbox-empty.json');
+  const updateFile = path.join(tmp, 'updates-empty.json');
+  fs.writeFileSync(pendingFile, ' \n');
+  fs.writeFileSync(outboxFile, ' \n');
+  fs.writeFileSync(updateFile, ' \n');
+  expect(PendingStore.load(pendingFile).questionCount).toBe(0);
+  expect(Outbox.load(outboxFile).size).toBe(0);
+  expect(UpdateLog.load(updateFile).offset).toBe(0);
 });
 
 describe('chunkText', () => {

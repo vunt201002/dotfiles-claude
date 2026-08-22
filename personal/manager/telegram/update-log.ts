@@ -24,7 +24,11 @@ export class UpdateLog {
   }
 
   static load(file: string): UpdateLog {
-    const shape = readJson<UpdateLogShape>(file, { offset: 0, seen: [] });
+    const result = readJson<UpdateLogShape>(file);
+    if (!result.ok && result.kind === 'error') {
+      throw new Error(`cannot read Telegram update log: ${result.reason}`);
+    }
+    const shape = result.ok ? result.value : { offset: 0, seen: [] };
     return new UpdateLog(file, {
       offset: Number.isFinite(shape.offset) ? shape.offset : 0,
       seen: Array.isArray(shape.seen) ? shape.seen.filter((n) => Number.isFinite(n)) : [],
