@@ -379,21 +379,39 @@ export function reviewIndependence(cfg: ManagerConfig = loadConfig()): ReviewInd
   };
 }
 
-function readOverrides(): Partial<ManagerConfig> {
+const NUMERIC_ENV_NAMES = [
+  'MANAGER_PORT',
+  'MANAGER_DAY_CEILING_USD',
+  'MANAGER_TASK_CEILING_USD',
+  'MANAGER_MAX_AGENTS',
+  'MANAGER_LOCK_TIMEOUT_MS',
+  'MANAGER_ASSERT_TIMEOUT_MS',
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readOverrides(): Record<string, unknown> | null {
   try {
     const raw = fs.readFileSync(managerConfigFile(), 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<ManagerConfig>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) throw new Error('top level must be an object');
+    return parsed;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`cannot read manager config: ${reason}`);
   }
 }
 
 function numberFromEnv(name: string): number | undefined {
   const raw = process.env[name];
-  if (!raw) return undefined;
+  if (raw === undefined) return undefined;
+  if (raw.trim() === '') throw new Error(`${name} must be a finite number`);
   const n = Number(raw);
-  return Number.isFinite(n) ? n : undefined;
+  if (!Number.isFinite(n)) throw new Error(`${name} must be a finite number`);
+  return n;
 }
 
 /**
@@ -405,10 +423,149 @@ function numberFromEnv(name: string): number | undefined {
 function overrideStamp(): string {
   try {
     const s = fs.statSync(managerConfigFile());
-    return `${s.mtimeMs}:${s.size}:${s.ino}`;
-  } catch {
-    return '';
+    return `file:${s.mtimeMs}:${s.size}:${s.ino}`;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return 'missing';
+    const reason = error instanceof Error ? error.message : String(error);
+    return `error:${reason}`;
   }
+}
+
+function configStamp(): string {
+  const env = NUMERIC_ENV_NAMES.map((name) => `${name}=${JSON.stringify(process.env[name])}`).join('|');
+  return `${overrideStamp()}|${env}`;
+}
+
+function mergeObject(defaults: Record<string, unknown>, override: unknown): unknown {
+  if (override === undefined) return defaults;
+  return isRecord(override) ? { ...defaults, ...override } : override;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isSpawnRunner(value: unknown): value is SpawnRunner {
+  return typeof value === 'string' && SPAWN_RUNNERS.some((runner) => runner === value);
+}
+
+function assertManagerConfig(value: unknown): asserts value is ManagerConfig {
+  if (!isRecord(value)) throw new Error('config must be an object');
+  if (!hasOnlyKeys(value, Object.keys(DEFAULT_CONFIG))) throw new Error('config contains an unknown field');
+
+  const numericKeys: Array<keyof ManagerConfig> = [
+    'port',
+    'bootstrapTaskCeilingUsd',
+    'dayCeilingUsd',
+    'p90MinSamples',
+    'maxUnmeasuredRunsPerTask',
+    'maxAttempts',
+    'lockWaitTimeoutMs',
+    'assertTimeoutMs',
+    'cmuxStartupMs',
+    'cmuxRunTimeoutMs',
+    'cliRunTimeoutMs',
+    'abandonedPaneAfterMs',
+    'cmuxNeedsInputGraceMs',
+    'cmuxSlotWaitMs',
+  ];
+  if (numericKeys.some((key) => !isFiniteNumber(value[key]))) throw new Error('config has a non-numeric number field');
+  if (value.maxAgents !== null && !isFiniteNumber(value.maxAgents)) throw new Error('maxAgents must be null or numeric');
+  if (value.host !== '127.0.0.1') throw new Error('host must remain 127.0.0.1');
+
+  const booleanKeys: Array<keyof ManagerConfig> = [
+    'cmuxSkipPermissions',
+    'cmuxCloseOnSuccess',
+    'escalateSubagentOnLastAttempt',
+  ];
+  if (booleanKeys.some((key) => typeof value[key] !== 'boolean')) throw new Error('config has a non-boolean boolean field');
+
+  if (typeof value.cmuxClaudeBin !== 'string') throw new Error('cmuxClaudeBin must be a string');
+  if (!isSpawnRunner(value.spawnRunner)) throw new Error('spawnRunner is invalid');
+  if (
+    typeof value.reviewProvider !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(REVIEW_PROVIDER_FAMILY, value.reviewProvider)
+  ) {
+    throw new Error('reviewProvider is invalid');
+  }
+
+  if (!isStringArray(value.browserTools) || !isStringArray(value.cmuxClaudeArgs) || !isStringArray(value.worktreeLinks)) {
+    throw new Error('config has an invalid string array');
+  }
+  const roles: AgentRole[] = ['main', 'subagent', 'review', 'judge'];
+  if (!isStringArray(value.cmuxRoles) || value.cmuxRoles.some((role) => !roles.some((known) => known === role))) {
+    throw new Error('cmuxRoles is invalid');
+  }
+
+  if (!isRecord(value.lockWaitTimeoutOverrideMs)) throw new Error('lockWaitTimeoutOverrideMs must be an object');
+  if (Object.values(value.lockWaitTimeoutOverrideMs).some((timeout) => !isFiniteNumber(timeout))) {
+    throw new Error('lockWaitTimeoutOverrideMs values must be numeric');
+  }
+
+  const modelRoles = ['manager', ...roles];
+  if (!isRecord(value.models) || !hasOnlyKeys(value.models, modelRoles)) throw new Error('models is invalid');
+  for (const role of modelRoles) {
+    const route = value.models[role];
+    if (!isRecord(route) || !hasOnlyKeys(route, ['model', 'fallback'])) throw new Error(`models.${role} is invalid`);
+    if (typeof route.model !== 'string' || typeof route.fallback !== 'string') throw new Error(`models.${role} is invalid`);
+  }
+
+  const sources: TaskSource[] = ['cli', 'api', 'telegram'];
+  if (!isRecord(value.spawn) || !hasOnlyKeys(value.spawn, sources)) throw new Error('spawn is invalid');
+  for (const source of sources) {
+    const policy = value.spawn[source];
+    if (!isRecord(policy) || !hasOnlyKeys(policy, ['allowedTools', 'disallowedTools', 'alwaysRequireApproval'])) {
+      throw new Error(`spawn.${source} is invalid`);
+    }
+    if (!isStringArray(policy.allowedTools) || !isStringArray(policy.disallowedTools)) {
+      throw new Error(`spawn.${source} is invalid`);
+    }
+    if (typeof policy.alwaysRequireApproval !== 'boolean') throw new Error(`spawn.${source} is invalid`);
+  }
+
+  if (!isRecord(value.maxTurns) || !hasOnlyKeys(value.maxTurns, roles)) throw new Error('maxTurns is invalid');
+  for (const role of roles) {
+    if (!isFiniteNumber(value.maxTurns[role])) throw new Error('maxTurns values must be numeric');
+  }
+}
+
+function buildConfig(): ManagerConfig {
+  const overrides = readOverrides() ?? {};
+  const merged: unknown = {
+    ...DEFAULT_CONFIG,
+    ...overrides,
+    host: '127.0.0.1',
+    models: mergeObject(DEFAULT_CONFIG.models, overrides.models),
+    spawn: mergeObject(DEFAULT_CONFIG.spawn, overrides.spawn),
+    maxTurns: mergeObject(DEFAULT_CONFIG.maxTurns, overrides.maxTurns),
+    lockWaitTimeoutOverrideMs: mergeObject(
+      DEFAULT_CONFIG.lockWaitTimeoutOverrideMs,
+      overrides.lockWaitTimeoutOverrideMs,
+    ),
+  };
+  assertManagerConfig(merged);
+  const envPort = numberFromEnv('MANAGER_PORT');
+  if (envPort !== undefined) merged.port = envPort;
+  const envDay = numberFromEnv('MANAGER_DAY_CEILING_USD');
+  if (envDay !== undefined) merged.dayCeilingUsd = envDay;
+  const envTask = numberFromEnv('MANAGER_TASK_CEILING_USD');
+  if (envTask !== undefined) merged.bootstrapTaskCeilingUsd = envTask;
+  const envAgents = numberFromEnv('MANAGER_MAX_AGENTS');
+  if (envAgents !== undefined) merged.maxAgents = envAgents;
+  const envLockWait = numberFromEnv('MANAGER_LOCK_TIMEOUT_MS');
+  if (envLockWait !== undefined) merged.lockWaitTimeoutMs = envLockWait;
+  const envAssert = numberFromEnv('MANAGER_ASSERT_TIMEOUT_MS');
+  if (envAssert !== undefined) merged.assertTimeoutMs = envAssert;
+  return merged;
 }
 
 let cached: ManagerConfig | null = null;
@@ -424,36 +581,19 @@ let cachedStamp = '';
  * that cannot be changed on a running daemon is not a control surface.
  */
 export function loadConfig(): ManagerConfig {
-  const stamp = overrideStamp();
+  const stamp = configStamp();
   if (cached && stamp === cachedStamp) return cached;
-  cachedStamp = stamp;
-  const overrides = readOverrides();
-  const merged: ManagerConfig = {
-    ...DEFAULT_CONFIG,
-    ...overrides,
-    host: '127.0.0.1',
-    models: { ...DEFAULT_CONFIG.models, ...(overrides.models ?? {}) },
-    spawn: { ...DEFAULT_CONFIG.spawn, ...(overrides.spawn ?? {}) },
-    maxTurns: { ...DEFAULT_CONFIG.maxTurns, ...(overrides.maxTurns ?? {}) },
-    lockWaitTimeoutOverrideMs: {
-      ...DEFAULT_CONFIG.lockWaitTimeoutOverrideMs,
-      ...(overrides.lockWaitTimeoutOverrideMs ?? {}),
-    },
-  };
-  const envPort = numberFromEnv('MANAGER_PORT');
-  if (envPort !== undefined) merged.port = envPort;
-  const envDay = numberFromEnv('MANAGER_DAY_CEILING_USD');
-  if (envDay !== undefined) merged.dayCeilingUsd = envDay;
-  const envTask = numberFromEnv('MANAGER_TASK_CEILING_USD');
-  if (envTask !== undefined) merged.bootstrapTaskCeilingUsd = envTask;
-  const envAgents = numberFromEnv('MANAGER_MAX_AGENTS');
-  if (envAgents !== undefined) merged.maxAgents = envAgents;
-  const envLockWait = numberFromEnv('MANAGER_LOCK_TIMEOUT_MS');
-  if (envLockWait !== undefined) merged.lockWaitTimeoutMs = envLockWait;
-  const envAssert = numberFromEnv('MANAGER_ASSERT_TIMEOUT_MS');
-  if (envAssert !== undefined) merged.assertTimeoutMs = envAssert;
-  cached = merged;
-  return merged;
+  try {
+    cached = buildConfig();
+    cachedStamp = stamp;
+    return cached;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (!cached) throw new Error(`cannot load manager config: ${reason}`);
+    cachedStamp = stamp;
+    console.error(`manager: cannot reload manager config: ${reason}; keeping last-known-good config`);
+    return cached;
+  }
 }
 
 export function resetConfigCache(): void {
