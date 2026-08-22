@@ -18,6 +18,16 @@ afterAll(() => {
 });
 
 describe('state reads preserve evidence', () => {
+  test('mutateState preserves the exact invalid-schema file instead of normalizing and writing it', async () => {
+    ensureManagerDirs();
+    const before = JSON.stringify({ evidence: 'task-abc', tasks: null, locks: [], queues: 'invalid' });
+    fs.writeFileSync(stateFile(), before);
+
+    await expect(mutateState(() => undefined)).rejects.toThrow('cannot read manager state');
+
+    expect(fs.readFileSync(stateFile(), 'utf8')).toBe(before);
+  });
+
   test('mutateState preserves every state-file byte when a transient read fails', async () => {
     ensureManagerDirs();
     const state = emptyState();

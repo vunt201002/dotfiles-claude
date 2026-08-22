@@ -31,19 +31,30 @@ class Mutex {
 
 const stateMutex = new Mutex();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isManagerState(value: unknown): value is ManagerState {
+  if (!isRecord(value)) return false;
+  return (
+    value.version === 1 &&
+    typeof value.updated_at === 'string' &&
+    isRecord(value.tasks) &&
+    isRecord(value.locks) &&
+    isRecord(value.queues) &&
+    Object.values(value.queues).every(Array.isArray)
+  );
+}
+
 export function readState(): ManagerState {
-  const result = readJson<ManagerState>(stateFile());
+  const result = readJson<unknown>(stateFile());
   if (!result.ok && result.kind === 'error') {
     throw new Error(`cannot read manager state: ${result.reason}`);
   }
-  const state = result.ok ? result.value : emptyState();
-  return {
-    version: state.version ?? 1,
-    updated_at: state.updated_at ?? new Date().toISOString(),
-    tasks: state.tasks ?? {},
-    locks: state.locks ?? {},
-    queues: state.queues ?? {},
-  };
+  if (!result.ok) return emptyState();
+  if (!isManagerState(result.value)) throw new Error('cannot read manager state: invalid schema');
+  return result.value;
 }
 
 export function writeState(state: ManagerState): void {
