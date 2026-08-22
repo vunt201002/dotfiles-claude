@@ -114,7 +114,7 @@ shortcut:
   Needs a browser? Follow `/my-chrome`'s **surface routing**, không theo tool ladder:
   storefront/theme editor/standalone Admin → `claude-in-chrome`; embedded Admin
   cross-origin iframe → `/browse` + `$B frame 'iframe[name="app-iframe"]'` (selector
-  đã đo trên live Shopify; full `browse --cdp` path chưa verify end-to-end). Sau 2 lần không reach cùng control:
+  đã đo trên live Shopify; CDP attach + snapshot đã đo thật, click/type trong iframe chưa đo). Sau 2 lần không reach cùng control:
   STOP, báo user, không retry lần 3/không thử tool thứ ba. UI không drive được thì
   verify qua staging Firestore hoặc storefront và ghi rõ embedded UI chưa được verify.
   Only ask the user for a target URL here, and only if genuinely needed and not known.

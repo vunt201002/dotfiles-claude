@@ -30,7 +30,7 @@ Chrome once, then run this whenever you're about to test.
   không route hoặc prime target đó; đừng trình bày nó như solution.
 - Prime login **không** giải quyết cross-origin iframe control. Embedded Admin sau
   login phải dùng `/browse` + `$B frame 'iframe[name="app-iframe"]'`; selector này đã
-  đo trên live Shopify, nhưng full `browse --cdp` path chưa verify end-to-end.
+  đo trên live Shopify; CDP attach + snapshot đã đo thật, click/type trong iframe chưa đo.
 
 ## The browse binary
 

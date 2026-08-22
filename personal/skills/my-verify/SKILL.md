@@ -55,8 +55,8 @@ Chỗ liên quan (gần fix, dùng chung code) còn chạy đúng không?
 > `tabs_close_mcp` đóng tab đã mở** để group tự biến mất. Không đụng tab ngoài group.
 > Login Admin/store có sẵn chỉ giải quyết login. **Embedded Admin cross-origin iframe
 > route thẳng `/browse`: `$B frame 'iframe[name="app-iframe"]'` → `$B snapshot -i` → act bằng
-> `@ref` → `$B frame main`** (selector đã đo trên live Shopify; full `browse --cdp`
-> path chưa verify end-to-end). Sau 2 lần không reach cùng control: STOP + báo user, không retry lần 3/không
+> `@ref` → `$B frame main`** (selector đã đo trên live Shopify; CDP attach + snapshot
+> đã đo thật, click/type trong iframe chưa đo). Sau 2 lần không reach cùng control: STOP + báo user, không retry lần 3/không
 > thử tool thứ ba. UI không drive được → verify staging Firestore/storefront và ghi rõ
 > embedded UI chưa verify.
 
