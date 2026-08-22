@@ -231,11 +231,16 @@ export function startServer(orchestrator: Orchestrator, portOverride?: number): 
     idleTimeout: SERVE_IDLE_TIMEOUT_SEC,
     fetch: buildFetchHandler({ orchestrator, token }),
   });
+  const boundPort = server.port;
+  if (boundPort === undefined) {
+    server.stop(true);
+    throw new Error('manager server did not bind a TCP port');
+  }
   ensureManagerDirs();
-  fs.writeFileSync(portFile(), String(server.port));
+  fs.writeFileSync(portFile(), String(boundPort));
   fs.writeFileSync(pidFile(), String(process.pid));
   return {
-    port: server.port,
+    port: boundPort,
     token,
     stop: () => {
       server.stop(true);
