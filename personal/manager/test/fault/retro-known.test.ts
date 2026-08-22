@@ -1,11 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { DEFAULT_CONFIG, loadConfig, resetConfigCache, type ManagerConfig } from '../../config';
 import { readScreen, type CmuxExecutor } from '../../lib/cmux-control';
-import type { FleetEntry } from '../../lib/cmux-sessions';
-import { waitForSlot } from '../../lib/cmux-spawn';
+import { cmuxStorePath, fleet, usageFromTranscript, type FleetEntry } from '../../lib/cmux-sessions';
+import { measuredTranscriptCost, waitForSlot } from '../../lib/cmux-spawn';
+import { measuredCost } from '../../lib/cost';
+import { fleetReport, renderFleet, type FleetReport } from '../../lib/fleet-view';
 import { gateLogPath } from '../../lib/gate-log';
-import { stateFile } from '../../lib/paths';
+import { managerConfigFile, stateFile } from '../../lib/paths';
 import type { SpawnRequest, SpawnResult } from '../../lib/spawn';
 import { mutateState, readState, writeState } from '../../lib/store';
 import { emptyState, type ManagerState, type TaskRecord } from '../../types';
@@ -70,6 +73,52 @@ async function prepareUnreadableState(target: harness.FaultWorld, collapse: bool
   }
 }
 
+function oldC12Reader(read: () => Partial<ManagerState>): ManagerState {
+  const state = read();
+  return {
+    version: state.version ?? 1,
+    updated_at: state.updated_at ?? new Date().toISOString(),
+    tasks: state.tasks ?? {},
+    locks: state.locks ?? {},
+    queues: state.queues ?? {},
+  };
+}
+
+async function prepareInvalidSchemaState(target: harness.FaultWorld, task: TaskRecord, collapse: boolean): Promise<void> {
+  const invalid = JSON.stringify({ evidence: task.id, tasks: null, locks: [], queues: 'invalid' });
+  fs.writeFileSync(stateFile(), invalid);
+  if (collapse) {
+    writeState(oldC12Reader(() => JSON.parse(invalid) as Partial<ManagerState>));
+    target.observations.add('state:invalid-schema-collapsed');
+    return;
+  }
+  await mutateState(() => undefined).catch(() => undefined);
+}
+
+function oldC13Reader(): ManagerConfig {
+  let overrides: Partial<ManagerConfig> = {};
+  try {
+    overrides = JSON.parse(fs.readFileSync(managerConfigFile(), 'utf8')) as Partial<ManagerConfig>;
+  } catch {
+    overrides = {};
+  }
+  return { ...DEFAULT_CONFIG, ...overrides };
+}
+
+function prepareCorruptConfig(target: harness.FaultWorld, collapse: boolean): ManagerConfig {
+  fs.writeFileSync(managerConfigFile(), '{ not json');
+  if (collapse) {
+    target.observations.add('config:corrupt-collapsed');
+    return oldC13Reader();
+  }
+  const report = spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    return loadConfig();
+  } finally {
+    report.mockRestore();
+  }
+}
+
 function staleUnknownFleet(lifecycle: 'running' | 'unknown'): FleetEntry[] {
   return [{ health: 'working', lifecycle, updatedAt: 0 }] as FleetEntry[];
 }
@@ -113,6 +162,54 @@ function invisibleFleetReply(observed: boolean): harness.RunnerReply {
       now: () => 0,
       fleet: () => invisibleFleet(observed),
     });
+    if (outcome === 'free') return harness.healthyReply(request);
+    return {
+      output: typeof outcome === 'object' ? outcome.reason : outcome,
+      outputs: [],
+      exitReason: typeof outcome === 'object' ? 'fleet_unreadable' : outcome,
+      worktreeCreated: false,
+    };
+  };
+}
+
+function unreadableFleetReport(target: harness.FaultWorld, ignoreVisibility: boolean): FleetReport {
+  fs.mkdirSync(cmuxStorePath('claude', target.home), { recursive: true });
+  const report = fleetReport({ home: target.home });
+  if (!ignoreVisibility || report.ok) return report;
+  const { reason: _reason, ...value } = report;
+  return { ...value, ok: true };
+}
+
+function missingUsageReply(ignoreUsageShape: boolean): harness.RunnerReply {
+  return (request, callIndex, target) => {
+    if (request.prompt.startsWith('Size issue')) return harness.healthyReply(request);
+    const transcript = path.join(target.home, `missing-usage-${callIndex}.jsonl`);
+    fs.writeFileSync(transcript, JSON.stringify({ message: { model: 'claude-sonnet-4-6', usage: {} } }));
+    const usage = usageFromTranscript(transcript);
+    const cost = ignoreUsageShape
+      ? measuredCost(
+          {
+            input_tokens: usage.inputTokens,
+            output_tokens: usage.outputTokens,
+            cache_read_input_tokens: usage.cacheReadTokens,
+            cache_creation_input_tokens: usage.cacheCreationTokens,
+          },
+          usage.model,
+        )
+      : measuredTranscriptCost(usage);
+    return { ...harness.healthyReply(request), costUsd: cost.usd, costKnown: cost.known, model: cost.model };
+  };
+}
+
+function invalidRowFleetReply(ignoreSchemaFailure: boolean): harness.RunnerReply {
+  return async (request, _callIndex, target) => {
+    if (request.prompt.startsWith('Size issue')) return harness.healthyReply(request);
+    const store = cmuxStorePath('claude', target.home);
+    fs.mkdirSync(path.dirname(store), { recursive: true });
+    fs.writeFileSync(store, JSON.stringify({ sessions: { live: { cwd: target.repo, agentLifecycle: 'running' } } }));
+    const observed = fleet('claude', target.home);
+    const entries = ignoreSchemaFailure ? [...observed] : observed;
+    const outcome = await waitForSlot(1, { now: () => 0, fleet: () => entries });
     if (outcome === 'free') return harness.healthyReply(request);
     return {
       output: typeof outcome === 'object' ? outcome.reason : outcome,
@@ -275,6 +372,35 @@ function detectC11(task: TaskRecord): string[] {
     : [];
 }
 
+function detectC12(task: TaskRecord): string[] {
+  return fs.readFileSync(stateFile(), 'utf8').includes(task.id)
+    ? []
+    : ['invalid-schema state became an empty persisted index'];
+}
+
+function detectC13(config: ManagerConfig): string[] {
+  return config.maxAgents === 1 && config.dayCeilingUsd === 3
+    ? []
+    : ['corrupt operator config became broader shipped defaults'];
+}
+
+function detectC14(report: FleetReport): string[] {
+  const rendered = renderFleet(report);
+  return report.ok && rendered.includes('fleet: 0/') && rendered.includes('$0.00') && rendered.includes('no agent sessions')
+    ? ['unreadable fleet became an observed empty fleet report']
+    : [];
+}
+
+function detectC15(task: TaskRecord): string[] {
+  return task.state === 'REPORTED' && (task.cost_unmeasured_runs ?? 0) === 0
+    ? ['missing transcript usage became a measured zero-cost run']
+    : [];
+}
+
+function detectC16(task: TaskRecord): string[] {
+  return task.state === 'REPORTED' ? ['schema-invalid fleet row granted a new agent slot'] : [];
+}
+
 describe('known missing-evidence fault detectors', () => {
   test('C2 fault→kêu: stale unknown lifecycle claims a working slot', async () => {
     world = harness.createWorld();
@@ -382,5 +508,75 @@ describe('known missing-evidence fault detectors', () => {
     const task = await harness.runOrchestrator(world, harness.healthyReply);
     await prepareUnreadableState(world, false);
     expect(detectC11(task)).toEqual([]);
+  });
+
+  test('C12 fault→kêu: invalid-schema state is normalized and persisted over evidence', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    await prepareInvalidSchemaState(world, task, true);
+    expect(detectC12(task)).toEqual(['invalid-schema state became an empty persisted index']);
+  });
+
+  test('C12 healthy→im: invalid-schema state aborts mutation and preserves evidence', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    await prepareInvalidSchemaState(world, task, false);
+    expect(detectC12(task)).toEqual([]);
+  });
+
+  test('C13 fault→kêu: corrupt config becomes broader shipped defaults', async () => {
+    world = harness.createWorld();
+    fs.writeFileSync(managerConfigFile(), JSON.stringify({ maxAgents: 1, dayCeilingUsd: 3, browserTools: [] }));
+    resetConfigCache();
+    await harness.runOrchestrator(world, harness.healthyReply);
+    expect(detectC13(prepareCorruptConfig(world, true))).toEqual([
+      'corrupt operator config became broader shipped defaults',
+    ]);
+  });
+
+  test('C13 healthy→im: corrupt config retains the last-known-good operator policy', async () => {
+    world = harness.createWorld();
+    fs.writeFileSync(managerConfigFile(), JSON.stringify({ maxAgents: 1, dayCeilingUsd: 3, browserTools: [] }));
+    resetConfigCache();
+    await harness.runOrchestrator(world, harness.healthyReply);
+    expect(detectC13(prepareCorruptConfig(world, false))).toEqual([]);
+  });
+
+  test('C14 fault→kêu: fleet report ignores unreadable visibility and publishes an empty machine', async () => {
+    world = harness.createWorld();
+    await harness.runOrchestrator(world, harness.healthyReply);
+    const report = unreadableFleetReport(world, true);
+    expect(detectC14(report)).toEqual(['unreadable fleet became an observed empty fleet report']);
+  });
+
+  test('C14 healthy→im: fleet report preserves unreadable visibility instead of publishing zeroes', async () => {
+    world = harness.createWorld();
+    await harness.runOrchestrator(world, harness.healthyReply);
+    const report = unreadableFleetReport(world, false);
+    expect(detectC14(report)).toEqual([]);
+  });
+
+  test('C15 fault→kêu: missing transcript usage becomes a measured zero-cost run', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, missingUsageReply(true));
+    expect(detectC15(task)).toEqual(['missing transcript usage became a measured zero-cost run']);
+  });
+
+  test('C15 healthy→im: missing transcript usage increments unmeasured cost runs', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, missingUsageReply(false));
+    expect(detectC15(task)).toEqual([]);
+  });
+
+  test('C16 fault→kêu: schema-invalid fleet row is dropped and grants a slot', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, invalidRowFleetReply(true));
+    expect(detectC16(task)).toEqual(['schema-invalid fleet row granted a new agent slot']);
+  });
+
+  test('C16 healthy→im: schema-invalid fleet row makes admission unreadable', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, invalidRowFleetReply(false));
+    expect(detectC16(task)).toEqual([]);
   });
 });
