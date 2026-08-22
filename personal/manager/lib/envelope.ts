@@ -7,9 +7,11 @@
  * into an autonomous lane that has nothing to check it.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import type { Lane, OracleKind, TaskEnvelope, TaskSize, Uncertainty } from '../types';
 import { LANES, UNVERIFIED_ORACLE_KINDS } from '../types';
-import { projectEntry } from './paths';
+import { collisionSafeSlug, managerDir, projectEntry } from './paths';
 
 const SIZES: readonly TaskSize[] = ['S', 'M', 'L', 'XL'];
 const UNCERTAINTIES: readonly Uncertainty[] = ['low', 'med', 'high'];
@@ -17,6 +19,7 @@ const LANE_RANK: Record<Lane, number> = { trivial: 0, 'bug-nho': 1, 'bug-lon': 2
 const UNKNOWN_ORACLE: OracleKind = 'unknown';
 const UNRECOGNIZED_ORACLE: OracleKind = 'unrecognized';
 const REAL_BROWSER_ORACLE: OracleKind = 'my-chrome';
+export const REJECTED_OUTPUT_CAP_BYTES = 1024 * 1024;
 const ASSERT_ORACLE_KINDS: ReadonlyArray<{ kind: OracleKind; shape: RegExp }> = [
   { kind: 'playwright', shape: /\bplaywright\b/i },
   { kind: 'jest', shape: /\bjest\b/i },
@@ -33,6 +36,49 @@ export interface ValidationResult {
   envelope: TaskEnvelope | null;
   /** Human-readable list of router overrides that fired. */
   overrides: string[];
+}
+
+export type RejectedOutputEvidence =
+  | { ok: true; path: string }
+  | { ok: false; error: string };
+
+export function preserveRejectedOutput(
+  taskId: string,
+  attempt: number,
+  kind: 'sizing-envelope' | 'execution-verdict',
+  text: string,
+): RejectedOutputEvidence {
+  const original = Buffer.from(text);
+  let keptBytes = Math.min(original.length, REJECTED_OUTPUT_CAP_BYTES);
+  let marker = Buffer.alloc(0);
+  if (original.length > REJECTED_OUTPUT_CAP_BYTES) {
+    for (;;) {
+      const omitted = original.length - keptBytes;
+      const nextMarker = Buffer.from(
+        `\n\n[gstack manager evidence truncated: ${omitted} bytes omitted; original ${original.length} bytes, cap ${REJECTED_OUTPUT_CAP_BYTES} bytes]\n`,
+      );
+      const nextKeptBytes = REJECTED_OUTPUT_CAP_BYTES - nextMarker.length;
+      marker = nextMarker;
+      if (nextKeptBytes === keptBytes) break;
+      keptBytes = nextKeptBytes;
+    }
+  }
+  const kept = original.subarray(0, keptBytes);
+  const day = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+  const dir = path.join(managerDir(), 'evidence', day);
+  const file = path.join(dir, `${collisionSafeSlug(taskId)}-attempt-${attempt}-${kind}.txt`);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(tmp, Buffer.concat([kept, marker]));
+    fs.renameSync(tmp, file);
+    return { ok: true, path: file };
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    return { ok: false, error: String((error as Error)?.message ?? error) };
+  }
 }
 
 /**

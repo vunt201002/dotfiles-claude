@@ -84,6 +84,9 @@ function stringList(raw: unknown): string[] {
 }
 
 /** Never throws. Unparseable output becomes a `fail` verdict with the reason said out loud. */
+/** Compared at orchestrator.ts to decide whether to preserve the output that could not be parsed. */
+export const NO_PARSEABLE_VERDICT = 'agent returned no parseable verdict block';
+
 export function parseVerdict(output: string): AgentVerdict {
   if (output.trim() === '') {
     return {
@@ -102,7 +105,7 @@ export function parseVerdict(output: string): AgentVerdict {
   if (!raw || typeof raw !== 'object') {
     return {
       verdict: 'fail',
-      reason: 'agent returned no parseable verdict block',
+      reason: NO_PARSEABLE_VERDICT,
       gates: [],
       findings: [],
       assumptions: [],

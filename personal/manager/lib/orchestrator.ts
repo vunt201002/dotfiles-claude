@@ -28,7 +28,7 @@ import {
 import type { AgentRole, AssertRunRecord, TaskRecord, TaskSource, TaskState } from '../types';
 import { ACTIVE_STATES, isTerminal } from '../types';
 import { logGate, shouldBlindSample } from './gate-log-port';
-import { parseEnvelope } from './envelope';
+import { parseEnvelope, preserveRejectedOutput, type RejectedOutputEvidence } from './envelope';
 import { acquire, BROWSER_TOKEN, projectLock, release, releaseAll } from './locks';
 import {
   BLOCKING_HOOK_GATES,
@@ -63,6 +63,7 @@ import { listTasks, loadTask, newTaskRecord, saveTask, saveTaskAndIndex } from '
 import { resolveTaskWorkdir } from './worktrees';
 import {
   applyEnsembleRule,
+  NO_PARSEABLE_VERDICT,
   parseVerdictCandidates,
   verifyDeterministicGates,
   type AgentVerdict,
@@ -145,6 +146,12 @@ function parseRunEnvelope(run: SpawnResult, roundTwoFail: boolean) {
     if (parsed.ok) return parsed;
   }
   return parseEnvelope(run.output, { roundTwoFail });
+}
+
+function withRejectedOutputEvidence(reason: string, evidence: RejectedOutputEvidence): string {
+  return evidence.ok
+    ? `${reason}; rejected output evidence: ${evidence.path}`
+    : `${reason}; rejected output evidence could not be saved: ${evidence.error}`;
 }
 
 export class Orchestrator {
@@ -292,7 +299,11 @@ export class Orchestrator {
     }
     const parsed = parseRunEnvelope(run, this.roundTwoFail.has(task.id));
     if (!parsed.ok || !parsed.envelope) {
-      await this.terminate(task, 'BLOCKED', `envelope rejected: ${parsed.errors.join('; ')}`);
+      const reason = withRejectedOutputEvidence(
+        `envelope rejected: ${parsed.errors.join('; ')}`,
+        preserveRejectedOutput(task.id, task.attempt, 'sizing-envelope', run.output),
+      );
+      await this.terminate(task, 'BLOCKED', reason);
       return false;
     }
     const next = loadTask(task.id) ?? task;
@@ -395,7 +406,14 @@ export class Orchestrator {
       return false;
     }
     if (verdict.verdict === 'fail') {
-      await this.terminate(current, 'BLOCKED', `execute failed: ${verdict.reason}`);
+      const reason = `execute failed: ${verdict.reason}`;
+      const recorded = verdict.reason === NO_PARSEABLE_VERDICT
+        ? withRejectedOutputEvidence(
+            reason,
+            preserveRejectedOutput(current.id, current.attempt, 'execution-verdict', run.output),
+          )
+        : reason;
+      await this.terminate(current, 'BLOCKED', recorded);
       return false;
     }
     const verifying = applyTransition(current, 'VERIFYING', { reason: 'execute reported pass' });

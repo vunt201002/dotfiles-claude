@@ -9,6 +9,7 @@ process.env.GSTACK_GATE_LOG_DIR = path.join(HOME, 'gate-log');
 
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { resetConfigCache } from '../config';
+import { REJECTED_OUTPUT_CAP_BYTES } from '../lib/envelope';
 import { appendGateLog, type GateLogEntry } from '../lib/gate-log';
 import { readEntries } from '../lib/gate-log-port';
 import { __clearWaiters, BROWSER_TOKEN, holderOf, projectLock, queueFor } from '../lib/locks';
@@ -17,7 +18,7 @@ import type { ExecFn, ExecResult } from '../lib/assert-runner';
 import { approveCommands, isCommandApproved } from '../lib/assert-approvals';
 import { assistantTexts, lastAssistantText } from '../lib/cmux-spawn';
 import type { DiffResult } from '../lib/git';
-import { assertApprovalsFile, ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths';
+import { assertApprovalsFile, ensureManagerDirs, managerConfigFile, managerDir, projectsFile } from '../lib/paths';
 import { reconcile } from '../lib/reconcile';
 import type { SpawnPort, SpawnRequest } from '../lib/spawn';
 import { listTasks, loadTask, newTaskRecord, saveTaskAndIndex, writeState } from '../lib/store';
@@ -217,6 +218,7 @@ function newOrchestrator(
 
 beforeEach(() => {
   fs.rmSync(path.join(HOME, 'manager', 'tasks'), { recursive: true, force: true });
+  fs.rmSync(path.join(HOME, 'manager', 'evidence'), { recursive: true, force: true });
   fs.rmSync(path.join(HOME, 'gate-log'), { recursive: true, force: true });
   writeState(emptyState());
   fs.rmSync(assertApprovalsFile(), { force: true });
@@ -226,6 +228,13 @@ beforeEach(() => {
   __clearWaiters();
   __resetEvents();
 });
+
+function evidencePath(reason: string): string {
+  const marker = 'rejected output evidence: ';
+  const start = reason.indexOf(marker);
+  if (start === -1) throw new Error(`failure reason has no evidence pointer: ${reason}`);
+  return reason.slice(start + marker.length);
+}
 
 afterAll(() => {
   for (const dir of [HOME, REPO]) {
@@ -1473,7 +1482,61 @@ describe('bad agent output', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    expect(loadTask(taskId)?.failure_reason).toBe('execute failed: agent returned no parseable verdict block');
+    expect(loadTask(taskId)?.failure_reason).toContain('execute failed: agent returned no parseable verdict block');
+  });
+
+  test('rejected sizing output is preserved byte-for-byte before the task is blocked', async () => {
+    const rejected = 'not json\r\nraw bytes: \u0000 \ud83d\udca5\n';
+    const { port } = makePort((phase) => (phase === 'size' ? rejected : PASS_VERDICT));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'rejected-sizing-evidence', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('envelope rejected:');
+    const file = evidencePath(task?.failure_reason ?? '');
+    expect(file).toContain(path.join('manager', 'evidence'));
+    expect(fs.readFileSync(file)).toEqual(Buffer.from(rejected));
+  });
+
+  test('oversized rejected verdict evidence names the exact truncation instead of hiding it', async () => {
+    const rejected = 'v'.repeat(REJECTED_OUTPUT_CAP_BYTES + 137);
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson() : rejected));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'truncated-verdict-evidence', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('execute failed: agent returned no parseable verdict block');
+    const stored = fs.readFileSync(evidencePath(task?.failure_reason ?? ''));
+    const markerStart = stored.indexOf('\n\n[gstack manager evidence truncated:');
+    const omitted = Buffer.byteLength(rejected) - markerStart;
+    expect(stored.length).toBe(REJECTED_OUTPUT_CAP_BYTES);
+    expect(stored.subarray(0, markerStart)).toEqual(Buffer.from(rejected).subarray(0, markerStart));
+    expect(stored.subarray(markerStart).toString()).toBe(
+      `\n\n[gstack manager evidence truncated: ${omitted} bytes omitted; original ${REJECTED_OUTPUT_CAP_BYTES + 137} bytes, cap ${REJECTED_OUTPUT_CAP_BYTES} bytes]\n`,
+    );
+  });
+
+  test('an unwritable evidence directory is reported without changing the blocked outcome', async () => {
+    const root = path.join(managerDir(), 'evidence');
+    fs.mkdirSync(root, { recursive: true });
+    fs.chmodSync(root, 0o500);
+    try {
+      const { port } = makePort((phase) => (phase === 'size' ? 'still not json' : PASS_VERDICT));
+      const manager = newOrchestrator(port);
+      const { taskId } = await manager.submit({ project: PROJECT, issue: 'evidence-write-failed', source: 'cli' });
+      await manager.settle(taskId);
+
+      const task = loadTask(taskId);
+      expect(task?.state).toBe('BLOCKED');
+      expect(task?.failure_reason).toContain('envelope rejected:');
+      expect(task?.failure_reason).toContain('rejected output evidence could not be saved:');
+    } finally {
+      fs.chmodSync(root, 0o700);
+    }
   });
 
   test('a sizing transport refusal tells the operator why no agent ran', async () => {
