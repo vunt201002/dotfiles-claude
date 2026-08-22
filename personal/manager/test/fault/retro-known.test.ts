@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { readScreen, type CmuxExecutor } from '../../lib/cmux-control';
 import type { FleetEntry } from '../../lib/cmux-sessions';
 import { waitForSlot } from '../../lib/cmux-spawn';
 import { gateLogPath } from '../../lib/gate-log';
+import { stateFile } from '../../lib/paths';
 import type { SpawnRequest, SpawnResult } from '../../lib/spawn';
-import type { TaskRecord } from '../../types';
+import { mutateState, readState, writeState } from '../../lib/store';
+import { emptyState, type ManagerState, type TaskRecord } from '../../types';
 import * as harness from './harness';
 
 let world: harness.FaultWorld | undefined;
@@ -36,6 +38,38 @@ function prepareUnreadableGateLog(target: harness.FaultWorld, collapse: boolean)
   target.observations.add('gate-log:EISDIR-collapsed');
 }
 
+function oldC11Reader(read: () => ManagerState): ManagerState {
+  try {
+    return read();
+  } catch {
+    return emptyState();
+  }
+}
+
+async function prepareUnreadableState(target: harness.FaultWorld, collapse: boolean): Promise<void> {
+  if (collapse) {
+    const state = oldC11Reader(() => {
+      throw Object.assign(new Error('transient permission failure'), { code: 'EACCES' });
+    });
+    writeState(state);
+    target.observations.add('state:EACCES-collapsed');
+    return;
+  }
+
+  const file = stateFile();
+  const read = spyOn(fs, 'readFileSync').mockImplementation((candidate) => {
+    if (String(candidate) === file) {
+      throw Object.assign(new Error('transient permission failure'), { code: 'EACCES' });
+    }
+    throw new Error(`unexpected read during state fault probe: ${String(candidate)}`);
+  });
+  try {
+    await mutateState(() => undefined).catch(() => undefined);
+  } finally {
+    read.mockRestore();
+  }
+}
+
 function staleUnknownFleet(lifecycle: 'running' | 'unknown'): FleetEntry[] {
   return [{ health: 'working', lifecycle, updatedAt: 0 }] as FleetEntry[];
 }
@@ -58,6 +92,32 @@ function admissionReply(lifecycle: 'running' | 'unknown'): harness.RunnerReply {
       output: 'stale lifecycle=unknown occupied the last slot',
       outputs: [],
       exitReason: 'no_free_slot',
+      worktreeCreated: false,
+    };
+  };
+}
+
+function invisibleFleet(observed: boolean): FleetEntry[] {
+  const entries = [] as unknown as FleetEntry[] & { ok: boolean; reason?: string };
+  Object.defineProperties(entries, {
+    ok: { value: observed },
+    reason: { value: observed ? undefined : 'EACCES: cmux store unreadable' },
+  });
+  return entries;
+}
+
+function invisibleFleetReply(observed: boolean): harness.RunnerReply {
+  return async (request) => {
+    if (request.prompt.startsWith('Size issue')) return harness.healthyReply(request);
+    const outcome = await waitForSlot(1, {
+      now: () => 0,
+      fleet: () => invisibleFleet(observed),
+    });
+    if (outcome === 'free') return harness.healthyReply(request);
+    return {
+      output: typeof outcome === 'object' ? outcome.reason : outcome,
+      outputs: [],
+      exitReason: typeof outcome === 'object' ? 'fleet_unreadable' : outcome,
       worktreeCreated: false,
     };
   };
@@ -205,6 +265,16 @@ function detectC9(task: TaskRecord): string[] {
     : [];
 }
 
+function detectC10(task: TaskRecord): string[] {
+  return task.state === 'REPORTED' ? ['unreadable fleet granted a new agent slot'] : [];
+}
+
+function detectC11(task: TaskRecord): string[] {
+  return readState().tasks[task.id] === undefined
+    ? ['unreadable state became an empty persisted index']
+    : [];
+}
+
 describe('known missing-evidence fault detectors', () => {
   test('C2 fault→kêu: stale unknown lifecycle claims a working slot', async () => {
     world = harness.createWorld();
@@ -274,6 +344,18 @@ describe('known missing-evidence fault detectors', () => {
     expect(detectC9(task)).toEqual([]);
   });
 
+  test('C10 fault→kêu: unreadable fleet collapses to empty and grants a slot', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, invisibleFleetReply(true));
+    expect(detectC10(task)).toEqual(['unreadable fleet granted a new agent slot']);
+  });
+
+  test('C10 healthy→im: unreadable fleet refuses admission explicitly', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, invisibleFleetReply(false));
+    expect(detectC10(task)).toEqual([]);
+  });
+
   test('C6 fault→kêu: unreviewed blind sample publishes 100% precision', async () => {
     world = harness.createWorld();
     const task = await harness.runOrchestrator(world, precisionReply, true);
@@ -286,5 +368,19 @@ describe('known missing-evidence fault detectors', () => {
     const task = await harness.runOrchestrator(world, precisionReply, true);
     const report = await reportPrecision(task, true);
     expect(detectC6(task, report)).toEqual([]);
+  });
+
+  test('C11 fault→kêu: transient state read failure persists an empty index', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    await prepareUnreadableState(world, true);
+    expect(detectC11(task)).toEqual(['unreadable state became an empty persisted index']);
+  });
+
+  test('C11 healthy→im: transient state read failure aborts before persistence', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    await prepareUnreadableState(world, false);
+    expect(detectC11(task)).toEqual([]);
   });
 });
