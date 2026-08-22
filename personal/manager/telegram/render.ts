@@ -159,6 +159,14 @@ export function renderFleetReport(report: FleetReport): string {
   // "$0.00" next to a fleet of unpriced agents reads as "không tốn gì", which
   // is the one thing the number cannot support.
   const spend = unpriced.length > 0 ? (report.totalCostUsd ? `${usd(report.totalCostUsd)} + chưa rõ` : 'chưa tính được') : usd(report.totalCostUsd);
+  if (report.ok !== true) {
+    const why = report.ok === false ? report.reason : 'không có báo cáo fleet';
+    return [
+      '🖥 Fleet: KHÔNG NHÌN THẤY',
+      `  ${why}`,
+      '  Các con số dưới đây sẽ là bịa, nên không in ra. Chưa rõ có bao nhiêu agent đang chạy.',
+    ].join('\n');
+  }
   const lines = [`🖥 Fleet: ${report.busy ?? 0}/${report.cap ?? 0} bận · ${spend}`];
 
   if (waiting.length > 0) {

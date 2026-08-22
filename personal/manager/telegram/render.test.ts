@@ -4,6 +4,7 @@ import {
   renderApproval,
   renderCost,
   renderDiff,
+  renderFleetReport,
   renderProjectReport,
   renderQuestionBatch,
   renderReport,
@@ -139,5 +140,37 @@ describe('renderStatus / renderProjectReport / renderCost', () => {
       '💰 Chi phí hôm nay: $4.21\nLane: bug-lon $3.10\nProject: kivora $2.90',
     );
     expect(renderCost('all', {})).toBe('💰 Chi phí tổng: —');
+  });
+});
+
+describe('renderFleetReport', () => {
+  const seen = {
+    ok: true as const,
+    busy: 2,
+    cap: 8,
+    totalCostUsd: 1.5,
+    members: [],
+    waiting: [],
+    crashed: [],
+    unpricedModels: [],
+  };
+
+  test('fleet quan sát được thì in số như cũ', () => {
+    expect(renderFleetReport(seen as never)).toContain('2/8 bận');
+  });
+
+  test('fleet không nhìn thấy được thì không in 0/0 và $0.00', () => {
+    const blind = { ...seen, ok: false as const, reason: 'EACCES trên cmux store', busy: 0, totalCostUsd: 0 };
+    const out = renderFleetReport(blind as never);
+    expect(out).toContain('KHÔNG NHÌN THẤY');
+    expect(out).toContain('EACCES trên cmux store');
+    expect(out).not.toContain('0/8 bận');
+    expect(out).not.toContain('$0.00');
+  });
+
+  test('không có báo cáo nào thì cũng không in như thể đã quan sát', () => {
+    const out = renderFleetReport({} as never);
+    expect(out).toContain('KHÔNG NHÌN THẤY');
+    expect(out).not.toContain('bận');
   });
 });

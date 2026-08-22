@@ -39,6 +39,8 @@ export interface FleetMemberView {
 }
 
 export interface FleetReport {
+  ok?: boolean;
+  reason?: string;
   members?: FleetMemberView[];
   busy?: number;
   cap?: number;
