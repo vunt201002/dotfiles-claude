@@ -558,19 +558,18 @@ describe('precision per gate is the number P8 reads', () => {
   });
 });
 
-describe('blind sample lottery is 1 in 5', () => {
-  test('an injected rng sweep yields exactly 20 of 100', () => {
+describe('blind sample lottery draws every reported task while calibrating', () => {
+  test('an injected rng sweep yields all 100 of 100', () => {
     const draws = Array.from({ length: 100 }, (_, i) => i / 100);
     const hits = draws.filter((d) => shouldBlindSample(() => d)).length;
-    expect(hits).toBe(20);
-    expect(BLIND_SAMPLE_RATE).toBe(0.2);
+    expect(hits).toBe(100);
+    expect(BLIND_SAMPLE_RATE).toBe(1);
   });
 
-  test('the boundary belongs to the losing side', () => {
+  test('the comparison stays strict, so a fractional rate keeps its boundary', () => {
     expect(shouldBlindSample(() => 0)).toBe(true);
-    expect(shouldBlindSample(() => 0.199999)).toBe(true);
-    expect(shouldBlindSample(() => 0.2)).toBe(false);
-    expect(shouldBlindSample(() => 0.99)).toBe(false);
+    expect(shouldBlindSample(() => 0.999999)).toBe(true);
+    expect(shouldBlindSample(() => 1)).toBe(false);
   });
 
   test('a broken rng loses rather than sampling everything', () => {
@@ -578,10 +577,9 @@ describe('blind sample lottery is 1 in 5', () => {
     expect(shouldBlindSample(() => undefined as never)).toBe(false);
   });
 
-  test('the default rng stays inside plausible bounds over many draws', () => {
+  test('the default rng draws every time, never by returning a bare true', () => {
     const hits = Array.from({ length: 4000 }, () => shouldBlindSample()).filter(Boolean).length;
-    expect(hits).toBeGreaterThan(600);
-    expect(hits).toBeLessThan(1000);
+    expect(hits).toBe(4000);
   });
 });
 

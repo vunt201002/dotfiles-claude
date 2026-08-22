@@ -126,7 +126,14 @@ export const KNOWN_GATES: readonly string[] = [
   'codex-review',
 ];
 
-export const BLIND_SAMPLE_RATE = 1 / 5;
+/**
+ * 1 means every REPORTED task is sampled, which is deliberate while the manager
+ * is still being calibrated. A fractional rate is a cost control on human review
+ * time, and it only pays once REPORTED tasks are plentiful; at three of them it
+ * just starves the only source of ground truth precision has. Restore a fraction
+ * when the system is running steadily, not before.
+ */
+export const BLIND_SAMPLE_RATE = 1;
 
 const MAX_LOG_BYTES = 10 * 1024 * 1024;
 const MAX_LOG_GENERATIONS = 5;
