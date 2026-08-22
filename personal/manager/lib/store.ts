@@ -32,7 +32,11 @@ class Mutex {
 const stateMutex = new Mutex();
 
 export function readState(): ManagerState {
-  const state = readJson<ManagerState>(stateFile(), emptyState());
+  const result = readJson<ManagerState>(stateFile());
+  if (!result.ok && result.kind === 'error') {
+    throw new Error(`cannot read manager state: ${result.reason}`);
+  }
+  const state = result.ok ? result.value : emptyState();
   return {
     version: state.version ?? 1,
     updated_at: state.updated_at ?? new Date().toISOString(),
@@ -63,13 +67,20 @@ export function listTaskIds(): string[] {
       .readdirSync(tasksDir())
       .filter((f) => f.endsWith('.json'))
       .map((f) => f.slice(0, -'.json'.length));
-  } catch {
-    return [];
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`cannot read task directory: ${reason}`);
   }
 }
 
 export function loadTask(id: string): TaskRecord | null {
-  const record = readJson<TaskRecord | null>(taskFile(id), null);
+  const result = readJson<TaskRecord | null>(taskFile(id));
+  if (!result.ok) {
+    if (result.kind === 'missing') return null;
+    throw new Error(`cannot read task ${id}: ${result.reason}`);
+  }
+  const record = result.value;
   return record && typeof record === 'object' && record.id === id ? record : null;
 }
 

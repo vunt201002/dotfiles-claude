@@ -52,7 +52,12 @@ export function commandFingerprint(project: string, cmd: string): string {
 }
 
 export function loadApprovals(): ApprovalBook {
-  const raw = readJson<ApprovalBook>(assertApprovalsFile(), {});
+  const result = readJson<ApprovalBook>(assertApprovalsFile());
+  if (!result.ok) {
+    if (result.kind === 'missing') return {};
+    throw new Error(`cannot read approval book: ${result.reason}`);
+  }
+  const raw = result.value;
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
 }
 

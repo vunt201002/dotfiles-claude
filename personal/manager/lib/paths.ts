@@ -139,11 +139,19 @@ export function atomicWriteJson(file: string, data: unknown): void {
   fs.renameSync(tmp, file);
 }
 
-export function readJson<T>(file: string, fallback: T): T {
+export type ReadJsonResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; kind: 'missing' }
+  | { ok: false; kind: 'error'; reason: string };
+
+export function readJson<T>(file: string): ReadJsonResult<T> {
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8')) as T;
-  } catch {
-    return fallback;
+    return { ok: true, value: JSON.parse(fs.readFileSync(file, 'utf-8')) as T };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return { ok: false, kind: 'missing' };
+    }
+    return { ok: false, kind: 'error', reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -174,7 +182,12 @@ export interface ProjectRegistry {
 }
 
 export function loadProjectRegistry(): ProjectRegistry {
-  const raw = readJson<ProjectRegistry>(projectsFile(), {});
+  const result = readJson<ProjectRegistry>(projectsFile());
+  if (!result.ok) {
+    if (result.kind === 'missing') return {};
+    throw new Error(`cannot read project registry: ${result.reason}`);
+  }
+  const raw = result.value;
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
 }
 

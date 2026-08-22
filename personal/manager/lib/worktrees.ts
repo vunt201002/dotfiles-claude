@@ -66,7 +66,12 @@ export function worktreesRoot(): string {
 }
 
 export function loadWorktreeRegistry(): WorktreeRegistry {
-  const raw = readJson<WorktreeRegistry>(worktreesFile(), {});
+  const result = readJson<WorktreeRegistry>(worktreesFile());
+  if (!result.ok) {
+    if (result.kind === 'missing') return {};
+    throw new Error(`cannot read worktree registry: ${result.reason}`);
+  }
+  const raw = result.value;
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
 }
 
