@@ -410,6 +410,16 @@ interface VerdictCounts {
   total: number;
 }
 
+export interface PrecisionInput {
+  caught: number;
+  falsePositive: number;
+}
+
+export function calculatePrecision(input: PrecisionInput): number | null {
+  const denominator = input.caught + input.falsePositive;
+  return denominator === 0 ? null : input.caught / denominator;
+}
+
 function emptyCounts(): VerdictCounts {
   return { pass: 0, caught: 0, 'false-positive': 0, skipped: 0, error: 0, total: 0 };
 }
@@ -560,12 +570,15 @@ function cmdStats(args: string[]): void {
     );
   }
   process.stdout.write(`${'-'.repeat(head.length)}\n`);
-  const overallPrecision =
-    scopePrecisionPending
-      ? 'pending review'
-      : overall.caught + overall['false-positive'] === 0
+  const measuredOverallPrecision = calculatePrecision({
+    caught: overall.caught,
+    falsePositive: overall['false-positive'],
+  });
+  const overallPrecision = scopePrecisionPending
+    ? 'pending review'
+    : measuredOverallPrecision === null
       ? '    n/a'
-      : `${((overall.caught / (overall.caught + overall['false-positive'])) * 100).toFixed(1).padStart(6)}%`;
+      : `${(measuredOverallPrecision * 100).toFixed(1).padStart(6)}%`;
   process.stdout.write(
     `${'TOTAL'.padEnd(gateWidth)}  ${String(overall.pass).padStart(6)}${String(overall.caught).padStart(8)}${String(overall['false-positive']).padStart(11)}${String(overall.skipped).padStart(9)}${String(overall.error).padStart(7)}${String(overall.total).padStart(7)}${overallPrecision.padStart(15)}\n`,
   );
@@ -594,36 +607,38 @@ function cmdStats(args: string[]): void {
   }
 }
 
-const [command, ...rest] = process.argv.slice(2);
+if (import.meta.main) {
+  const [command, ...rest] = process.argv.slice(2);
 
-switch (command) {
-  case 'append':
-    cmdAppend(rest);
-    break;
-  case 'read':
-    cmdRead(rest);
-    break;
-  case 'recent':
-    cmdRecent(rest);
-    break;
-  case 'fp':
-  case 'false-positive':
-    cmdMark(rest, 'false-positive');
-    break;
-  case 'reclassify':
-    cmdMark(rest, null);
-    break;
-  case 'stats':
-    cmdStats(rest);
-    break;
-  case 'sample':
-    process.stdout.write(`${shouldBlindSample()}\n`);
-    break;
-  case '--help':
-  case '-h':
-  case 'help':
-    process.stdout.write(`${USAGE}\n`);
-    break;
-  default:
-    fail(command ? `unknown command: ${command}\n\n${USAGE}` : `no command\n\n${USAGE}`);
+  switch (command) {
+    case 'append':
+      cmdAppend(rest);
+      break;
+    case 'read':
+      cmdRead(rest);
+      break;
+    case 'recent':
+      cmdRecent(rest);
+      break;
+    case 'fp':
+    case 'false-positive':
+      cmdMark(rest, 'false-positive');
+      break;
+    case 'reclassify':
+      cmdMark(rest, null);
+      break;
+    case 'stats':
+      cmdStats(rest);
+      break;
+    case 'sample':
+      process.stdout.write(`${shouldBlindSample()}\n`);
+      break;
+    case '--help':
+    case '-h':
+    case 'help':
+      process.stdout.write(`${USAGE}\n`);
+      break;
+    default:
+      fail(command ? `unknown command: ${command}\n\n${USAGE}` : `no command\n\n${USAGE}`);
+  }
 }

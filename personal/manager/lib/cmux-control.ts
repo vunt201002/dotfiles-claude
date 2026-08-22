@@ -144,8 +144,10 @@ export function closeWorkspace(ref: string): CmuxRun {
 
 export type ReadScreenResult = { ok: true; screen: string } | { ok: false; error: string };
 
-export function readScreen(ref: string, lines = 200): ReadScreenResult {
-  const run = cmux(['read-screen', '--workspace', ref, '--lines', String(lines)]);
+export type CmuxExecutor = (args: string[], timeoutMs?: number) => CmuxRun;
+
+export function readScreen(ref: string, lines = 200, executor: CmuxExecutor = cmux): ReadScreenResult {
+  const run = executor(['read-screen', '--workspace', ref, '--lines', String(lines)]);
   if (run.ok) return { ok: true, screen: run.stdout };
   return { ok: false, error: run.stderr || 'cmux read-screen failed' };
 }
