@@ -22,6 +22,10 @@ export { shouldBlindSample } from './gate-log';
 
 export type GateLogInput = Omit<GateLogEntry, 'ts'> & { ts?: string };
 
+export type ReadEntriesResult =
+  | { ok: true; entries: GateLogEntry[] }
+  | { ok: false; reason: string };
+
 /** Never throws. A rejected line is reported and dropped, not retried. */
 export function logGate(entry: GateLogInput): void {
   try {
@@ -31,11 +35,11 @@ export function logGate(entry: GateLogInput): void {
   }
 }
 
-export function readEntries(project?: string): GateLogEntry[] {
+export function readEntries(project?: string): ReadEntriesResult {
   try {
     const entries = readGateLog(project);
-    return Array.isArray(entries) ? entries : [];
-  } catch {
-    return [];
+    return { ok: true, entries };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }

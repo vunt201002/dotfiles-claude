@@ -9,8 +9,11 @@ process.env.GSTACK_GATE_LOG_DIR = path.join(HOME, 'gate-log');
 
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { resetConfigCache } from '../config';
-import { appendGateLog, type GateLogEntry } from '../lib/gate-log';
+import { appendGateLog, gateLogPath, type GateLogEntry } from '../lib/gate-log';
 import { readEntries } from '../lib/gate-log-port';
+import { Orchestrator } from '../lib/orchestrator';
+import type { SpawnPort } from '../lib/spawn';
+import { loadTask } from '../lib/store';
 import {
   BROWSER_GATES,
   collectHookGates,
@@ -69,6 +72,12 @@ const DIFF: DiffResult = { ok: true, text: '+ return discounted;', truncated: fa
 
 function verdictJson(body: Record<string, unknown>): string {
   return `Done.\n\`\`\`json\n${JSON.stringify({ verdict: 'pass', reason: 'ok', ...body })}\n\`\`\``;
+}
+
+function loggedEntries(project = PROJECT): GateLogEntry[] {
+  const result = readEntries(project);
+  if (!result.ok) throw new Error(result.reason);
+  return result.entries;
 }
 
 interface Harness {
@@ -497,7 +506,7 @@ describe('what lands in the gate log', () => {
   test('every llm gate writes a row that says llm', async () => {
     const { ctx } = harness({ envelope: envelope({ lane: 'feature' }) });
     await runReviewChain(ctx);
-    const rows = readEntries(PROJECT);
+    const rows = loggedEntries();
     for (const gate of ['spec-check', 'tech-review', 'impact-review']) {
       const row = rows.find((r) => r.gate === gate);
       expect(row, `${gate} wrote no row`).toBeDefined();
@@ -510,7 +519,7 @@ describe('what lands in the gate log', () => {
   test('B8-assert writes deterministic rows in the same run', async () => {
     const { ctx } = harness();
     await runVerifyChain(ctx);
-    const row = readEntries(PROJECT).find((r) => r.gate === 'B8-assert');
+    const row = loggedEntries().find((r) => r.gate === 'B8-assert');
     expect(row?.gate_family).toBe('deterministic');
     expect(row?.verdict).toBe('pass');
   });
@@ -522,7 +531,7 @@ describe('what lands in the gate log', () => {
         : verdictJson({}),
     );
     const chain = await runReviewChain(ctx);
-    const row = readEntries(PROJECT).find((r) => r.gate === 'spec-check');
+    const row = loggedEntries().find((r) => r.gate === 'spec-check');
     expect(row?.verdict).toBe('caught');
     expect(row?.caught).toContain('endpoint nobody asked for');
     expect(chain.advisories.join(' ')).toContain('naming could be better');
@@ -560,7 +569,7 @@ describe('judges only run when there is something to judge', () => {
     const { ctx, prompts } = harness({ hasRealBrowser: false });
     const chain = await runVerifyChain(ctx);
     expect(prompts.map((p) => p.gate)).not.toContain('B8-judge');
-    const row = readEntries(PROJECT).find((r) => r.gate === 'B8-judge');
+    const row = loggedEntries().find((r) => r.gate === 'B8-judge');
     expect(row?.verdict).toBe('skipped');
     expect(row?.caught).toContain('no real-browser oracle');
     expect(chain.proven, 'a skipped judge must not make the task unproven').toBe(true);
@@ -570,7 +579,7 @@ describe('judges only run when there is something to judge', () => {
     const { ctx, prompts } = harness({ hasRealBrowser: true, envelope: envelope({ oracle_kind: ['my-chrome'] }) });
     await runVerifyChain(ctx);
     expect(prompts.map((p) => p.gate)).toContain('B8-judge');
-    expect(readEntries(PROJECT).find((r) => r.gate === 'B8-judge')?.gate_family).toBe('llm');
+    expect(loggedEntries().find((r) => r.gate === 'B8-judge')?.gate_family).toBe('llm');
   });
 
   test('the judge gets the browser tools, not just the token', async () => {
@@ -591,7 +600,7 @@ describe('judges only run when there is something to judge', () => {
     const chain = await runVerifyChain(ctx);
 
     expect(prompts.map((p) => p.gate), 'nothing may be spawned for a gate that cannot see').not.toContain('B8-judge');
-    const row = readEntries(PROJECT).find((r) => r.gate === 'B8-judge');
+    const row = loggedEntries().find((r) => r.gate === 'B8-judge');
     expect(row?.verdict).toBe('error');
     expect(row?.caught).toContain('no browser transport configured');
     expect(chain.proven, 'a gate that could not run must not be read as proof').toBe(false);
@@ -630,6 +639,58 @@ describe('the verify chain stops at an unproven assert', () => {
 });
 
 describe('hook rows are read, not re-run', () => {
+  test('a missing gate log is observed as empty', () => {
+    expect(collectHookGates({ project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' })).toEqual([]);
+  });
+
+  test('an unreadable gate log becomes a deterministic error report', () => {
+    const logPath = gateLogPath(PROJECT);
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.writeFileSync(logPath, '');
+    expect(collectHookGates({ project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' })).toEqual([]);
+    fs.unlinkSync(logPath);
+    fs.mkdirSync(logPath);
+    expect(collectHookGates({ project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' })).toEqual([
+      expect.objectContaining({
+        gate: 'gate-log',
+        gate_family: 'deterministic',
+        verdict: 'error',
+      }),
+    ]);
+  });
+
+  test('an unreadable gate log blocks the task before REPORTED', async () => {
+    const logPath = gateLogPath(PROJECT);
+    fs.mkdirSync(logPath, { recursive: true });
+    const port: SpawnPort = {
+      async run(req) {
+        const output = req.prompt.startsWith('Size issue')
+          ? `Sized it.\n\`\`\`json\n${JSON.stringify(envelope({ lane: 'trivial', size: 'S' }))}\n\`\`\``
+          : verdictJson({ root_cause: 'fixture root cause' });
+        return {
+          output,
+          outputs: [output],
+          exitReason: 'success',
+          turnsUsed: 1,
+          costUsd: 0,
+          costKnown: true,
+          model: 'test',
+          sessionId: 'gate-log-unreadable',
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = new Orchestrator({ spawnPort: port, reviewPort: port, blindSample: () => false });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'gate-log-unreadable', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.state).not.toBe('REPORTED');
+    expect(task?.failure_reason).toContain('deterministic gate failed: gate-log');
+  });
+
   test('rows inside the window count; rows outside it do not', () => {
     appendGateLog({ project: PROJECT, gate: 'tsc', gate_family: 'deterministic', verdict: 'pass', ts: '2020-01-01T00:00:00Z' });
     appendGateLog({ project: PROJECT, gate: 'lint', gate_family: 'deterministic', verdict: 'caught', caught: 'unused var', ts: '2026-08-12T10:00:00Z' });
@@ -740,7 +801,7 @@ describe('a review gate whose transport never ran says so', () => {
     const { ctx } = harness(missingTransport());
     await runReviewChain(ctx);
 
-    const row = readEntries(PROJECT).find((r) => r.gate === 'spec-check');
+    const row = loggedEntries().find((r) => r.gate === 'spec-check');
     expect(row?.verdict).toBe('error');
     expect(row?.caught).toContain('codex_not_installed');
     expect(row?.caught).toContain('never ran');
@@ -771,7 +832,7 @@ describe('a review gate whose transport never ran says so', () => {
     });
     await runReviewChain(ctx);
 
-    const row = readEntries(PROJECT).find((r) => r.gate === 'spec-check');
+    const row = loggedEntries().find((r) => r.gate === 'spec-check');
     expect(row?.verdict).toBe('pass');
     expect(row?.cost_usd, 'an unpriced run must not be logged as costing $0').toBeUndefined();
   });
@@ -779,6 +840,6 @@ describe('a review gate whose transport never ran says so', () => {
   test('a priced run still records its cost', async () => {
     const { ctx } = harness();
     await runReviewChain(ctx);
-    expect(readEntries(PROJECT).find((r) => r.gate === 'spec-check')?.cost_usd).toBe(0.05);
+    expect(loggedEntries().find((r) => r.gate === 'spec-check')?.cost_usd).toBe(0.05);
   });
 });

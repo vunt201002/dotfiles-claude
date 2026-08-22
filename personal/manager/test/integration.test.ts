@@ -9,7 +9,7 @@ process.env.GSTACK_GATE_LOG_DIR = path.join(HOME, 'gate-log');
 
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { resetConfigCache } from '../config';
-import { appendGateLog } from '../lib/gate-log';
+import { appendGateLog, type GateLogEntry } from '../lib/gate-log';
 import { readEntries } from '../lib/gate-log-port';
 import { __clearWaiters, BROWSER_TOKEN, holderOf, projectLock, queueFor } from '../lib/locks';
 import { Orchestrator } from '../lib/orchestrator';
@@ -26,6 +26,12 @@ import { emptyState, type TaskEnvelope } from '../types';
 
 const PROJECT = 'fixture';
 const ASSERT_CMD = 'bun run test';
+
+function loggedEntries(project?: string): GateLogEntry[] {
+  const result = readEntries(project);
+  if (!result.ok) throw new Error(result.reason);
+  return result.entries;
+}
 
 /**
  * Registry plus the human yes for every command in it — the steady state of a
@@ -256,7 +262,7 @@ describe('full lifecycle on a fixture repo with a mocked runner', () => {
     expect(task?.pending_action).toBe('');
     expect(task?.report_lines).toContain('UNMEASURED: no verify gate ran');
     expect(calls.map((call) => call.phase)).toEqual(['size', 'execute']);
-    const verifyTransition = readEntries().find((entry) => entry.gate === 'lifecycle:VERIFYING->REVIEW');
+    const verifyTransition = loggedEntries().find((entry) => entry.gate === 'lifecycle:VERIFYING->REVIEW');
     expect(verifyTransition?.verdict).toBe('skipped');
   });
 
@@ -276,7 +282,7 @@ describe('full lifecycle on a fixture repo with a mocked runner', () => {
 
     expect(calls.map((c) => c.phase)).toEqual(['size', 'execute', 'spec-check', 'tech-review']);
 
-    const lifecycle = readEntries()
+    const lifecycle = loggedEntries()
       .filter((e) => e.gate.startsWith('lifecycle:'))
       .map((e) => e.gate);
     expect(lifecycle).toEqual([
@@ -295,7 +301,7 @@ describe('full lifecycle on a fixture repo with a mocked runner', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const tscRows = readEntries().filter((e) => e.gate === 'tsc' && e.issue === 't1');
+    const tscRows = loggedEntries().filter((e) => e.gate === 'tsc' && e.issue === 't1');
     expect(tscRows.length).toBeGreaterThan(0);
     for (const row of tscRows) {
       expect(row.gate_family).toBe('deterministic');
@@ -551,7 +557,7 @@ describe('approval gate', () => {
     await manager.approve(taskId, true);
     await manager.settle(taskId);
     expect(loadTask(taskId)?.human_touches).toBe(1);
-    const rows = readEntries().filter((entry) => entry.issue === 'approve-touch' && entry.human_intervened);
+    const rows = loggedEntries().filter((entry) => entry.issue === 'approve-touch' && entry.human_intervened);
     expect(rows.map((entry) => entry.gate)).toEqual(['human-approve']);
   });
 
@@ -601,7 +607,7 @@ describe('approval gate', () => {
     await manager.answer(taskId, 'apply the code to the regular portion only');
 
     expect(loadTask(taskId)?.human_touches).toBe(1);
-    const row = readEntries().find((e) => e.gate === 'human-answer');
+    const row = loggedEntries().find((e) => e.gate === 'human-answer');
     expect(row?.human_intervened).toBe(true);
     expect(row?.caught).toContain('regular portion');
   });
@@ -822,7 +828,7 @@ describe('cost ceilings', () => {
     await manager.approve(taskId, true);
     await manager.settle(taskId);
     expect(loadTask(taskId)?.human_touches).toBe(1);
-    const rows = readEntries().filter((entry) => entry.issue === 'budget-touch' && entry.human_intervened);
+    const rows = loggedEntries().filter((entry) => entry.issue === 'budget-touch' && entry.human_intervened);
     expect(rows.map((entry) => entry.gate)).toEqual(['human-budget-raise']);
   });
 
@@ -899,7 +905,7 @@ describe('stop and stopall', () => {
 
     await manager.stop(taskId);
     expect(loadTask(taskId)?.human_touches).toBe(1);
-    const rows = readEntries().filter((entry) => entry.issue === 'stop-touch' && entry.human_intervened);
+    const rows = loggedEntries().filter((entry) => entry.issue === 'stop-touch' && entry.human_intervened);
     expect(rows.map((entry) => entry.gate)).toEqual(['human-stop']);
   });
 
@@ -913,7 +919,7 @@ describe('stop and stopall', () => {
     expect(await manager.stopAll()).toBe(2);
     expect(loadTask(a.taskId)?.human_touches).toBe(1);
     expect(loadTask(b.taskId)?.human_touches).toBe(1);
-    const rows = readEntries().filter((entry) => entry.gate === 'human-stopall' && entry.human_intervened);
+    const rows = loggedEntries().filter((entry) => entry.gate === 'human-stopall' && entry.human_intervened);
     expect(rows.map((entry) => entry.issue).sort()).toEqual(['stopall-a', 'stopall-b']);
   });
 
@@ -1065,7 +1071,7 @@ describe('findings and the ensemble rule', () => {
     expect(task?.state).toBe('REPORTED');
     expect(task?.report_lines.join(' ')).toContain('WARN');
     expect(task?.findings.map((f) => f.gate)).toContain('spec-check');
-    const row = readEntries().find((e) => e.gate === 'spec-check');
+    const row = loggedEntries().find((e) => e.gate === 'spec-check');
     expect(row?.gate_family, 'spec-check is an llm gate and must be logged as one').toBe('llm');
     expect(row?.verdict).toBe('caught');
   });
@@ -1167,7 +1173,7 @@ describe('findings and the ensemble rule', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const rows = readEntries().filter((e) => e.gate === 'B8-assert');
+    const rows = loggedEntries().filter((e) => e.gate === 'B8-assert');
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(row.gate_family, 'the manager ran the command itself; this is evidence, not a claim').toBe(
@@ -1187,7 +1193,7 @@ describe('findings and the ensemble rule', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const chain = readEntries().filter((e) => !e.gate.startsWith('lifecycle:'));
+    const chain = loggedEntries().filter((e) => !e.gate.startsWith('lifecycle:'));
     const families = new Set(chain.map((e) => e.gate_family));
     expect(families.has('deterministic'), 'no deterministic row').toBe(true);
     expect(families.has('llm'), 'no llm row — gate-log stats would read 100% deterministic').toBe(true);
@@ -1207,7 +1213,7 @@ describe('a deterministic gate must be witnessed by something other than the age
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const tscRows = readEntries().filter((e) => e.gate === 'tsc');
+    const tscRows = loggedEntries().filter((e) => e.gate === 'tsc');
     expect(tscRows.length).toBeGreaterThan(0);
     for (const row of tscRows) {
       expect(row.gate_family, 'an unwitnessed tsc claim must not count as deterministic').toBe('llm');
@@ -1221,7 +1227,7 @@ describe('a deterministic gate must be witnessed by something other than the age
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const fromAgent = readEntries().filter((e) => e.gate === 'tsc' && e.lane === 'bug-lon');
+    const fromAgent = loggedEntries().filter((e) => e.gate === 'tsc' && e.lane === 'bug-lon');
     expect(fromAgent.length).toBeGreaterThan(0);
     for (const row of fromAgent) {
       expect(row.gate_family).toBe('deterministic');
@@ -1257,7 +1263,7 @@ describe('a deterministic gate must be witnessed by something other than the age
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const rows = readEntries(PROJECT).filter((e) => e.gate === 'tsc');
+    const rows = loggedEntries(PROJECT).filter((e) => e.gate === 'tsc');
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) expect(row.gate_family).toBe('llm');
   });
@@ -1350,7 +1356,7 @@ describe('spec-check stays blind through the real driver', () => {
     const task = loadTask(taskId);
     expect(task?.report_lines.join(' ')).toContain('dropped agent-claimed gate "B8-assert"');
     expect(task?.report_lines.join(' ')).toContain('dropped agent-claimed gate "spec-check"');
-    const assertRows = readEntries().filter((e) => e.gate === 'B8-assert');
+    const assertRows = loggedEntries().filter((e) => e.gate === 'B8-assert');
     expect(assertRows).toHaveLength(1);
     expect(assertRows[0].caught ?? '').not.toContain('unverified-self-report');
   });
@@ -1402,7 +1408,7 @@ describe('bad agent output', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const row = readEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
+    const row = loggedEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
     expect(row?.verdict).toBe('pass');
   });
 
@@ -1421,7 +1427,7 @@ describe('bad agent output', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const row = readEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
+    const row = loggedEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
     expect(row?.verdict).toBe('pass');
   });
 
@@ -1437,7 +1443,7 @@ describe('bad agent output', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
-    const row = readEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
+    const row = loggedEntries(PROJECT).find((entry) => entry.gate === 'spec-check');
     expect(row?.verdict).toBe('error');
     expect(row?.caught).toBe('agent returned no parseable verdict block');
   });

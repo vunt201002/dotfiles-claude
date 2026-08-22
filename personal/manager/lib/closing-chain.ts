@@ -283,7 +283,11 @@ export function collectLoggedGates(
   read: typeof readEntries = readEntries,
 ): GateReport[] {
   if (!window.since) return [];
-  return workOnly(read(window.project))
+  const result = read(window.project);
+  if (!result.ok) {
+    return [{ gate: 'gate-log', gate_family: 'deterministic', verdict: 'error', caught: result.reason }];
+  }
+  return workOnly(result.entries)
     .filter(
       (entry) =>
         gates.includes(entry.gate) &&
