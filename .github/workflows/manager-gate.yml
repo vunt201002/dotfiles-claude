@@ -1,0 +1,36 @@
+name: manager gate
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'personal/manager/**'
+      - 'bin/gate-log'
+      - 'package.json'
+      - '.github/workflows/manager-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: manager-gate-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubicloud-standard-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The missing-evidence detectors live in personal/manager/test/fault/.
+      # Until this workflow existed nothing ran them outside a developer's own
+      # machine, which made them indistinguishable from detectors that pass.
+      - name: Tests
+        run: bun test personal/manager --timeout 30000
+
+      - name: Typecheck ratchet
+        run: bun run typecheck:manager
