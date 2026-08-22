@@ -31,7 +31,7 @@
       → Geoffrey Litt (Ink & Switch): khi viết code đã rẻ, nút thắt chuyển sang việc HIỂU code mà agent vừa đẻ ra. Bài nói về cách thiết kế công cụ quanh đúng cái nút thắt đó.
       https://www.geoffreylitt.com/2026/07/02/understanding-is-the-new-bottleneck
 - [ ] 6. How Compaction Works in Pi — earendil.com · lưu 2026-08-14 (digest 2026-08-14)
-      → Mổ xẻ cơ chế nén context khi hội thoại dài: agent quyết định giữ/bỏ cái gì khi context đầy. Giải thích trực tiếp vì sao agent "quên" giữa chừng và cách brief lại cho đúng.
+      → Mổ xẻ cơ chế compaction của agent Pi: khi nào tự nén, giữ lại bao nhiêu (token budget mặc định 20k ≈ 5–20 turn), bản tóm tắt phải có goal · progress · key decisions viết như bàn giao ca trực, và cái giá là vỡ prompt cache một lần.
       https://earendil.com/posts/compaction-in-pi/
 - [ ] 7. Launch HN: Bullet (YC S26) – A Faster Coding Agent — codewithbullet.com · lưu 2026-08-14 (digest 2026-08-14)
       → Coding agent YC S26 đặt cược vào tốc độ. Phần comment HN mới là chỗ đáng đọc: dân dùng agent hàng ngày mổ xẻ đánh đổi latency vs chất lượng.
