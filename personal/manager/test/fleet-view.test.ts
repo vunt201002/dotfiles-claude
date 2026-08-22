@@ -12,7 +12,7 @@ const { worktreesFile } = await import('../lib/worktrees');
 const { atomicWriteJson } = await import('../lib/paths');
 const { saveTask } = await import('../lib/store');
 const { ACTIVE_STATES } = await import('../types');
-type TaskRecord = import('../types').TaskRecord;
+const { taskRecord } = await import('./fixtures');
 type TaskState = import('../types').TaskState;
 
 const ALIVE = process.pid;
@@ -68,34 +68,12 @@ function registerWorktree(taskId: string, dir: string): void {
 }
 
 function seedTask(id: string, state: TaskState): void {
-  const now = new Date().toISOString();
-  saveTask({
+  saveTask(taskRecord({
     id,
     state,
-    source: 'cli',
     project: 'joy',
-    issue: 't1',
     scope: MINE,
-    envelope: null,
-    attempt: 1,
-    max_attempts: 3,
-    review_depth: 'summary',
-    blind_sample: false,
-    agents: [],
-    gates_run: [],
-    findings: [],
-    holds: [],
-    cost_usd_actual: 0,
-    cost_ceiling_usd: 5,
-    human_touches: 0,
-    assumption_count: 0,
-    failure_reason: '',
-    report_lines: [],
-    pending_question: '',
-    answers: [],
-    created_at: now,
-    updated_at: now,
-  } as TaskRecord);
+  }));
 }
 
 beforeEach(() => {

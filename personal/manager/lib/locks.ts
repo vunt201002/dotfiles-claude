@@ -50,7 +50,7 @@ function waiterKey(lock: string, taskId: string): string {
  * lock this process is holding" from "a lock a dead daemon left behind whose
  * pid the OS has since handed to something else".
  */
-let bootNonce = randomUUID();
+let bootNonce: string = randomUUID();
 
 export function currentBootNonce(): string {
   return bootNonce;

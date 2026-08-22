@@ -1,0 +1,67 @@
+import type { TaskEnvelope, TaskRecord } from '../types';
+
+export function taskEnvelope(overrides: Partial<TaskEnvelope> = {}): TaskEnvelope {
+  return {
+    project: 'fixture',
+    issue: 't1',
+    title: 'fixture task',
+    size: 'S',
+    uncertainty: 'low',
+    lane: 'bug-nho',
+    why: 'fixture',
+    oracle_available: true,
+    oracle_kind: ['bun-test'],
+    needs_human: false,
+    blocking_questions: [],
+    assumptions: [],
+    assumption_count: 0,
+    est_cost_usd: 0,
+    est_turns: 1,
+    ...overrides,
+  };
+}
+
+export function taskRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
+  const now = new Date().toISOString();
+  return {
+    id: 'fixture-t1-01',
+    state: 'INTAKE',
+    source: 'cli',
+    project: 'fixture',
+    issue: 't1',
+    scope: '/tmp/fixture',
+    envelope: null,
+    attempt: 1,
+    max_attempts: 3,
+    review_depth: 'summary',
+    blind_sample: false,
+    agents: [],
+    gates_run: [],
+    findings: [],
+    gate_reports: [],
+    holds: [],
+    cost_usd_actual: 0,
+    cost_unmeasured_runs: 0,
+    cost_unmeasured_ack: 0,
+    cost_ceiling_usd: 5,
+    human_touches: 0,
+    assumption_count: 0,
+    failure_reason: '',
+    report_lines: [],
+    verify_lines: [],
+    assert_runs: [],
+    assumptions: [],
+    advisories: [],
+    root_cause: '',
+    resume_state: '',
+    pending_action: '',
+    pending_assert_cmds: [],
+    pending_question: '',
+    answers: [],
+    run_started_at: '',
+    attempt_started_at: '',
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}

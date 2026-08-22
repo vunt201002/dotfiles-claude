@@ -518,6 +518,8 @@ describe('a false positive is marked by appending, never by editing', () => {
   test('the ref ignores read-time fields, so it is the same before and after a read', () => {
     caught('rule=danger cmd=echo danger');
     const entry = readGateLog('kivora')[0];
+    if (!entry) throw new Error('expected one gate-log entry');
+    if (!entry.ref) throw new Error('expected the gate-log entry to have a ref');
     expect(entryRef(entry)).toBe(entry.ref);
   });
 });

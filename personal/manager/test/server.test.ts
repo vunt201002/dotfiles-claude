@@ -10,7 +10,7 @@ process.env.GSTACK_GATE_LOG_DIR = path.join(HOME, 'gate-log');
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { resetConfigCache } from '../config';
 import { approveCommands } from '../lib/assert-approvals';
-import { __resetEvents, approvalId, emit, subscribe, subscriberCount } from '../lib/events';
+import { __resetEvents, approvalId, emit, subscribe, subscriberCount, type ReportEvent } from '../lib/events';
 import { __clearWaiters } from '../lib/locks';
 import { Orchestrator } from '../lib/orchestrator';
 import { ensureManagerDirs, portFile, projectsFile, tokenFile } from '../lib/paths';
@@ -21,6 +21,25 @@ import { emptyState, type TaskEnvelope, type TaskSource } from '../types';
 
 const PROJECT = 'fixture';
 const TOKEN = 'test-token';
+
+function reportEvent(status: string): ReportEvent {
+  return {
+    type: 'report',
+    taskId: 't',
+    project: PROJECT,
+    issue: 'i',
+    lane: 'unsized',
+    attempt: 1,
+    cost_usd: 0,
+    cost_unmeasured_runs: 0,
+    ok: true,
+    cause: '',
+    gates: [],
+    verify: [],
+    assumptions: [],
+    status,
+  };
+}
 
 function envelopeJson(overrides: Partial<TaskEnvelope> = {}): string {
   const envelope: TaskEnvelope = {
@@ -288,7 +307,7 @@ describe('SSE', () => {
     expect(subscriberCount()).toBe(1);
 
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    emit({ type: 'report', taskId: 't', project: PROJECT, issue: 'i', state: 'REPORTED', text: 'done' });
+    emit(reportEvent('done'));
     const chunk = new TextDecoder().decode((await reader.read()).value);
     expect(chunk).toContain('event: manager');
     expect(chunk).toContain('"type":"report"');
@@ -303,7 +322,7 @@ describe('SSE', () => {
     const response = await handle(request('GET', '/events'));
     expect(subscriberCount()).toBe(1);
     await (response.body as ReadableStream).cancel();
-    emit({ type: 'report', taskId: 't', project: PROJECT, issue: 'i', state: 'REPORTED', text: 'x' });
+    emit(reportEvent('x'));
     await new Promise((r) => setTimeout(r, 10));
     expect(subscriberCount()).toBe(0);
   });

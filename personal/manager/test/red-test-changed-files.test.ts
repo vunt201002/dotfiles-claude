@@ -8,6 +8,7 @@ const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'red-test-cf-
 process.env.MANAGER_HOME = HOME;
 
 const { gitRaw } = await import('../lib/worktrees');
+type WorktreeRecord = import('../lib/worktrees').WorktreeRecord;
 
 const dirs: string[] = [];
 
@@ -39,6 +40,18 @@ function intentToAddSet(dir: string): string[] {
   return r.stdout.split('\n').filter(Boolean);
 }
 
+function worktreeRecord(taskId: string, dir: string, baseSha: string): WorktreeRecord {
+  return {
+    taskId,
+    project: 'demo',
+    branch: `manager/${taskId}`,
+    dir,
+    repo: dir,
+    baseSha,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 afterAll(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
   fs.rmSync(HOME, { recursive: true, force: true });
@@ -52,13 +65,7 @@ describe('changedFiles intent-to-add scoping', () => {
 
     const { runRedTestBaseline } = await import('../lib/red-test-runner');
 
-    const fakeRecord = {
-      taskId: 'x',
-      branch: 'manager/x',
-      dir,
-      repo: dir,
-      baseSha: sha,
-    };
+    const fakeRecord = worktreeRecord('x', dir, sha);
 
     const result = await runRedTestBaseline({
       project: 'demo',
@@ -78,13 +85,7 @@ describe('changedFiles intent-to-add scoping', () => {
     fs.writeFileSync(path.join(dir, 'dist', 'output.js'), 'compiled output\n');
 
     const sha = baseSha(dir);
-    const fakeRecord = {
-      taskId: 'y',
-      branch: 'manager/y',
-      dir,
-      repo: dir,
-      baseSha: sha,
-    };
+    const fakeRecord = worktreeRecord('y', dir, sha);
 
     const { runRedTestBaseline } = await import('../lib/red-test-runner');
 

@@ -9,37 +9,15 @@ import {
   RESUME_REASON,
 } from '../lib/state-machine';
 import type { TaskRecord, TaskState } from '../types';
+import { taskRecord } from './fixtures';
 
 function record(overrides: Partial<TaskRecord> = {}): TaskRecord {
-  const now = new Date().toISOString();
-  return {
+  return taskRecord({
     id: 'proj-t1-01',
-    state: 'INTAKE',
-    source: 'cli',
     project: 'proj',
-    issue: 't1',
     scope: '/tmp/proj',
-    envelope: null,
-    attempt: 1,
-    max_attempts: 3,
-    review_depth: 'summary',
-    blind_sample: false,
-    agents: [],
-    gates_run: [],
-    findings: [],
-    holds: [],
-    cost_usd_actual: 0,
-    cost_ceiling_usd: 5,
-    human_touches: 0,
-    assumption_count: 0,
-    failure_reason: '',
-    report_lines: [],
-    pending_question: '',
-    answers: [],
-    created_at: now,
-    updated_at: now,
     ...overrides,
-  };
+  });
 }
 
 describe('happy path edges', () => {

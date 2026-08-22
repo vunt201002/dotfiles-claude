@@ -23,7 +23,8 @@ import {
 } from '../lib/cost';
 import { appendGateLog } from '../lib/gate-log';
 import { saveTask } from '../lib/store';
-import type { Lane, TaskEnvelope, TaskRecord } from '../types';
+import type { Lane, TaskRecord } from '../types';
+import { taskEnvelope, taskRecord } from './fixtures';
 
 afterAll(() => {
   try {
@@ -40,35 +41,15 @@ function samples(lane: Lane, costs: number[]): LaneSamples {
 }
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
-  const now = new Date().toISOString();
-  return {
+  return taskRecord({
     id: 'p-t-01',
     state: 'REPORTED',
-    source: 'cli',
     project: 'kivora',
-    issue: 't1',
     scope: '/tmp/p',
-    envelope: { lane: 'bug-lon' } as TaskEnvelope,
-    attempt: 1,
-    max_attempts: 3,
-    review_depth: 'summary',
-    blind_sample: false,
-    agents: [],
-    gates_run: [],
-    findings: [],
-    holds: [],
+    envelope: taskEnvelope({ project: 'kivora', lane: 'bug-lon' }),
     cost_usd_actual: 1,
-    cost_ceiling_usd: 5,
-    human_touches: 0,
-    assumption_count: 0,
-    failure_reason: '',
-    report_lines: [],
-    pending_question: '',
-    answers: [],
-    created_at: now,
-    updated_at: now,
     ...overrides,
-  };
+  });
 }
 
 describe('percentile', () => {
@@ -150,9 +131,9 @@ describe('ceilings are enforced against ACTUAL, never against the estimate', () 
 describe('costBreakdown', () => {
   test('splits by lane and by project', () => {
     const tasks = [
-      task({ id: 'a', project: 'kivora', cost_usd_actual: 1, envelope: { lane: 'bug-lon' } as TaskEnvelope }),
-      task({ id: 'b', project: 'joy', cost_usd_actual: 2, envelope: { lane: 'trivial' } as TaskEnvelope }),
-      task({ id: 'c', project: 'joy', cost_usd_actual: 3, envelope: { lane: 'trivial' } as TaskEnvelope }),
+      task({ id: 'a', project: 'kivora', cost_usd_actual: 1, envelope: taskEnvelope({ project: 'kivora', lane: 'bug-lon' }) }),
+      task({ id: 'b', project: 'joy', cost_usd_actual: 2, envelope: taskEnvelope({ project: 'joy', lane: 'trivial' }) }),
+      task({ id: 'c', project: 'joy', cost_usd_actual: 3, envelope: taskEnvelope({ project: 'joy', lane: 'trivial' }) }),
     ];
     const all = costBreakdown(tasks, 'all');
     expect(all.usd).toBe(6);
