@@ -220,6 +220,19 @@ function invalidRowFleetReply(ignoreSchemaFailure: boolean): harness.RunnerReply
   };
 }
 
+function repeatedWorktreeReply(reuseSizingTranscript: boolean): harness.RunnerReply {
+  let sizingTranscript = '';
+  return (request) => {
+    const healthy = harness.healthyReply(request);
+    if (request.prompt.startsWith('Size issue')) {
+      sizingTranscript = healthy.output ?? '';
+      return healthy;
+    }
+    if (!reuseSizingTranscript) return healthy;
+    return { ...healthy, output: sizingTranscript, outputs: [sizingTranscript] };
+  };
+}
+
 function transportFailureWithPhantomRun(): Partial<SpawnResult> {
   return {
     output: 'cmux transport never started',
@@ -401,6 +414,10 @@ function detectC16(task: TaskRecord): string[] {
   return task.state === 'REPORTED' ? ['schema-invalid fleet row granted a new agent slot'] : [];
 }
 
+function detectC17(task: TaskRecord): string[] {
+  return task.state === 'BLOCKED' ? ['execution answer was replaced by the sizing transcript from the same worktree'] : [];
+}
+
 describe('known missing-evidence fault detectors', () => {
   test('C2 fault→kêu: stale unknown lifecycle claims a working slot', async () => {
     world = harness.createWorld();
@@ -578,5 +595,17 @@ describe('known missing-evidence fault detectors', () => {
     world = harness.createWorld();
     const task = await harness.runOrchestrator(world, invalidRowFleetReply(false));
     expect(detectC16(task)).toEqual([]);
+  });
+
+  test('C17 fault→kêu: repeated worktree lookup replaces the execution transcript with sizing', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, repeatedWorktreeReply(true));
+    expect(detectC17(task)).toEqual(['execution answer was replaced by the sizing transcript from the same worktree']);
+  });
+
+  test('C17 healthy→im: session identity keeps the execution transcript', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, repeatedWorktreeReply(false));
+    expect(detectC17(task)).toEqual([]);
   });
 });
