@@ -11,6 +11,7 @@ import { gateLogPath } from '../../lib/gate-log';
 import { managerConfigFile, stateFile } from '../../lib/paths';
 import type { SpawnRequest, SpawnResult } from '../../lib/spawn';
 import { mutateState, readState, writeState } from '../../lib/store';
+import { resolveTaskWorkdir, taskDiff } from '../../lib/worktrees';
 import { emptyState, type ManagerState, type TaskRecord } from '../../types';
 import * as harness from './harness';
 
@@ -418,6 +419,27 @@ function detectC17(task: TaskRecord): string[] {
   return task.state === 'BLOCKED' ? ['execution answer was replaced by the sizing transcript from the same worktree'] : [];
 }
 
+function changedSharedCheckout(target: harness.FaultWorld): void {
+  const run = (args: string[]) => {
+    const result = Bun.spawnSync(['git', ...args], { cwd: target.repo, stdout: 'pipe', stderr: 'pipe' });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  };
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'fault@test.invalid']);
+  run(['config', 'user.name', 'fault']);
+  fs.writeFileSync(path.join(target.repo, 'task.ts'), 'export const value = 1;\n');
+  run(['add', 'task.ts']);
+  run(['commit', '-qm', 'baseline']);
+  fs.writeFileSync(path.join(target.repo, 'task.ts'), 'export const value = "another session changed this checkout";\n');
+}
+
+function detectC18(task: TaskRecord): string[] {
+  const diff = taskDiff(resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined), task);
+  return !diff.ok && diff.error.includes('no longer that task\'s work')
+    ? ['shared checkout bytes were refused after they diverged from the task recorded at report time']
+    : [];
+}
+
 describe('known missing-evidence fault detectors', () => {
   test('C2 fault→kêu: stale unknown lifecycle claims a working slot', async () => {
     world = harness.createWorld();
@@ -607,5 +629,22 @@ describe('known missing-evidence fault detectors', () => {
     world = harness.createWorld();
     const task = await harness.runOrchestrator(world, repeatedWorktreeReply(false));
     expect(detectC17(task)).toEqual([]);
+  });
+
+  test('C18 fault→kêu: a terminal task cannot borrow a changed shared checkout diff', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    if (!task.diff_evidence_path) throw new Error('orchestrator did not preserve the reported diff');
+    fs.unlinkSync(task.diff_evidence_path);
+    delete task.diff_evidence_path;
+    changedSharedCheckout(world);
+    expect(detectC18(task)).toEqual(['shared checkout bytes were refused after they diverged from the task recorded at report time']);
+  });
+
+  test('C18 healthy→im: the preserved reported diff remains attributable', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    changedSharedCheckout(world);
+    expect(detectC18(task)).toEqual([]);
   });
 });
