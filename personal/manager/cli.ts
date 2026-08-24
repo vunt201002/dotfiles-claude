@@ -465,7 +465,11 @@ function parseReviewSampleArgs(args: string[]): ReviewSampleArgs {
 }
 
 function listBlindSamples(): number {
-  const tasks = unreviewedBlindSamples();
+  const { tasks, ledger_unreadable, reason } = unreviewedBlindSamples();
+  if (ledger_unreadable) {
+    line(`error: ${reason ?? 'review ledger is unreadable; cannot list samples safely'}`);
+    return 1;
+  }
   line(`blind samples awaiting human review: ${tasks.length}`);
   if (tasks.length === 0) return 0;
   line('');
@@ -477,7 +481,7 @@ function listBlindSamples(): number {
 }
 
 function showBlindSample(task: TaskRecord): number {
-  const prior = readBlindSampleReviews().find((review) => review.task_id === task.id);
+  const prior = readBlindSampleReviews().reviews.find((review) => review.task_id === task.id);
   if (prior) {
     line(`${task.id}  REVIEWED ${prior.reviewed_at}  fp=${prior.false_positive_lines.length}  human_fixed=${prior.human_fixed ? 'yes' : 'no'}`);
     return 0;

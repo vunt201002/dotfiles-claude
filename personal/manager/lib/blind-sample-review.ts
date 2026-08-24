@@ -68,29 +68,54 @@ function parseReview(line: string): BlindSampleReview | null {
   }
 }
 
-export function readBlindSampleReviews(): BlindSampleReview[] {
+export interface BlindSampleReviewsResult {
+  ok: boolean;
+  reviews: BlindSampleReview[];
+  reason?: string;
+}
+
+export function readBlindSampleReviews(): BlindSampleReviewsResult {
   let raw: string;
   try {
     raw = fs.readFileSync(blindSampleReviewsFile(), 'utf8');
-  } catch {
-    return [];
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { ok: true, reviews: [] };
+    return { ok: false, reviews: [], reason: `review ledger unreadable: ${code ?? String(err)}` };
   }
-  return raw.split('\n').map(parseReview).filter((row): row is BlindSampleReview => row !== null);
+  const reviews = raw.split('\n').map(parseReview).filter((row): row is BlindSampleReview => row !== null);
+  return { ok: true, reviews };
 }
 
-export function reviewedBlindSampleIds(): Set<string> {
-  return new Set(readBlindSampleReviews().map((row) => row.task_id));
+export interface ReviewedIdsResult {
+  ids: Set<string>;
+  ledger_unreadable: boolean;
+  reason?: string;
 }
 
-export function unreviewedBlindSamples(project?: string): TaskRecord[] {
-  const reviewed = reviewedBlindSampleIds();
-  return listTasks().filter(
+export function reviewedBlindSampleIds(): ReviewedIdsResult {
+  const { ok, reviews, reason } = readBlindSampleReviews();
+  return { ids: new Set(reviews.map((row) => row.task_id)), ledger_unreadable: !ok, reason };
+}
+
+export interface UnreviewedBlindSamplesResult {
+  tasks: TaskRecord[];
+  ledger_unreadable: boolean;
+  reason?: string;
+}
+
+export function unreviewedBlindSamples(project?: string): UnreviewedBlindSamplesResult {
+  const { ids, ledger_unreadable, reason } = reviewedBlindSampleIds();
+  const all = listTasks().filter(
     (task) =>
       task.state === 'REPORTED' &&
       task.blind_sample === true &&
-      !reviewed.has(task.id) &&
       (project === undefined || task.project === project),
   );
+  if (ledger_unreadable) {
+    return { tasks: all, ledger_unreadable: true, reason };
+  }
+  return { tasks: all.filter((task) => !ids.has(task.id)), ledger_unreadable: false };
 }
 
 function runGateLog(args: string[]): GateLogRun {
@@ -151,7 +176,11 @@ export function recordBlindSampleReview(
   if (task.state !== 'REPORTED' || task.blind_sample !== true) {
     return { ok: false, stdout: '', stderr: `${task.id} is not a REPORTED blind sample` };
   }
-  if (reviewedBlindSampleIds().has(task.id)) {
+  const { ids, ledger_unreadable, reason } = reviewedBlindSampleIds();
+  if (ledger_unreadable) {
+    return { ok: false, stdout: '', stderr: `review ledger is unreadable; cannot verify uniqueness${reason ? `: ${reason}` : ''}` };
+  }
+  if (ids.has(task.id)) {
     return { ok: false, stdout: '', stderr: `${task.id} has already been reviewed` };
   }
   const validation = validateFalsePositiveLines(task, falsePositiveLines);

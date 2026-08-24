@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -11,6 +11,7 @@ import {
   readBlindSampleReviews,
   recordBlindSampleReview,
   unreviewedBlindSamples,
+  type BlindSampleReviewsResult,
 } from '../lib/blind-sample-review';
 import { blindSampleReviewsFile } from '../lib/paths';
 import { newTaskRecord, saveTask } from '../lib/store';
@@ -72,20 +73,20 @@ afterAll(() => {
 
 describe('blind sample queue', () => {
   test('an empty store has no unreviewed samples', () => {
-    expect(unreviewedBlindSamples()).toEqual([]);
+    expect(unreviewedBlindSamples().tasks).toEqual([]);
   });
 
   test('lists only REPORTED blind samples', () => {
     saveTask(task());
     saveTask(task({ id: 'not-blind', blind_sample: false }));
     saveTask(task({ id: 'not-reported', state: 'REVIEW' }));
-    expect(unreviewedBlindSamples().map((row) => row.id)).toEqual(['joy-h-1-01']);
+    expect(unreviewedBlindSamples().tasks.map((row) => row.id)).toEqual(['joy-h-1-01']);
   });
 
   test('project scope does not mix queues', () => {
     saveTask(task());
     saveTask(task({ id: 'other-01', project: 'other' }));
-    expect(unreviewedBlindSamples('other').map((row) => row.id)).toEqual(['other-01']);
+    expect(unreviewedBlindSamples('other').tasks.map((row) => row.id)).toEqual(['other-01']);
   });
 
   test('a persisted review removes the task from later reads', () => {
@@ -93,8 +94,8 @@ describe('blind sample queue', () => {
     saveTask(sample);
     listTaskGateRows(sample);
     expect(recordBlindSampleReview(sample, [], false, 'read carefully').ok).toBe(true);
-    expect(unreviewedBlindSamples()).toEqual([]);
-    expect(readBlindSampleReviews()[0].task_id).toBe(sample.id);
+    expect(unreviewedBlindSamples().tasks).toEqual([]);
+    expect(readBlindSampleReviews().reviews[0].task_id).toBe(sample.id);
   });
 
   test('malformed ledger rows do not turn a task into reviewed', () => {
@@ -102,7 +103,39 @@ describe('blind sample queue', () => {
     saveTask(sample);
     fs.mkdirSync(path.dirname(blindSampleReviewsFile()), { recursive: true });
     fs.writeFileSync(blindSampleReviewsFile(), '{bad json}\n');
-    expect(unreviewedBlindSamples().map((row) => row.id)).toEqual([sample.id]);
+    expect(unreviewedBlindSamples().tasks.map((row) => row.id)).toEqual([sample.id]);
+  });
+
+  test('ENOENT ledger reads as ok with no reviews', () => {
+    expect(readBlindSampleReviews()).toEqual({ ok: true, reviews: [] });
+  });
+
+  test('EACCES on ledger returns ok:false and blocks duplicate adjudication', () => {
+    const sample = task();
+    saveTask(sample);
+    fs.mkdirSync(path.dirname(blindSampleReviewsFile()), { recursive: true });
+    const review = {
+      task_id: sample.id, project: 'joy', issue: 'H-1',
+      reviewed_at: '2026-01-01T00:00:00.000Z',
+      false_positive_lines: [], human_fixed: false, human_touches: 0,
+    };
+    fs.writeFileSync(blindSampleReviewsFile(), `${JSON.stringify(review)}\n`);
+    const file = blindSampleReviewsFile();
+    const read = spyOn(fs, 'readFileSync').mockImplementation((candidate) => {
+      if (String(candidate) === file) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      throw new Error(`unexpected read: ${String(candidate)}`);
+    });
+    let result: BlindSampleReviewsResult;
+    try {
+      result = readBlindSampleReviews();
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain('EACCES');
+      const adjudication = recordBlindSampleReview(sample, [], false, 'duplicate attempt');
+      expect(adjudication.ok).toBe(false);
+      expect(adjudication.stderr).toContain('unreadable');
+    } finally {
+      read.mockRestore();
+    }
   });
 });
 
@@ -154,7 +187,7 @@ describe('human adjudication', () => {
     saveTask(sample);
     listTaskGateRows(sample);
     expect(recordBlindSampleReview(sample, [], true, 'fixed wording').ok).toBe(true);
-    expect(readBlindSampleReviews()[0]).toMatchObject({ human_fixed: true, human_touches: 1 });
+    expect(readBlindSampleReviews().reviews[0]).toMatchObject({ human_fixed: true, human_touches: 1 });
   });
 
   test('a non-sample cannot be adjudicated', () => {
@@ -230,7 +263,7 @@ describe('manager review-sample CLI', () => {
     const result = cli(['review-sample', sample.id, '--fp', 'none']);
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('requires both --fp');
-    expect(unreviewedBlindSamples()).toHaveLength(1);
+    expect(unreviewedBlindSamples().tasks).toHaveLength(1);
   });
 
   test('CLI adjudication sends selected rows through gate-log fp and closes the sample', () => {
@@ -252,7 +285,7 @@ describe('manager review-sample CLI', () => {
     expect(result.stdout).toContain('false-positive');
     expect(result.stdout).toContain(`reviewed ${sample.id}`);
     expect(readGateLog('joy')[0].verdict).toBe('false-positive');
-    expect(unreviewedBlindSamples()).toEqual([]);
+    expect(unreviewedBlindSamples().tasks).toEqual([]);
   });
 
   test('stats withholds precision while a blind sample is unreviewed', () => {

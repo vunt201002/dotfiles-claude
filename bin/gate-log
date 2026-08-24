@@ -437,8 +437,10 @@ function cmdStats(args: string[]): void {
   const flags = parseFlags(args);
   const originWanted = originScope(flags, 'work');
   const projectScope = str(flags, 'project');
-  const pendingSamples = unreviewedBlindSamples(projectScope);
-  const completedReviews = readBlindSampleReviews().filter((review) => projectScope === undefined || review.project === projectScope);
+  const unreviewedResult = unreviewedBlindSamples(projectScope);
+  const pendingSamples = unreviewedResult.tasks;
+  const ledgerResult = readBlindSampleReviews();
+  const completedReviews = ledgerResult.reviews.filter((review) => projectScope === undefined || review.project === projectScope);
   const reviewHumanTouches = completedReviews.reduce((sum, review) => sum + review.human_touches, 0);
   const pendingPrecisionGates = new Set(
     pendingSamples.flatMap((sample) =>
@@ -501,9 +503,10 @@ function cmdStats(args: string[]): void {
           unstamped: unstamped,
           corrections: corrections.length,
           overall,
+          blind_samples_ledger_unreadable: !ledgerResult.ok,
           blind_samples_unreviewed: pendingSamples.length,
-          blind_samples_reviewed: completedReviews.length,
-          blind_sample_human_touches: reviewHumanTouches,
+          blind_samples_reviewed: ledgerResult.ok ? completedReviews.length : null,
+          blind_sample_human_touches: ledgerResult.ok ? reviewHumanTouches : null,
           precision_denominator: overall.caught + overall['false-positive'],
           by_gate: Object.fromEntries(
             [...byGate].map(([g, c]) => [
@@ -550,8 +553,12 @@ function cmdStats(args: string[]): void {
       `${unstamped} line${unstamped === 1 ? '' : 's'} predate the origin field and are counted as work — provenance assumed, not measured\n`,
     );
   }
-  process.stdout.write(`blind samples awaiting human review = ${pendingSamples.length}\n`);
-  process.stdout.write(`blind samples reviewed = ${completedReviews.length}; human_touches = ${reviewHumanTouches}\n`);
+  process.stdout.write(`blind samples awaiting human review = ${pendingSamples.length}${unreviewedResult.ledger_unreadable ? ' (LEDGER UNREADABLE — count may include already-reviewed samples)' : ''}\n`);
+  if (!ledgerResult.ok) {
+    process.stdout.write(`blind samples reviewed = UNREADABLE (${ledgerResult.reason}); human_touches = UNREADABLE\n`);
+  } else {
+    process.stdout.write(`blind samples reviewed = ${completedReviews.length}; human_touches = ${reviewHumanTouches}\n`);
+  }
   process.stdout.write('\n');
   if (entries.length === 0) return;
 

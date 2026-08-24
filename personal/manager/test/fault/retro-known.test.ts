@@ -7,7 +7,8 @@ import { cmuxStorePath, fleet, type FleetEntry, type FleetRead } from '../../lib
 import { createCmuxSpawnPort, waitForSlot } from '../../lib/cmux-spawn';
 import { fleetReport, renderFleet, type FleetReport } from '../../lib/fleet-view';
 import { gateLogPath } from '../../lib/gate-log';
-import { atomicWriteJson, managerConfigFile, readJson, stateFile, taskFile } from '../../lib/paths';
+import { atomicWriteJson, blindSampleReviewsFile, managerConfigFile, readJson, stateFile, taskFile } from '../../lib/paths';
+import { readBlindSampleReviews, type BlindSampleReviewsResult } from '../../lib/blind-sample-review';
 import type { SpawnRequest, SpawnResult } from '../../lib/spawn';
 import { loadTask, mutateState, readState, writeState } from '../../lib/store';
 import { resolveTaskWorkdir, taskDiff, worktreesFile, worktreesRoot } from '../../lib/worktrees';
@@ -720,5 +721,50 @@ describe('known missing-evidence fault detectors', () => {
     const task = await harness.runOrchestrator(world, harness.healthyReply);
     prepareIdMismatchedTask(task, false);
     expect(detectC20(task)).toEqual([]);
+  });
+
+  function unreadableLedgerResult(collapseError: boolean): BlindSampleReviewsResult {
+    const file = blindSampleReviewsFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const review = JSON.stringify({
+      task_id: 'ledger-probe-id',
+      project: 'ledger-probe-project',
+      issue: 'probe',
+      reviewed_at: '2026-01-01T00:00:00.000Z',
+      false_positive_lines: [],
+      human_fixed: false,
+      human_touches: 0,
+    });
+    fs.writeFileSync(file, `${review}\n`);
+    if (!collapseError) return readBlindSampleReviews();
+    const spy = spyOn(fs, 'readFileSync').mockImplementation((candidate) => {
+      if (String(candidate) === file) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      throw new Error(`unexpected read during ledger fault probe: ${String(candidate)}`);
+    });
+    try {
+      return readBlindSampleReviews();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  function detectC21(result: BlindSampleReviewsResult): string[] {
+    return !result.ok
+      ? ['an unreadable review ledger was correctly reported instead of collapsing to zero reviews']
+      : [];
+  }
+
+  test('C21 fault→kêu: an EACCES review ledger is reported, not collapsed to zero reviews', async () => {
+    world = harness.createWorld();
+    await harness.runOrchestrator(world, harness.healthyReply);
+    const result = unreadableLedgerResult(true);
+    expect(detectC21(result)).toEqual(['an unreadable review ledger was correctly reported instead of collapsing to zero reviews']);
+  });
+
+  test('C21 healthy→im: a readable review ledger produces no complaint', async () => {
+    world = harness.createWorld();
+    await harness.runOrchestrator(world, harness.healthyReply);
+    const result = unreadableLedgerResult(false);
+    expect(detectC21(result)).toEqual([]);
   });
 });
