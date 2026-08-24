@@ -490,134 +490,154 @@ export function measuredTranscriptCost(usage: TranscriptUsageRead | null): Retur
   );
 }
 
-export const cmuxSpawnPort: SpawnPort = {
-  async run(req) {
-    const cfg = loadConfig();
-    if (!cfg.cmuxRoles.includes(req.role)) return agentSdkSpawnPort.run(req);
-    if (!cmuxAvailable()) {
-      return refusal(
-        'cmux_unavailable',
-        'cmux is not answering on its socket, so no pane could be opened. Start the cmux app, or set MANAGER_SPAWN_RUNNER to sdk.',
-      );
-    }
-    if (cfg.cmuxSkipPermissions && !guardIsWired()) {
-      return refusal(
-        'guard_not_wired',
-        'refusing to launch a permission-skipping pane: the pre-tool-use guard is not installed in ~/.claude/settings.json, so nothing would stop a write outside the task scope.',
-      );
-    }
+export interface CmuxSpawnDeps {
+  cmuxAvailable: () => boolean;
+  createWorkspace: typeof createWorkspace;
+  waitForSession: typeof waitForSession;
+  watchSession: typeof watchSession;
+  ensureTaskWorktree: typeof ensureTaskWorktree;
+  fleet: typeof fleet;
+}
 
-    const worktree = ensureTaskWorktree(req.taskId, req.project, req.scope, { links: cfg.worktreeLinks });
-    if (!worktree.ok || !worktree.record) {
-      return refusal('worktree_failed', `could not prepare a worktree for ${req.taskId}: ${worktree.reason}`);
-    }
-    const dir = worktree.record.dir;
-    const worktreeCreated = true as const;
+export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPort {
+  const checkAvailable = deps.cmuxAvailable ?? cmuxAvailable;
+  const makeWorkspace = deps.createWorkspace ?? createWorkspace;
+  const waiter = deps.waitForSession ?? waitForSession;
+  const watcher = deps.watchSession ?? watchSession;
+  const ensureWorktree = deps.ensureTaskWorktree ?? ensureTaskWorktree;
+  const fleetReader = deps.fleet ?? fleet;
 
-    const cap = resolveMaxAgents(cfg);
-    const slot = await waitForSlot(cap, { signal: req.signal, timeoutMs: cfg.cmuxSlotWaitMs });
-    if (slot === 'aborted') return { ...refusal('aborted', 'stopped while waiting for a free agent slot'), worktreeCreated };
-    if (typeof slot === 'object') {
+  return {
+    async run(req) {
+      const cfg = loadConfig();
+      if (!cfg.cmuxRoles.includes(req.role)) return agentSdkSpawnPort.run(req);
+      if (!checkAvailable()) {
+        return refusal(
+          'cmux_unavailable',
+          'cmux is not answering on its socket, so no pane could be opened. Start the cmux app, or set MANAGER_SPAWN_RUNNER to sdk.',
+        );
+      }
+      if (cfg.cmuxSkipPermissions && !guardIsWired()) {
+        return refusal(
+          'guard_not_wired',
+          'refusing to launch a permission-skipping pane: the pre-tool-use guard is not installed in ~/.claude/settings.json, so nothing would stop a write outside the task scope.',
+        );
+      }
+
+      const worktree = ensureWorktree(req.taskId, req.project, req.scope, { links: cfg.worktreeLinks });
+      if (!worktree.ok || !worktree.record) {
+        return refusal('worktree_failed', `could not prepare a worktree for ${req.taskId}: ${worktree.reason}`);
+      }
+      const dir = worktree.record.dir;
+      const worktreeCreated = true as const;
+
+      const cap = resolveMaxAgents(cfg);
+      const slot = await waitForSlot(cap, { signal: req.signal, timeoutMs: cfg.cmuxSlotWaitMs, fleet: fleetReader });
+      if (slot === 'aborted') return { ...refusal('aborted', 'stopped while waiting for a free agent slot'), worktreeCreated };
+      if (typeof slot === 'object') {
+        return {
+          ...refusal('fleet_unreadable', `cmux fleet is unreadable; refusing a new agent slot: ${slot.reason}`),
+          worktreeCreated,
+        };
+      }
+      if (slot === 'timeout') {
+        return {
+          ...refusal(
+            'no_free_slot',
+            `all ${cap} agent slots were still busy after waiting. Panes you opened yourself count toward the cap — close one, or raise maxAgents.`,
+          ),
+          worktreeCreated,
+        };
+      }
+
+      const stateDir = paneStateDir(req.taskId, req.role);
+      const promptFile = writePromptFile(stateDir, `${scopeDirective({ ...req, scope: dir })}\n\n---\n\n${req.prompt}`);
+      const extraArgs = [...cfg.cmuxClaudeArgs];
+      if (cfg.cmuxSkipPermissions) extraArgs.push('--dangerously-skip-permissions');
+
+      const startedAt = Date.now();
+      const created = makeWorkspace({
+        name: `${req.project}/${req.taskId}:${req.role}`,
+        cwd: dir,
+        env: childEnv(req, dir),
+        focus: false,
+        command: buildLaunchCommand({
+          claudeBin: cfg.cmuxClaudeBin,
+          promptFile,
+          model: resolveModelId(req.modelAlias),
+          extraArgs,
+        }),
+      });
+      if (!created.ok) {
+        return {
+          ...launchFailure(
+            'cmux_create_failed',
+            `cmux did not hand back a workspace ref: ${created.reason}. A pane may be open and running unattended; check cmux and close it by hand.`,
+          ),
+          worktreeCreated,
+        };
+      }
+
+      const recorded = await recordPaneAndWaitForSession(created.ref, req.taskId, req.role, dir, {
+        timeoutMs: cfg.cmuxStartupMs,
+        startedAfter: startedAt / 1000,
+      }, waiter);
+      const paneRecord = recorded.record;
+      const booted = recorded.session;
+      const outcome = await watcher(dir, {
+        timeoutMs: cfg.cmuxRunTimeoutMs,
+        startupMs: cfg.cmuxStartupMs,
+        needsInputGraceMs: cfg.cmuxNeedsInputGraceMs,
+        signal: req.signal,
+        sessionId: booted?.sessionId,
+        startedAfter: startedAt / 1000,
+      });
+
+      const recovered = booted ?? sessionInDir(dir, 'claude', undefined, startedAt / 1000);
+      const transcriptPath = outcome.transcriptPath || recovered?.transcriptPath || '';
+      const usage = transcriptPath ? usageFromTranscript(transcriptPath) : null;
+      const output = transcriptPath ? lastAssistantText(transcriptPath) : '';
+      const outputs = transcriptPath ? assistantTexts(transcriptPath) : [];
+      const exitReason = EXIT_REASON[outcome.health] ?? outcome.health;
+      const cost = measuredTranscriptCost(usage);
+
+      // A pane that finished cleanly has nothing left to show; one that failed
+      // is the operator's only account of what happened, so it stays open and
+      // its screen is carried back as the run's output.
+      //
+      // `aborted` is the exception, and it is not a style choice. §6.8's kill
+      // switch is reachable from a phone, and a stop that only stopped WATCHING
+      // would leave the agent editing files and spending money with nothing left
+      // observing it. Closing the workspace is what actually ends the process,
+      // so stop has to mean stop even though it costs the post-mortem.
+      const aborted = exitReason === 'aborted';
+      const keepOpen = exitReason !== 'success' && !aborted;
+      const screenResult = keepOpen ? readScreen(created.ref, 120) : null;
+      const screen = screenResult?.ok ? screenResult.screen : '';
+      const shouldClose = aborted || (!keepOpen && cfg.cmuxCloseOnSuccess);
+      const paneClosed: PaneClosedState = shouldClose ? (closeWorkspace(created.ref).ok ? 'yes' : 'unknown') : 'no';
+      recordEndedPane(paneRecord, exitReason, paneClosed);
+
       return {
-        ...refusal('fleet_unreadable', `cmux fleet is unreadable; refusing a new agent slot: ${slot.reason}`),
+        output:
+          output ||
+          screen ||
+          (outcome.reason ? `cmux fleet became unreadable while watching ${created.ref}: ${outcome.reason}` : '') ||
+          (screenResult && !screenResult.ok
+            ? `cmux pane ${created.ref} ended as "${exitReason}": screen was unreadable (${screenResult.error})`
+            : `cmux pane ${created.ref} ended as "${exitReason}" with nothing in its transcript.`),
+        outputs,
+        exitReason,
+        turnsUsed: usage?.turns ?? 0,
+        costUsd: cost.usd,
+        costKnown: cost.known,
+        model: cost.model || resolveModelId(req.modelAlias),
+        sessionId: recovered?.sessionId ?? '',
+        durationMs: Date.now() - startedAt,
         worktreeCreated,
       };
-    }
-    if (slot === 'timeout') {
-      return {
-        ...refusal(
-          'no_free_slot',
-          `all ${cap} agent slots were still busy after waiting. Panes you opened yourself count toward the cap — close one, or raise maxAgents.`,
-        ),
-        worktreeCreated,
-      };
-    }
+    },
+  };
+}
 
-    const stateDir = paneStateDir(req.taskId, req.role);
-    const promptFile = writePromptFile(stateDir, `${scopeDirective({ ...req, scope: dir })}\n\n---\n\n${req.prompt}`);
-    const extraArgs = [...cfg.cmuxClaudeArgs];
-    if (cfg.cmuxSkipPermissions) extraArgs.push('--dangerously-skip-permissions');
-
-    const startedAt = Date.now();
-    const created = createWorkspace({
-      name: `${req.project}/${req.taskId}:${req.role}`,
-      cwd: dir,
-      env: childEnv(req, dir),
-      focus: false,
-      command: buildLaunchCommand({
-        claudeBin: cfg.cmuxClaudeBin,
-        promptFile,
-        model: resolveModelId(req.modelAlias),
-        extraArgs,
-      }),
-    });
-    if (!created.ok) {
-      return {
-        ...launchFailure(
-          'cmux_create_failed',
-          `cmux did not hand back a workspace ref: ${created.reason}. A pane may be open and running unattended; check cmux and close it by hand.`,
-        ),
-        worktreeCreated,
-      };
-    }
-
-    const recorded = await recordPaneAndWaitForSession(created.ref, req.taskId, req.role, dir, {
-      timeoutMs: cfg.cmuxStartupMs,
-      startedAfter: startedAt / 1000,
-    });
-    const paneRecord = recorded.record;
-    const booted = recorded.session;
-    const outcome = await watchSession(dir, {
-      timeoutMs: cfg.cmuxRunTimeoutMs,
-      startupMs: cfg.cmuxStartupMs,
-      needsInputGraceMs: cfg.cmuxNeedsInputGraceMs,
-      signal: req.signal,
-      sessionId: booted?.sessionId,
-      startedAfter: startedAt / 1000,
-    });
-
-    const recovered = booted ?? sessionInDir(dir, 'claude', undefined, startedAt / 1000);
-    const transcriptPath = outcome.transcriptPath || recovered?.transcriptPath || '';
-    const usage = transcriptPath ? usageFromTranscript(transcriptPath) : null;
-    const output = transcriptPath ? lastAssistantText(transcriptPath) : '';
-    const outputs = transcriptPath ? assistantTexts(transcriptPath) : [];
-    const exitReason = EXIT_REASON[outcome.health] ?? outcome.health;
-    const cost = measuredTranscriptCost(usage);
-
-    // A pane that finished cleanly has nothing left to show; one that failed
-    // is the operator's only account of what happened, so it stays open and
-    // its screen is carried back as the run's output.
-    //
-    // `aborted` is the exception, and it is not a style choice. §6.8's kill
-    // switch is reachable from a phone, and a stop that only stopped WATCHING
-    // would leave the agent editing files and spending money with nothing left
-    // observing it. Closing the workspace is what actually ends the process,
-    // so stop has to mean stop even though it costs the post-mortem.
-    const aborted = exitReason === 'aborted';
-    const keepOpen = exitReason !== 'success' && !aborted;
-    const screenResult = keepOpen ? readScreen(created.ref, 120) : null;
-    const screen = screenResult?.ok ? screenResult.screen : '';
-    const shouldClose = aborted || (!keepOpen && cfg.cmuxCloseOnSuccess);
-    const paneClosed: PaneClosedState = shouldClose ? (closeWorkspace(created.ref).ok ? 'yes' : 'unknown') : 'no';
-    recordEndedPane(paneRecord, exitReason, paneClosed);
-
-    return {
-      output:
-        output ||
-        screen ||
-        (outcome.reason ? `cmux fleet became unreadable while watching ${created.ref}: ${outcome.reason}` : '') ||
-        (screenResult && !screenResult.ok
-          ? `cmux pane ${created.ref} ended as "${exitReason}": screen was unreadable (${screenResult.error})`
-          : `cmux pane ${created.ref} ended as "${exitReason}" with nothing in its transcript.`),
-      outputs,
-      exitReason,
-      turnsUsed: usage?.turns ?? 0,
-      costUsd: cost.usd,
-      costKnown: cost.known,
-      model: cost.model || resolveModelId(req.modelAlias),
-      sessionId: recovered?.sessionId ?? '',
-      durationMs: Date.now() - startedAt,
-      worktreeCreated,
-    };
-  },
-};
+export const cmuxSpawnPort: SpawnPort = createCmuxSpawnPort();

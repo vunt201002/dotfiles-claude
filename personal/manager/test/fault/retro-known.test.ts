@@ -3,13 +3,13 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { DEFAULT_CONFIG, loadConfig, resetConfigCache, type ManagerConfig } from '../../config';
 import { readScreen, type CmuxExecutor } from '../../lib/cmux-control';
-import { cmuxStorePath, fleet, usageFromTranscript, type FleetEntry } from '../../lib/cmux-sessions';
-import { measuredTranscriptCost, waitForSlot } from '../../lib/cmux-spawn';
-import { measuredCost } from '../../lib/cost';
+import { cmuxStorePath, fleet, type FleetEntry } from '../../lib/cmux-sessions';
+import { createCmuxSpawnPort, waitForSlot } from '../../lib/cmux-spawn';
 import { fleetReport, renderFleet, type FleetReport } from '../../lib/fleet-view';
 import { gateLogPath } from '../../lib/gate-log';
-import { managerConfigFile, stateFile } from '../../lib/paths';
+import { atomicWriteJson, managerConfigFile, stateFile } from '../../lib/paths';
 import type { SpawnRequest, SpawnResult } from '../../lib/spawn';
+import { worktreesFile, worktreesRoot } from '../../lib/worktrees';
 import { mutateState, readState, writeState } from '../../lib/store';
 import { resolveTaskWorkdir, taskDiff } from '../../lib/worktrees';
 import { emptyState, type ManagerState, type TaskRecord } from '../../types';
@@ -181,24 +181,46 @@ function unreadableFleetReport(target: harness.FaultWorld, ignoreVisibility: boo
   return { ...value, ok: true };
 }
 
-function missingUsageReply(ignoreUsageShape: boolean): harness.RunnerReply {
-  return (request, callIndex, target) => {
-    if (request.prompt.startsWith('Size issue')) return harness.healthyReply(request);
+function missingUsageReply(zeroValidUsage: boolean): harness.RunnerReply {
+  return async (request, callIndex, target) => {
+    if (request.prompt.startsWith('Size issue')) {
+      return harness.healthyReply(request);
+    }
     const transcript = path.join(target.home, `missing-usage-${callIndex}.jsonl`);
-    fs.writeFileSync(transcript, JSON.stringify({ message: { model: 'claude-sonnet-4-6', usage: {} } }));
-    const usage = usageFromTranscript(transcript);
-    const cost = ignoreUsageShape
-      ? measuredCost(
-          {
-            input_tokens: usage.inputTokens,
-            output_tokens: usage.outputTokens,
-            cache_read_input_tokens: usage.cacheReadTokens,
-            cache_creation_input_tokens: usage.cacheCreationTokens,
-          },
-          usage.model,
-        )
-      : measuredTranscriptCost(usage);
-    return { ...harness.healthyReply(request), costUsd: cost.usd, costKnown: cost.known, model: cost.model };
+    const verdictJson = JSON.stringify({ verdict: 'pass', reason: 'ok', gates: [], findings: [], assumptions: [], questions: [] });
+    const verdictText = `\`\`\`json\n${verdictJson}\n\`\`\``;
+    const usageLine = JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'claude-sonnet-4-6',
+        usage: zeroValidUsage ? { input_tokens: 0, output_tokens: 0 } : {},
+        content: [{ type: 'text', text: verdictText }],
+      },
+    });
+    fs.writeFileSync(transcript, usageLine);
+    const port = createCmuxSpawnPort({
+      cmuxAvailable: () => true,
+      fleet: () => fleet('claude', target.home),
+      ensureTaskWorktree: (taskId, project) => {
+        const dir = path.join(worktreesRoot(), 'c15-test');
+        fs.mkdirSync(dir, { recursive: true });
+        const record = {
+          taskId,
+          project,
+          repo: target.repo,
+          dir,
+          branch: 'manager/c15-test',
+          baseSha: 'abc123',
+          createdAt: new Date().toISOString(),
+        };
+        atomicWriteJson(worktreesFile(), { [taskId]: record });
+        return { ok: true, reason: '', reused: false, record };
+      },
+      createWorkspace: () => ({ ok: true, ref: 'workspace:c15-test', reason: '' }),
+      waitForSession: async () => null,
+      watchSession: async () => ({ health: 'finished' as const, everWorked: true, turns: 1, transcriptPath: transcript }),
+    });
+    return port.run(request);
   };
 }
 
