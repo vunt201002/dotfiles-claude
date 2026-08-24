@@ -35,6 +35,7 @@ import {
   cmuxAvailable,
   createWorkspace,
   readScreen,
+  sessionInDir,
   sleep,
   waitForSession,
   writePromptFile,
@@ -325,6 +326,8 @@ export async function watchSession(
     signal?: AbortSignal;
     agent?: string;
     home?: string;
+    sessionId?: string;
+    startedAfter?: number;
   },
 ): Promise<WatchOutcome> {
   const pollMs = opts.pollMs ?? 1_000;
@@ -342,7 +345,14 @@ export async function watchSession(
     if ('ok' in entries && entries.ok === false) {
       return { health: 'fleet-unreadable', everWorked, turns, transcriptPath, reason: entries.reason };
     }
-    const session = entries.find((s) => s.cwd && path.resolve(s.cwd) === path.resolve(dir));
+    const session = opts.sessionId
+      ? entries.find((s) => s.sessionId === opts.sessionId)
+      : entries.find(
+          (s) =>
+            s.cwd &&
+            path.resolve(s.cwd) === path.resolve(dir) &&
+            s.startedAt >= (opts.startedAfter ?? 0),
+        );
     if (session) {
       transcriptPath = session.transcriptPath || transcriptPath;
       const health = healthOf(session);
@@ -562,9 +572,12 @@ export const cmuxSpawnPort: SpawnPort = {
       startupMs: cfg.cmuxStartupMs,
       needsInputGraceMs: cfg.cmuxNeedsInputGraceMs,
       signal: req.signal,
+      sessionId: booted?.sessionId,
+      startedAfter: startedAt / 1000,
     });
 
-    const transcriptPath = outcome.transcriptPath || booted?.transcriptPath || '';
+    const recovered = booted ?? sessionInDir(dir, 'claude', undefined, startedAt / 1000);
+    const transcriptPath = outcome.transcriptPath || recovered?.transcriptPath || '';
     const usage = transcriptPath ? usageFromTranscript(transcriptPath) : null;
     const output = transcriptPath ? lastAssistantText(transcriptPath) : '';
     const outputs = transcriptPath ? assistantTexts(transcriptPath) : [];
@@ -602,7 +615,7 @@ export const cmuxSpawnPort: SpawnPort = {
       costUsd: cost.usd,
       costKnown: cost.known,
       model: cost.model || resolveModelId(req.modelAlias),
-      sessionId: booted?.sessionId ?? '',
+      sessionId: recovered?.sessionId ?? '',
       durationMs: Date.now() - startedAt,
       worktreeCreated,
     };

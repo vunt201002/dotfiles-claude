@@ -202,10 +202,10 @@ export function sendText(ref: string, text: string, session: CmuxSession | null)
  * first place — with one shared checkout every task on a repo would collide
  * here.
  */
-export function sessionInDir(dir: string, agent = 'claude', home?: string): CmuxSession | null {
+export function sessionInDir(dir: string, agent = 'claude', home?: string, startedAfter = 0): CmuxSession | null {
   const target = path.resolve(dir);
   for (const session of readCmuxSessions(agent, home)) {
-    if (session.cwd && path.resolve(session.cwd) === target) return session;
+    if (session.cwd && path.resolve(session.cwd) === target && session.startedAt >= startedAfter) return session;
   }
   return null;
 }
@@ -224,8 +224,8 @@ export async function waitForSession(
   const deadline = Date.now() + (opts.timeoutMs ?? 120_000);
   const pollMs = opts.pollMs ?? 500;
   while (Date.now() < deadline) {
-    const session = sessionInDir(dir, opts.agent, opts.home);
-    if (session && (!opts.startedAfter || session.startedAt >= opts.startedAfter)) return session;
+    const session = sessionInDir(dir, opts.agent, opts.home, opts.startedAfter);
+    if (session) return session;
     await sleep(pollMs);
   }
   return null;

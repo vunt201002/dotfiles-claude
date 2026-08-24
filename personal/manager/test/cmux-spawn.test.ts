@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { pathToFileURL } from 'url';
-import { buildLaunchCommand, parseWorkspaceRef, sendText, writePromptFile } from '../lib/cmux-control';
+import { buildLaunchCommand, parseWorkspaceRef, sendText, waitForSession, writePromptFile } from '../lib/cmux-control';
 import { cmuxStorePath, type CmuxSession } from '../lib/cmux-sessions';
 import {
   assistantTexts,
@@ -43,6 +43,35 @@ function writeStore(lifecycle: string, extra: Record<string, unknown> = {}): voi
           updatedAt: 100,
           startedAt: 50,
           ...extra,
+        },
+      },
+    }),
+  );
+}
+
+function writeSameDirSessions(freshLifecycle: string): void {
+  fs.mkdirSync(path.join(HOME, '.cmuxterm'), { recursive: true });
+  fs.writeFileSync(
+    cmuxStorePath('claude', HOME),
+    JSON.stringify({
+      sessions: {
+        stale: {
+          sessionId: 'stale-sizing-session',
+          cwd: WORK,
+          pid: ALIVE,
+          agentLifecycle: 'idle',
+          transcriptPath: path.join(HOME, 'sizing.jsonl'),
+          updatedAt: 300,
+          startedAt: 100,
+        },
+        fresh: {
+          sessionId: 'fresh-execution-session',
+          cwd: WORK,
+          pid: ALIVE,
+          agentLifecycle: freshLifecycle,
+          transcriptPath: path.join(HOME, 'execution.jsonl'),
+          updatedAt: 200,
+          startedAt: 200,
         },
       },
     }),
@@ -165,6 +194,20 @@ describe('watching a pane to a state worth reporting', () => {
     const outcome = await watchSession(WORK, FAST);
     expect(outcome.health).toBe('finished');
     expect(outcome.everWorked).toBe(true);
+  });
+
+  test('waitForSession searches past a stale same-directory session from the prior agent', async () => {
+    writeSameDirSessions('running');
+    const found = await waitForSession(WORK, { home: HOME, startedAfter: 150, timeoutMs: 100, pollMs: 10 });
+    expect(found?.sessionId).toBe('fresh-execution-session');
+  });
+
+  test('watcher follows the booted session when an older agent shares the worktree', async () => {
+    writeSameDirSessions('running');
+    setTimeout(() => writeSameDirSessions('idle'), 120);
+    const outcome = await watchSession(WORK, { ...FAST, sessionId: 'fresh-execution-session' });
+    expect(outcome.health).toBe('finished');
+    expect(outcome.transcriptPath).toBe(path.join(HOME, 'execution.jsonl'));
   });
 
   test('a dead pid recorded as running is a crash, reported as one', async () => {
@@ -505,13 +548,14 @@ describe('readScreen distinguishes a failed read from a genuinely empty pane', (
         cmuxAvailable: () => true,
         createWorkspace: () => ({ ok: true, ref: 'workspace:77', reason: '' }),
         readScreen: () => (${JSON.stringify(screenResult)}),
+        sessionInDir: () => null,
         sleep: async () => {},
         waitForSession: async () => ({ sessionId: 's', transcriptPath: '', cwd: '/tmp/cmux-test-work' }),
         writePromptFile: () => '/tmp/prompt'
       }));
       mock.module(${JSON.stringify(sessionsUrl)}, () => ({
         busyCount: () => 0,
-        fleet: () => [{ cwd: '/tmp/cmux-test-work', transcriptPath: '' }],
+        fleet: () => [{ sessionId: 's', cwd: '/tmp/cmux-test-work', transcriptPath: '' }],
         healthOf: () => 'crashed',
         needsHuman: () => false,
         usageFromTranscript: () => ({ turns: 0 })
