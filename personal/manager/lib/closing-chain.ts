@@ -58,7 +58,7 @@ import {
 import { transportFailed } from './spawn';
 import { finishRedTest, runRedTestBaseline } from './red-test-runner';
 import { parseVerdictCandidates, type AgentVerdict, type GateReport } from './verdict';
-import { taskDiff, type TaskWorkdir } from './worktrees';
+import { liveTaskDiff, type TaskWorkdir } from './worktrees';
 
 export type ChainGate = ManagerDispatchGate;
 export type ManagerDispatchKind = 'red-test' | 'assert' | 'judge' | 'design-judge' | 'spec-check' | 'tech-review' | 'impact-review';
@@ -185,6 +185,7 @@ export interface ChainRun {
    * manager is waiting to be told it may run this.
    */
   assertPending: string[];
+  diff: DiffResult | null;
 }
 
 export interface ChainContext {
@@ -476,7 +477,7 @@ async function runVerifyGate(ctx: ChainContext, gate: ChainGate): Promise<ChainG
   return runLlmGate(ctx, gate, prompt);
 }
 
-function assemble(runs: ChainGateRun[], lines: string[], forceUnavailable = false): ChainRun {
+function assemble(runs: ChainGateRun[], lines: string[], forceUnavailable = false, diff: DiffResult | null = null): ChainRun {
   const advisories: string[] = [];
   for (const run of runs) {
     for (const advisory of run.verdict?.advisories ?? []) {
@@ -495,6 +496,7 @@ function assemble(runs: ChainGateRun[], lines: string[], forceUnavailable = fals
     proven: unavailable || !measured ? false : assertRun ? assertRun.summary.proven : true,
     oracleFault: unavailable ? true : assertRun ? assertRun.summary.oracle_fault : false,
     assertPending: assertRun ? assertRun.plan.pending.map((c) => c.cmd) : [],
+    diff,
   };
 }
 
@@ -563,7 +565,7 @@ export async function runReviewChain(ctx: ChainContext): Promise<ChainRun> {
   const lines: string[] = [];
   if (gates.length === 0) return assemble(runs, lines);
 
-  const diff = (ctx.diff ?? taskDiff)(ctx.workdir);
+  const diff = (ctx.diff ?? liveTaskDiff)(ctx.workdir);
   if (!diff.ok) {
     for (const gate of gates) {
       const report: GateReport = {
@@ -575,7 +577,7 @@ export async function runReviewChain(ctx: ChainContext): Promise<ChainRun> {
       write(ctx, report, NOTHING_SPENT);
       runs.push({ gate, reports: [report], verdict: null, assert: null, costUsd: 0 });
     }
-    return assemble(runs, lines);
+    return assemble(runs, lines, false, diff);
   }
   lines.push(`diff: ${diff.text.length} bytes${diff.truncated ? ' (truncated)' : ''}`);
 
@@ -605,7 +607,7 @@ export async function runReviewChain(ctx: ChainContext): Promise<ChainRun> {
     }
     runs.push(await runLlmGate(ctx, gate, prompt));
   }
-  return assemble(runs, lines);
+  return assemble(runs, lines, false, diff);
 }
 
 /**

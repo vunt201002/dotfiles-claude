@@ -20,6 +20,7 @@ import { loadTask, writeState } from '../lib/store';
 import { __resetEvents } from '../lib/events';
 import { ensureTaskWorktree, resolveTaskWorkdir, taskDiff, worktreesFile, type WorktreeRecord } from '../lib/worktrees';
 import { emptyState, type TaskEnvelope } from '../types';
+import { taskRecord } from './fixtures';
 
 const PROJECT = 'fixture';
 const ASSERT_CMD = 'bun run test';
@@ -31,6 +32,10 @@ const ASSERT_CMD = 'bun run test';
  */
 const TASK_WORK = 'WORKTREE-ONLY-return-discounted';
 const OTHER_LANE = 'MAIN-CHECKOUT-someone-elses-uncommitted-work';
+
+function activeDiff(taskId: string, work: ReturnType<typeof resolveTaskWorkdir>) {
+  return taskDiff(work, taskRecord({ id: taskId, state: 'REVIEW', scope: work.dir }));
+}
 
 function git(args: string[], cwd: string): void {
   const r = spawnSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8' });
@@ -238,7 +243,7 @@ describe('where a task worked is a question with an answer', () => {
     const work = resolveTaskWorkdir('wd-02', REPO, true);
     expect(work.reason).toContain('not there');
     expect(work.dir).not.toBe(REPO);
-    expect(taskDiff(work).ok).toBe(false);
+    expect(activeDiff('wd-missing', work).ok).toBe(false);
   });
 
   test('an observed worktree with a lost registry entry does NOT fall back to the project root', () => {
@@ -248,7 +253,7 @@ describe('where a task worked is a question with an answer', () => {
     expect(work.source).toBe('worktree');
     expect(work.dir).not.toBe(REPO);
     expect(work.reason).toContain('registry entry was lost');
-    expect(taskDiff(work).ok).toBe(false);
+    expect(activeDiff('wd-lost', work).ok).toBe(false);
   });
 
   test('an implausible registry entry is rejected before its directory is trusted', () => {
@@ -256,7 +261,7 @@ describe('where a task worked is a question with an answer', () => {
     fs.writeFileSync(worktreesFile(), JSON.stringify({ 'wd-forged': { ...record, dir: REPO } }));
     const work = resolveTaskWorkdir('wd-forged', REPO, true);
     expect(work.reason).toContain('implausible worktree registry entry');
-    expect(taskDiff(work).ok).toBe(false);
+    expect(activeDiff('wd-forged', work).ok).toBe(false);
   });
 
   test('a malformed marked registry entry is an oracle fault, not an exception', () => {
@@ -264,7 +269,7 @@ describe('where a task worked is a question with an answer', () => {
     fs.writeFileSync(worktreesFile(), JSON.stringify({ 'wd-malformed': { taskId: 'wd-malformed' } }));
     const work = resolveTaskWorkdir('wd-malformed', REPO, true);
     expect(work.reason).toContain('malformed worktree registry entry');
-    expect(taskDiff(work).ok).toBe(false);
+    expect(activeDiff('wd-malformed', work).ok).toBe(false);
   });
 });
 
@@ -274,7 +279,7 @@ describe('the diff is the task\'s, whatever the agent did with it', () => {
     contaminateCheckout();
     fs.writeFileSync(path.join(record.dir, 'pricing.ts'), `export const price = "${TASK_WORK}";\n`);
 
-    const diff = taskDiff(resolveTaskWorkdir('wd-03', REPO, true));
+    const diff = activeDiff('wd-03', resolveTaskWorkdir('wd-03', REPO, true));
     expect(diff.ok).toBe(true);
     expect(diff.text).toContain(TASK_WORK);
     expect(diff.text, 'another session\'s work is not this task\'s diff').not.toContain(OTHER_LANE);
@@ -289,14 +294,14 @@ describe('the diff is the task\'s, whatever the agent did with it', () => {
     git(['add', '-A'], record.dir);
     git(['commit', '-qm', 'agent commit'], record.dir);
 
-    const diff = taskDiff(resolveTaskWorkdir('wd-04', REPO, true));
+    const diff = activeDiff('wd-04', resolveTaskWorkdir('wd-04', REPO, true));
     expect(diff.ok).toBe(true);
     expect(diff.text).toContain(TASK_WORK);
   });
 
   test('a worktree with nothing in it is not a clean diff, it is no diff', () => {
     ensureTaskWorktree('wd-05', PROJECT, REPO, { links: [] });
-    const diff = taskDiff(resolveTaskWorkdir('wd-05', REPO, true));
+    const diff = activeDiff('wd-05', resolveTaskWorkdir('wd-05', REPO, true));
     expect(diff.ok).toBe(false);
     expect(diff.error).toContain('nothing changed');
   });

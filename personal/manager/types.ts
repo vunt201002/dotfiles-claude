@@ -191,6 +191,8 @@ export interface TaskRecord {
   failure_reason: string;
   /** Free-text lines the manager shows in the report / Telegram card. */
   report_lines: string[];
+  /** Immutable diff shown to reviewers after the task stops owning its checkout. */
+  diff_evidence_path?: string;
   /** What the verify phase reported, newest last. Shown on the report card. */
   verify_lines: string[];
   /** Every B8-assert command the manager ran, with its executed-test count. */

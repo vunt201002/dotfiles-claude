@@ -42,6 +42,8 @@ export type RejectedOutputEvidence =
   | { ok: true; path: string }
   | { ok: false; error: string };
 
+export type TaskDiffEvidence = RejectedOutputEvidence;
+
 export function rejectedOutputText(outputs: readonly string[], output: string): string {
   const candidates = [output, ...outputs].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
   return candidates.join('\n\n');
@@ -72,6 +74,40 @@ export function preserveRejectedOutput(
   const day = new Date().toISOString().slice(0, 10).replaceAll('-', '');
   const dir = path.join(managerDir(), 'evidence', day);
   const file = path.join(dir, `${collisionSafeSlug(taskId)}-attempt-${attempt}-${kind}.txt`);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(tmp, Buffer.concat([kept, marker]));
+    fs.renameSync(tmp, file);
+    return { ok: true, path: file };
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    return { ok: false, error: String((error as Error)?.message ?? error) };
+  }
+}
+
+export function preserveTaskDiff(taskId: string, text: string): TaskDiffEvidence {
+  const original = Buffer.from(text);
+  let keptBytes = Math.min(original.length, REJECTED_OUTPUT_CAP_BYTES);
+  let marker = Buffer.alloc(0);
+  if (original.length > REJECTED_OUTPUT_CAP_BYTES) {
+    for (;;) {
+      const omitted = original.length - keptBytes;
+      const nextMarker = Buffer.from(
+        `\n\n[gstack manager evidence truncated: ${omitted} bytes omitted; original ${original.length} bytes, cap ${REJECTED_OUTPUT_CAP_BYTES} bytes]\n`,
+      );
+      const nextKeptBytes = REJECTED_OUTPUT_CAP_BYTES - nextMarker.length;
+      marker = nextMarker;
+      if (nextKeptBytes === keptBytes) break;
+      keptBytes = nextKeptBytes;
+    }
+  }
+  const kept = original.subarray(0, keptBytes);
+  const day = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+  const dir = path.join(managerDir(), 'evidence', day);
+  const file = path.join(dir, `${collisionSafeSlug(taskId)}-diff.patch`);
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(dir, { recursive: true });

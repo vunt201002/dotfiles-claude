@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { appendGateLog, gateLogPath, readGateLog } from '../lib/gate-log';
+import { readDiff } from '../lib/git';
 import {
   listTaskGateRows,
   readBlindSampleReviews,
@@ -201,8 +202,11 @@ describe('manager review-sample CLI', () => {
     git(['add', 'work.txt'], repo);
     git(['commit', '-qm', 'base'], repo);
     fs.writeFileSync(path.join(repo, 'work.txt'), 'after\n');
+    const recordedDiff = readDiff(repo);
+    if (!recordedDiff.ok) throw new Error(recordedDiff.error);
     const sample = task({
       scope: repo,
+      report_lines: [`diff: ${recordedDiff.text.length} bytes`],
       findings: [{ gate: 'spec-check', gate_family: 'llm', text: 'finding text' }],
       advisories: ['advisory text'],
       gate_reports: [{ gate: 'spec-check', gate_family: 'llm', verdict: 'caught', caught: 'finding text', attempt: 1 }],
@@ -213,6 +217,7 @@ describe('manager review-sample CLI', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('-before');
     expect(result.stdout).toContain('+after');
+    expect(result.stdout).toContain(`SOURCE: live read from ${repo}`);
     expect(result.stdout).toContain('finding text');
     expect(result.stdout).toContain('advisory text');
     expect(result.stdout).toContain('verdict=caught');

@@ -28,6 +28,8 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { TaskRecord } from '../types';
+import { isTerminal } from '../types';
 import { cappedDiff, readDiff, type DiffResult } from './git';
 import { atomicWriteJson, collisionSafeSlug, managerDir, readJson, slug } from './paths';
 
@@ -356,12 +358,79 @@ export function resolveTaskWorkdir(taskId: string, scope: string, worktreeCreate
  * and a clean pass over an empty diff reads exactly like a clean pass over
  * real work.
  */
-export function taskDiff(work: TaskWorkdir): DiffResult {
+export function liveTaskDiff(work: TaskWorkdir): DiffResult {
   if (work.reason) return { ok: false, text: '', truncated: false, error: work.reason };
   const diff = work.record ? worktreeDiff(work.record) : readDiff(work.dir);
   if (!diff.ok || diff.text.trim() !== '') return diff;
   const since = work.record ? ` since ${work.record.baseSha.slice(0, 12)}` : '';
   return { ok: false, text: '', truncated: false, error: `nothing changed in ${work.dir}${since}` };
+}
+
+export interface AttributedDiffResult extends DiffResult {
+  source: 'live' | 'preserved';
+  sourcePath: string;
+}
+
+function recordedDiffSize(task: TaskRecord): number | null {
+  for (let index = task.report_lines.length - 1; index >= 0; index -= 1) {
+    const match = task.report_lines[index].match(/^diff: (\d+) bytes(?: \(truncated\))?$/);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function unavailable(error: string, source: AttributedDiffResult['source'], sourcePath: string): AttributedDiffResult {
+  return { ok: false, text: '', truncated: false, error, source, sourcePath };
+}
+
+export function taskDiff(work: TaskWorkdir, task: TaskRecord): AttributedDiffResult {
+  const recordedSize = recordedDiffSize(task);
+  if (task.diff_evidence_path) {
+    let text: string;
+    try {
+      text = fs.readFileSync(task.diff_evidence_path, 'utf8');
+    } catch (error) {
+      return unavailable(
+        `task ${task.id} recorded preserved diff evidence at ${task.diff_evidence_path}, but it cannot be read: ${String((error as Error)?.message ?? error)}`,
+        'preserved',
+        task.diff_evidence_path,
+      );
+    }
+    if (recordedSize === null) {
+      return unavailable(
+        `terminal task ${task.id} has preserved diff evidence at ${task.diff_evidence_path}, but no recorded diff size to prove those bytes are the task's`,
+        'preserved',
+        task.diff_evidence_path,
+      );
+    }
+    if (text.length !== recordedSize) {
+      return unavailable(
+        `the preserved patch at ${task.diff_evidence_path} holds ${text.length} bytes of diff, but task ${task.id} recorded ${recordedSize} bytes when it reported; this is no longer proven to be that task's work`,
+        'preserved',
+        task.diff_evidence_path,
+      );
+    }
+    return { ok: true, text, truncated: text.includes('... truncated at 200000 bytes ...'), error: '', source: 'preserved', sourcePath: task.diff_evidence_path };
+  }
+
+  const diff = liveTaskDiff(work);
+  if (!isTerminal(task.state)) return { ...diff, source: 'live', sourcePath: work.dir };
+  if (recordedSize === null) {
+    return unavailable(
+      `terminal task ${task.id} recorded no diff size when it reported, so the checkout at ${work.dir} cannot be proven to hold that task's work`,
+      'live',
+      work.dir,
+    );
+  }
+  if (!diff.ok) return { ...diff, source: 'live', sourcePath: work.dir };
+  if (diff.text.length !== recordedSize) {
+    return unavailable(
+      `the checkout at ${work.dir} holds ${diff.text.length} bytes of diff, but task ${task.id} recorded ${recordedSize} bytes when it reported; this is no longer that task's work`,
+      'live',
+      work.dir,
+    );
+  }
+  return { ...diff, source: 'live', sourcePath: work.dir };
 }
 
 export interface RemoveResult {

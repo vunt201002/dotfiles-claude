@@ -28,7 +28,7 @@ import {
 import type { AgentRole, AssertRunRecord, TaskRecord, TaskSource, TaskState } from '../types';
 import { ACTIVE_STATES, isTerminal } from '../types';
 import { logGate, shouldBlindSample } from './gate-log-port';
-import { parseEnvelope, preserveRejectedOutput, rejectedOutputText, type RejectedOutputEvidence } from './envelope';
+import { parseEnvelope, preserveRejectedOutput, preserveTaskDiff, rejectedOutputText, type RejectedOutputEvidence } from './envelope';
 import { acquire, BROWSER_TOKEN, projectLock, release, releaseAll } from './locks';
 import {
   BLOCKING_HOOK_GATES,
@@ -60,7 +60,7 @@ import {
   transportFailed,
 } from './spawn';
 import { listTasks, loadTask, newTaskRecord, saveTask, saveTaskAndIndex } from './store';
-import { resolveTaskWorkdir } from './worktrees';
+import { liveTaskDiff, resolveTaskWorkdir } from './worktrees';
 import {
   applyEnsembleRule,
   NO_PARSEABLE_VERDICT,
@@ -592,6 +592,17 @@ export class Orchestrator {
     const reported = applyTransition(current, 'REPORTED', { reason: 'review closed' });
     reported.blind_sample = this.blindSample();
     reported.review_depth = reported.blind_sample ? 'full-diff' : 'summary';
+    const reportDiff = chain.diff ?? (this.diff ?? liveTaskDiff)(this.chainContext(reported, envelope, false).workdir);
+    if (reportDiff.ok) {
+      if (!reported.report_lines.some((line) => /^diff: \d+ bytes(?: \(truncated\))?$/.test(line))) {
+        reported.report_lines.push(`diff: ${reportDiff.text.length} bytes${reportDiff.truncated ? ' (truncated)' : ''}`);
+      }
+      const evidence = preserveTaskDiff(reported.id, reportDiff.text);
+      if (evidence.ok) reported.diff_evidence_path = evidence.path;
+      else reported.report_lines.push(`diff evidence could not be saved: ${evidence.error}`);
+    } else {
+      reported.report_lines.push(`diff evidence unavailable at report: ${reportDiff.error}`);
+    }
     await saveTaskAndIndex(reported);
     await releaseAll(reported.id);
     this.logTransition(reported, 'REVIEW', 'REPORTED', 'pass', '');

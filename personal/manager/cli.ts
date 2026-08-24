@@ -490,8 +490,11 @@ function showBlindSample(task: TaskRecord): number {
   line(`${task.id}  ${task.project}/${task.issue}  UNREVIEWED`);
   line('');
   line('DIFF');
-  const diff = taskDiff(resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined));
-  if (diff.ok) process.stdout.write(`${diff.text.trimEnd()}\n`);
+  const diff = taskDiff(resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined), task);
+  if (diff.ok) {
+    line(`  SOURCE: ${diff.source === 'preserved' ? `preserved bytes from ${diff.sourcePath}` : `live read from ${diff.sourcePath}`}`);
+    process.stdout.write(`${diff.text.trimEnd()}\n`);
+  }
   else line(`  UNAVAILABLE: ${diff.error}`);
 
   line('');

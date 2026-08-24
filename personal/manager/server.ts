@@ -174,11 +174,16 @@ export function buildFetchHandler(deps: HandlerDeps): (req: Request) => Promise<
         if (req.method !== 'GET') return json({ error: 'method not allowed' }, 405);
         const task = loadTask(id);
         if (!task) return json({ error: `no such task ${id}` }, 404);
-        const diff = taskDiff(resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined));
+        const diff = taskDiff(resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined), task);
         if (!diff.ok) return json({ error: diff.error }, 409);
         return new Response(diff.text, {
           status: 200,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Diff-Truncated': String(diff.truncated) },
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Diff-Truncated': String(diff.truncated),
+            'X-Diff-Source': diff.source,
+            'X-Diff-Source-Path': diff.sourcePath,
+          },
         });
       }
       if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405);
