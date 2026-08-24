@@ -203,7 +203,7 @@ export const DEFAULT_CONFIG: ManagerConfig = {
   port: 8787,
   host: '127.0.0.1',
   maxAgents: null,
-  bootstrapTaskCeilingUsd: 5,
+  bootstrapTaskCeilingUsd: 10,
   dayCeilingUsd: 40,
   p90MinSamples: 20,
   maxUnmeasuredRunsPerTask: 12,

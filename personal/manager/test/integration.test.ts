@@ -773,7 +773,7 @@ describe('cost ceilings', () => {
           outputs: ['no parseable envelope'],
           exitReason: 'success',
           turnsUsed: 3,
-          costUsd: 6,
+          costUsd: 12,
           costKnown: true,
           model: req.modelAlias,
           sessionId: 'overspend-session',
@@ -787,12 +787,12 @@ describe('cost ceilings', () => {
     await manager.settle(taskId);
 
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.maxBudgetUsd).toBe(5);
+    expect(requests[0]?.maxBudgetUsd).toBe(10);
     const task = loadTask(taskId);
-    expect(task?.cost_usd_actual).toBe(6);
+    expect(task?.cost_usd_actual).toBe(12);
     expect(task?.state).toBe('BLOCKED');
     expect(task?.failure_reason).toContain('envelope rejected');
-    expect(task?.report_lines.join(' ')).toContain('run breached task ceiling: spent $6.00 of $5.00');
+    expect(task?.report_lines.join(' ')).toContain('run breached task ceiling: spent $12.00 of $10.00');
   });
 
   test('a run is capped by remaining daily headroom and a daily breach is recorded', async () => {
@@ -829,7 +829,7 @@ describe('cost ceilings', () => {
   });
 
   test('raising a budget counts once under the budget-raise kind', async () => {
-    const { port } = makePort(happyReply, 4);
+    const { port } = makePort(happyReply, 6);
     const manager = newOrchestrator(port);
     const { taskId } = await manager.submit({ project: PROJECT, issue: 'budget-touch', source: 'cli' });
     await manager.settle(taskId);
@@ -842,7 +842,7 @@ describe('cost ceilings', () => {
   });
 
   test('a task that blows its ceiling stops and asks before the next spawn', async () => {
-    const { port, calls } = makePort(happyReply, 4);
+    const { port, calls } = makePort(happyReply, 6);
     const manager = newOrchestrator(port);
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
@@ -855,7 +855,7 @@ describe('cost ceilings', () => {
   });
 
   test('approving a budget park raises the ceiling and resumes where it stopped', async () => {
-    const { port, calls } = makePort(happyReply, 4);
+    const { port, calls } = makePort(happyReply, 6);
     const manager = newOrchestrator(port);
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
@@ -879,7 +879,7 @@ describe('cost ceilings', () => {
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
     const task = loadTask(taskId);
-    expect(task?.cost_ceiling_usd).toBe(5);
+    expect(task?.cost_ceiling_usd).toBe(10);
     expect(task?.report_lines.join(' ')).toContain('bootstrap');
   });
 });
@@ -1632,7 +1632,7 @@ describe('bad agent output', () => {
   // one did. Without the check it is the one spend path with no gate, and a run
   // that already cost most of the budget would quietly double it.
   test('a retry that the ceiling cannot fund is refused, and the reason says so', async () => {
-    const { port, calls } = makePort((phase) => (phase === 'size' ? envelopeJson() : ''), 4);
+    const { port, calls } = makePort((phase) => (phase === 'size' ? envelopeJson() : ''), 8);
     const manager = newOrchestrator(port);
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
