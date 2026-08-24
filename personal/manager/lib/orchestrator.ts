@@ -28,7 +28,7 @@ import {
 import type { AgentRole, AssertRunRecord, TaskRecord, TaskSource, TaskState } from '../types';
 import { ACTIVE_STATES, isTerminal } from '../types';
 import { logGate, shouldBlindSample } from './gate-log-port';
-import { parseEnvelope, preserveRejectedOutput, type RejectedOutputEvidence } from './envelope';
+import { parseEnvelope, preserveRejectedOutput, rejectedOutputText, type RejectedOutputEvidence } from './envelope';
 import { acquire, BROWSER_TOKEN, projectLock, release, releaseAll } from './locks';
 import {
   BLOCKING_HOOK_GATES,
@@ -406,13 +406,17 @@ export class Orchestrator {
       return false;
     }
     if (verdict.verdict === 'fail') {
-      const reason = `execute failed: ${verdict.reason}`;
-      const recorded = verdict.reason === NO_PARSEABLE_VERDICT
-        ? withRejectedOutputEvidence(
-            reason,
-            preserveRejectedOutput(current.id, current.attempt, 'execution-verdict', run.output),
-          )
-        : reason;
+      const detail = verdict.reason.trim() || 'agent reported fail without a reason';
+      const reason = `execute failed: ${detail}`;
+      const recorded = withRejectedOutputEvidence(
+        reason,
+        preserveRejectedOutput(
+          current.id,
+          current.attempt,
+          'execution-verdict',
+          rejectedOutputText(run.outputs, run.output),
+        ),
+      );
       await this.terminate(current, 'BLOCKED', recorded);
       return false;
     }

@@ -1485,6 +1485,30 @@ describe('bad agent output', () => {
     expect(loadTask(taskId)?.failure_reason).toContain('execute failed: agent returned no parseable verdict block');
   });
 
+  test('execute failure without a reason names the failure', async () => {
+    const rejected = verdictJson({ verdict: 'fail', reason: '' });
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson() : rejected));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'empty-execute-failure', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.failure_reason).toContain('execute failed: agent reported fail without a reason');
+    expect(task?.failure_reason).not.toMatch(/^execute failed:\s*$/);
+  });
+
+  test('every execute failure preserves the agent output evidence', async () => {
+    const rejected = verdictJson({ verdict: 'fail', reason: 'deterministic check failed' });
+    const { port } = makePort((phase) => (phase === 'size' ? envelopeJson() : rejected));
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'execute-failure-evidence', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.failure_reason).toContain('execute failed: deterministic check failed');
+    expect(fs.readFileSync(evidencePath(task?.failure_reason ?? ''), 'utf8')).toBe(rejected);
+  });
+
   test('rejected sizing output is preserved byte-for-byte before the task is blocked', async () => {
     const rejected = 'not json\r\nraw bytes: \u0000 \ud83d\udca5\n';
     const { port } = makePort((phase) => (phase === 'size' ? rejected : PASS_VERDICT));

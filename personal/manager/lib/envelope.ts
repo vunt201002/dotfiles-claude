@@ -42,6 +42,11 @@ export type RejectedOutputEvidence =
   | { ok: true; path: string }
   | { ok: false; error: string };
 
+export function rejectedOutputText(outputs: readonly string[], output: string): string {
+  const candidates = [output, ...outputs].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+  return candidates.join('\n\n');
+}
+
 export function preserveRejectedOutput(
   taskId: string,
   attempt: number,
