@@ -68,3 +68,8 @@ yarn.lock
 # /todo runtime state: per-machine last-list ordering with absolute paths (not source)
 personal/todo/.last-list-order
 .aov-lab/
+
+# Swift Package Manager / Xcode build artifacts (ios-qa/scripts/gen-accessors-tool)
+.build/
+.swiftpm/
+DerivedData/
