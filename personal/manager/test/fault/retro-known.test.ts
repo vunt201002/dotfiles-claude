@@ -7,11 +7,10 @@ import { cmuxStorePath, fleet, type FleetEntry, type FleetRead } from '../../lib
 import { createCmuxSpawnPort, waitForSlot } from '../../lib/cmux-spawn';
 import { fleetReport, renderFleet, type FleetReport } from '../../lib/fleet-view';
 import { gateLogPath } from '../../lib/gate-log';
-import { atomicWriteJson, managerConfigFile, stateFile } from '../../lib/paths';
+import { atomicWriteJson, managerConfigFile, readJson, stateFile, taskFile } from '../../lib/paths';
 import type { SpawnRequest, SpawnResult } from '../../lib/spawn';
-import { worktreesFile, worktreesRoot } from '../../lib/worktrees';
-import { mutateState, readState, writeState } from '../../lib/store';
-import { resolveTaskWorkdir, taskDiff } from '../../lib/worktrees';
+import { loadTask, mutateState, readState, writeState } from '../../lib/store';
+import { resolveTaskWorkdir, taskDiff, worktreesFile, worktreesRoot } from '../../lib/worktrees';
 import { emptyState, type ManagerState, type TaskRecord } from '../../types';
 import * as harness from './harness';
 
@@ -94,6 +93,32 @@ async function prepareInvalidSchemaState(target: harness.FaultWorld, task: TaskR
     return;
   }
   await mutateState(() => undefined).catch(() => undefined);
+}
+
+function prepareSchemaInvalidTask(task: TaskRecord, corrupt: boolean): void {
+  if (corrupt) fs.writeFileSync(taskFile(task.id), JSON.stringify({ evidence: task.id }));
+}
+
+function detectC19(task: TaskRecord): string[] {
+  try {
+    loadTask(task.id);
+    return [];
+  } catch {
+    return ['schema-invalid task file was rejected instead of silently returning null'];
+  }
+}
+
+function prepareIdMismatchedTask(task: TaskRecord, corrupt: boolean): void {
+  if (corrupt) fs.writeFileSync(taskFile(task.id), JSON.stringify({ id: `${task.id}-mismatch`, evidence: task.id }));
+}
+
+function detectC20(task: TaskRecord): string[] {
+  try {
+    loadTask(task.id);
+    return [];
+  } catch {
+    return ['id-mismatched task file was rejected instead of silently returning null'];
+  }
 }
 
 function oldC13Reader(): ManagerConfig {
@@ -667,5 +692,33 @@ describe('known missing-evidence fault detectors', () => {
     const task = await harness.runOrchestrator(world, harness.healthyReply);
     changedSharedCheckout(world);
     expect(detectC18(task)).toEqual([]);
+  });
+
+  test('C19 fault→kêu: a schema-invalid task file is rejected, not silently returned', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    prepareSchemaInvalidTask(task, true);
+    expect(detectC19(task)).toEqual(['schema-invalid task file was rejected instead of silently returning null']);
+  });
+
+  test('C19 healthy→im: a valid task file is read back without complaint', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    prepareSchemaInvalidTask(task, false);
+    expect(detectC19(task)).toEqual([]);
+  });
+
+  test('C20 fault→kêu: an id-mismatched task file is rejected, not silently returned', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    prepareIdMismatchedTask(task, true);
+    expect(detectC20(task)).toEqual(['id-mismatched task file was rejected instead of silently returning null']);
+  });
+
+  test('C20 healthy→im: a valid task file is read back without complaint', async () => {
+    world = harness.createWorld();
+    const task = await harness.runOrchestrator(world, harness.healthyReply);
+    prepareIdMismatchedTask(task, false);
+    expect(detectC20(task)).toEqual([]);
   });
 });

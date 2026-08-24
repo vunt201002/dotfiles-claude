@@ -92,7 +92,10 @@ export function loadTask(id: string): TaskRecord | null {
     throw new Error(`cannot read task ${id}: ${result.reason}`);
   }
   const record = result.value;
-  return record && typeof record === 'object' && record.id === id ? record : null;
+  if (!record || typeof record !== 'object' || (record as unknown as Record<string, unknown>).id !== id) {
+    throw new Error(`cannot read task ${id}: file is present but does not contain a valid matching id`);
+  }
+  return record;
 }
 
 export function listTasks(): TaskRecord[] {
