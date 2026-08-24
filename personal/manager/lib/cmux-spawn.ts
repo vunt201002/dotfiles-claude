@@ -47,6 +47,7 @@ import {
   needsHuman,
   usageFromTranscript,
   type FleetEntry,
+  type FleetRead,
   type SessionHealth,
   type TranscriptUsageRead,
 } from './cmux-sessions';
@@ -341,10 +342,11 @@ export async function watchSession(
     if (opts.signal?.aborted) {
       return { health: 'aborted', everWorked, turns, transcriptPath };
     }
-    const entries = fleet(opts.agent, opts.home);
-    if ('ok' in entries && entries.ok === false) {
-      return { health: 'fleet-unreadable', everWorked, turns, transcriptPath, reason: entries.reason };
+    const read = fleet(opts.agent, opts.home);
+    if (!read.ok) {
+      return { health: 'fleet-unreadable', everWorked, turns, transcriptPath, reason: read.reason };
     }
+    const entries = read.entries;
     const session = opts.sessionId
       ? entries.find((s) => s.sessionId === opts.sessionId)
       : entries.find(
@@ -426,7 +428,7 @@ export async function waitForSlot(
     home?: string;
     abandonedAfterMs?: number;
     now?: () => number;
-    fleet?: (agent?: string, home?: string) => ReturnType<typeof fleet> | FleetEntry[];
+    fleet?: (agent?: string, home?: string) => FleetRead;
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<SlotOutcome> {
@@ -438,9 +440,9 @@ export async function waitForSlot(
   const abandonedAfterMs = opts.abandonedAfterMs ?? loadConfig().abandonedPaneAfterMs;
   while (true) {
     if (opts.signal?.aborted) return 'aborted';
-    const entries = readFleet('claude', opts.home);
-    if ('ok' in entries && entries.ok === false) return { outcome: 'unreadable', reason: entries.reason };
-    if (busyCount(entries, now(), abandonedAfterMs) < cap) return 'free';
+    const read = readFleet('claude', opts.home);
+    if (!read.ok) return { outcome: 'unreadable', reason: read.reason };
+    if (busyCount(read.entries, now(), abandonedAfterMs) < cap) return 'free';
     if (now() >= deadline) return 'timeout';
     await wait(pollMs);
   }

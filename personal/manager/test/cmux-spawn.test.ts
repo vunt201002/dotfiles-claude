@@ -555,7 +555,7 @@ describe('readScreen distinguishes a failed read from a genuinely empty pane', (
       }));
       mock.module(${JSON.stringify(sessionsUrl)}, () => ({
         busyCount: () => 0,
-        fleet: () => [{ sessionId: 's', cwd: '/tmp/cmux-test-work', transcriptPath: '' }],
+        fleet: () => ({ ok: true, entries: [{ sessionId: 's', cwd: '/tmp/cmux-test-work', transcriptPath: '' }] }),
         healthOf: () => 'crashed',
         needsHuman: () => false,
         usageFromTranscript: () => ({ turns: 0 })

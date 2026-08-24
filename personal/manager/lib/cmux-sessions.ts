@@ -46,7 +46,7 @@ export interface CmuxSession {
   subtitle: string;
 }
 
-export type CmuxSessionsRead = CmuxSession[] & ({ ok: true } | { ok: false; reason: string });
+export type CmuxSessionsRead = { ok: true; entries: CmuxSession[] } | { ok: false; reason: string };
 
 export function cmuxStorePath(agent = 'claude', home = os.homedir()): string {
   return path.join(home, '.cmuxterm', `${agent}-hook-sessions.json`);
@@ -75,20 +75,21 @@ export function readCmuxSessions(agent = 'claude', home = os.homedir()): CmuxSes
   try {
     raw = fs.readFileSync(cmuxStorePath(agent, home), 'utf8');
   } catch (error) {
-    return observedArray([], (error as NodeJS.ErrnoException).code === 'ENOENT', errorReason(error));
+    const isEnoent = (error as NodeJS.ErrnoException).code === 'ENOENT';
+    return isEnoent ? { ok: true, entries: [] } : { ok: false, reason: errorReason(error) };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    return observedArray([], false, errorReason(error));
+    return { ok: false, reason: errorReason(error) };
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return observedArray([], false, 'cmux store root is not an object');
+    return { ok: false, reason: 'cmux store root is not an object' };
   }
   const sessions = (parsed as { sessions?: unknown }).sessions;
   if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) {
-    return observedArray([], false, 'cmux store has no valid sessions object');
+    return { ok: false, reason: 'cmux store has no valid sessions object' };
   }
 
   const out: CmuxSession[] = [];
@@ -120,20 +121,12 @@ export function readCmuxSessions(agent = 'claude', home = os.homedir()): CmuxSes
   }
   const sorted = out.sort((a, b) => b.updatedAt - a.updatedAt);
   return invalidRows === 0
-    ? observedArray(sorted, true)
-    : observedArray(sorted, false, `cmux store contains ${invalidRows} invalid session row${invalidRows === 1 ? '' : 's'}`);
+    ? { ok: true, entries: sorted }
+    : { ok: false, reason: `cmux store contains ${invalidRows} invalid session row${invalidRows === 1 ? '' : 's'}` };
 }
 
 function errorReason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function observedArray<T>(values: T[], ok: boolean, reason = ''): T[] & ({ ok: true } | { ok: false; reason: string }) {
-  Object.defineProperties(values, {
-    ok: { value: ok, enumerable: false },
-    ...(ok ? {} : { reason: { value: reason, enumerable: false } }),
-  });
-  return values as T[] & ({ ok: true } | { ok: false; reason: string });
 }
 
 /** Signal 0: asks the kernel whether the pid exists, without touching it. */
@@ -201,12 +194,12 @@ export interface FleetEntry extends CmuxSession {
   health: SessionHealth;
 }
 
-export type FleetRead = FleetEntry[] & ({ ok: true } | { ok: false; reason: string });
+export type FleetRead = { ok: true; entries: FleetEntry[] } | { ok: false; reason: string };
 
 export function fleet(agent = 'claude', home = os.homedir()): FleetRead {
   const sessions = readCmuxSessions(agent, home);
-  const entries = sessions.map((session) => ({ ...session, health: healthOf(session) }));
-  return sessions.ok ? observedArray(entries, true) : observedArray(entries, false, sessions.reason);
+  if (!sessions.ok) return { ok: false, reason: sessions.reason };
+  return { ok: true, entries: sessions.entries.map((session) => ({ ...session, health: healthOf(session) })) };
 }
 
 /** Sessions whose cwd is inside `root` — one repo's share of the fleet. */

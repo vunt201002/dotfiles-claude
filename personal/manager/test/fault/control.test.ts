@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { readScreen } from '../../lib/cmux-control';
-import type { FleetEntry } from '../../lib/cmux-sessions';
+import type { FleetEntry, FleetRead } from '../../lib/cmux-sessions';
 import { waitForSlot } from '../../lib/cmux-spawn';
 import { createWorld, healthyReply, runOrchestrator, type FaultWorld } from './harness';
 
@@ -29,7 +29,7 @@ describe('production fault seams', () => {
     const outcome = await waitForSlot(1, {
       timeoutMs: 10_000,
       now: () => time,
-      fleet: () => [{ health: 'working' }] as FleetEntry[],
+      fleet: (): FleetRead => ({ ok: true, entries: [{ health: 'working' }] as FleetEntry[] }),
       sleep: async () => {
         sleeps++;
         time = 10_000;

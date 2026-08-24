@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { DEFAULT_CONFIG, loadConfig, resetConfigCache, type ManagerConfig } from '../../config';
 import { readScreen, type CmuxExecutor } from '../../lib/cmux-control';
-import { cmuxStorePath, fleet, type FleetEntry } from '../../lib/cmux-sessions';
+import { cmuxStorePath, fleet, type FleetEntry, type FleetRead } from '../../lib/cmux-sessions';
 import { createCmuxSpawnPort, waitForSlot } from '../../lib/cmux-spawn';
 import { fleetReport, renderFleet, type FleetReport } from '../../lib/fleet-view';
 import { gateLogPath } from '../../lib/gate-log';
@@ -120,8 +120,8 @@ function prepareCorruptConfig(target: harness.FaultWorld, collapse: boolean): Ma
   }
 }
 
-function staleUnknownFleet(lifecycle: 'running' | 'unknown'): FleetEntry[] {
-  return [{ health: 'working', lifecycle, updatedAt: 0 }] as FleetEntry[];
+function staleUnknownFleet(lifecycle: 'running' | 'unknown'): FleetRead {
+  return { ok: true, entries: [{ health: 'working', lifecycle, updatedAt: 0 }] as FleetEntry[] };
 }
 
 function admissionReply(lifecycle: 'running' | 'unknown'): harness.RunnerReply {
@@ -147,13 +147,10 @@ function admissionReply(lifecycle: 'running' | 'unknown'): harness.RunnerReply {
   };
 }
 
-function invisibleFleet(observed: boolean): FleetEntry[] {
-  const entries = [] as unknown as FleetEntry[] & { ok: boolean; reason?: string };
-  Object.defineProperties(entries, {
-    ok: { value: observed },
-    reason: { value: observed ? undefined : 'EACCES: cmux store unreadable' },
-  });
-  return entries;
+function invisibleFleet(observed: boolean): FleetRead {
+  return observed
+    ? { ok: true, entries: [] }
+    : { ok: false, reason: 'EACCES: cmux store unreadable' };
 }
 
 function invisibleFleetReply(observed: boolean): harness.RunnerReply {
@@ -231,8 +228,10 @@ function invalidRowFleetReply(ignoreSchemaFailure: boolean): harness.RunnerReply
     fs.mkdirSync(path.dirname(store), { recursive: true });
     fs.writeFileSync(store, JSON.stringify({ sessions: { live: { cwd: target.repo, agentLifecycle: 'running' } } }));
     const observed = fleet('claude', target.home);
-    const entries = ignoreSchemaFailure ? [...observed] : observed;
-    const outcome = await waitForSlot(1, { now: () => 0, fleet: () => entries });
+    const fakeRead: FleetRead = ignoreSchemaFailure
+      ? { ok: true, entries: observed.ok ? observed.entries : [] }
+      : observed;
+    const outcome = await waitForSlot(1, { now: () => 0, fleet: () => fakeRead });
     if (outcome === 'free') return harness.healthyReply(request);
     return {
       output: typeof outcome === 'object' ? outcome.reason : outcome,

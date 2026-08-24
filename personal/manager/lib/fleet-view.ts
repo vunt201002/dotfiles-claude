@@ -107,7 +107,8 @@ export function fleetReport(opts: { now?: number; home?: string } = {}): FleetRe
   const cfg = loadConfig();
   const worktrees = listWorktrees();
   const byDir = new Map(worktrees.map((r) => [path.resolve(r.dir), r]));
-  const entries = fleet('claude', opts.home);
+  const read = fleet('claude', opts.home);
+  const entries = read.ok ? read.entries : [];
   const members = entries.map((e) => memberFrom(e, byDir, now));
   const live = members.filter((m) => isLive(m.health));
   const covered = new Set(members.map((m) => m.taskId).filter(Boolean));
@@ -127,8 +128,8 @@ export function fleetReport(opts: { now?: number; home?: string } = {}): FleetRe
       .filter((t) => ACTIVE_STATES.includes(t.state) && !covered.has(t.id))
       .map((t) => ({ id: t.id, project: t.project, state: t.state })),
   };
-  if (entries.ok) return { ...report, ok: true };
-  return { ...report, ok: false, reason: entries.reason };
+  if (read.ok) return { ...report, ok: true };
+  return { ...report, ok: false, reason: read.reason };
 }
 
 const MARK: Record<SessionHealth, string> = {

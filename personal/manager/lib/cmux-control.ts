@@ -204,7 +204,8 @@ export function sendText(ref: string, text: string, session: CmuxSession | null)
  */
 export function sessionInDir(dir: string, agent = 'claude', home?: string, startedAfter = 0): CmuxSession | null {
   const target = path.resolve(dir);
-  for (const session of readCmuxSessions(agent, home)) {
+  const read = readCmuxSessions(agent, home);
+  for (const session of read.ok ? read.entries : []) {
     if (session.cwd && path.resolve(session.cwd) === target && session.startedAt >= startedAfter) return session;
   }
   return null;

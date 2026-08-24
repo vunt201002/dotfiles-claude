@@ -11,6 +11,7 @@ import {
   sessionsUnder,
   usageFromTranscript,
   type CmuxSession,
+  type FleetEntry,
 } from '../lib/cmux-sessions';
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'cmux-store-'));
@@ -27,6 +28,12 @@ function writeStore(sessions: Record<string, unknown>): void {
 
 const FRESH_NOW_MS = 100_000;
 const ABANDONED_AFTER_MS = 2 * 60 * 60_000;
+
+function fleetEntries(home: string): FleetEntry[] {
+  const f = fleet('claude', home);
+  if (!f.ok) throw new Error(`fleet unreadable: ${f.reason}`);
+  return f.entries;
+}
 
 function session(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
@@ -57,7 +64,7 @@ describe('reading the store never takes the manager down with it', () => {
   test('a missing store is an observed empty fleet while an unreadable store stays explicit without throwing', () => {
     const missing = readCmuxSessions('claude', HOME);
     expect(missing.ok).toBe(true);
-    expect([...missing]).toEqual([]);
+    if (missing.ok) expect(missing.entries).toEqual([]);
 
     fs.mkdirSync(cmuxStorePath('claude', HOME), { recursive: true });
     let unreadable: ReturnType<typeof readCmuxSessions> | undefined;
@@ -65,7 +72,6 @@ describe('reading the store never takes the manager down with it', () => {
       unreadable = readCmuxSessions('claude', HOME);
     }).not.toThrow();
     expect(unreadable).toMatchObject({ ok: false, reason: expect.stringContaining('EISDIR') });
-    expect([...(unreadable ?? [])]).toEqual([]);
   });
 
   test('a half-written store stays explicitly unreadable without throwing', () => {
@@ -78,14 +84,13 @@ describe('reading the store never takes the manager down with it', () => {
     expect(result).toMatchObject({ ok: false });
   });
 
-  test('an invalid row makes the fleet observation unreadable without throwing, while valid rows remain inspectable', () => {
+  test('an invalid row makes the fleet observation unreadable without throwing', () => {
     writeStore({ bad: { cwd: '/repo/joy' }, good: session({ sessionId: 'keep' }) });
     let result: ReturnType<typeof readCmuxSessions> | undefined;
     expect(() => {
       result = readCmuxSessions('claude', HOME);
     }).not.toThrow();
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('invalid session row') });
-    expect((result ?? []).map((s) => s.sessionId)).toEqual(['keep']);
   });
 
   test('a parsed store without a sessions object is explicitly unreadable', () => {
@@ -99,7 +104,9 @@ describe('reading the store never takes the manager down with it', () => {
 
   test('an unknown lifecycle string degrades to unknown rather than being trusted', () => {
     writeStore({ a: session({ agentLifecycle: 'vibing' }) });
-    expect(readCmuxSessions('claude', HOME)[0].lifecycle).toBe('unknown');
+    const read = readCmuxSessions('claude', HOME);
+    if (!read.ok) throw new Error(`unexpected: ${read.reason}`);
+    expect(read.entries[0].lifecycle).toBe('unknown');
   });
 
   test('newest first, so a watcher reads the freshest state at the top', () => {
@@ -107,7 +114,9 @@ describe('reading the store never takes the manager down with it', () => {
       old: session({ sessionId: 'old', updatedAt: 10 }),
       fresh: session({ sessionId: 'fresh', updatedAt: 900 }),
     });
-    expect(readCmuxSessions('claude', HOME).map((s) => s.sessionId)).toEqual(['fresh', 'old']);
+    const read = readCmuxSessions('claude', HOME);
+    if (!read.ok) throw new Error(`unexpected: ${read.reason}`);
+    expect(read.entries.map((s) => s.sessionId)).toEqual(['fresh', 'old']);
   });
 });
 
@@ -119,7 +128,9 @@ describe('the store says what happened; the pid says whether it still holds', ()
 
   function readAll(sessions: Record<string, unknown>): CmuxSession[] {
     writeStore(sessions);
-    return readCmuxSessions('claude', HOME);
+    const read = readCmuxSessions('claude', HOME);
+    if (!read.ok) throw new Error(`unexpected: ${read.reason}`);
+    return read.entries;
   }
 
   test('alive + running is work in progress', () => {
@@ -152,7 +163,9 @@ describe('the store says what happened; the pid says whether it still holds', ()
 describe('a permission prompt is a human blocking, whatever the lifecycle says', () => {
   function health(over: Record<string, unknown>): string {
     writeStore({ a: session(over) });
-    return healthOf(readCmuxSessions('claude', HOME)[0]);
+    const read = readCmuxSessions('claude', HOME);
+    if (!read.ok) throw new Error(`unexpected: ${read.reason}`);
+    return healthOf(read.entries[0]);
   }
 
   test('running + a Permission subtitle is blocked, not working', () => {
@@ -174,7 +187,7 @@ describe('a permission prompt is a human blocking, whatever the lifecycle says',
       a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'running', lastSubtitle: 'Permission' }),
       b: session({ sessionId: 'b', pid: ALIVE, agentLifecycle: 'idle', lastSubtitle: 'Completed' }),
     });
-    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(1);
+    expect(busyCount(fleetEntries(HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(1);
   });
 });
 
@@ -186,7 +199,7 @@ describe('counting the fleet, including agents the manager never started', () =>
       c: session({ sessionId: 'c', pid: ALIVE, agentLifecycle: 'idle' }),
       d: session({ sessionId: 'd', pid: DEAD, agentLifecycle: 'running' }),
     });
-    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(2);
+    expect(busyCount(fleetEntries(HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(2);
   });
 
   // Three panes left open on a Friday must not silently halve the machine's
@@ -198,8 +211,8 @@ describe('counting the fleet, including agents the manager never started', () =>
       c: session({ sessionId: 'c', pid: ALIVE, agentLifecycle: 'running', lastSubtitle: 'Permission' }),
     });
     const long = FRESH_NOW_MS + 3 * ABANDONED_AFTER_MS;
-    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(3);
-    expect(busyCount(fleet('claude', HOME), long, ABANDONED_AFTER_MS)).toBe(1);
+    expect(busyCount(fleetEntries(HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(3);
+    expect(busyCount(fleetEntries(HOME), long, ABANDONED_AFTER_MS)).toBe(1);
   });
 
   test('an unknown pane stays conservative while fresh but releases its seat when stale', () => {
@@ -207,8 +220,8 @@ describe('counting the fleet, including agents the manager never started', () =>
       a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'unknown' }),
     });
     const long = FRESH_NOW_MS + 3 * ABANDONED_AFTER_MS;
-    expect(busyCount(fleet('claude', HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(1);
-    expect(busyCount(fleet('claude', HOME), long, ABANDONED_AFTER_MS)).toBe(0);
+    expect(busyCount(fleetEntries(HOME), FRESH_NOW_MS, ABANDONED_AFTER_MS)).toBe(1);
+    expect(busyCount(fleetEntries(HOME), long, ABANDONED_AFTER_MS)).toBe(0);
   });
 
   test('a pane that is still working never ages out, however long it runs', () => {
@@ -216,7 +229,7 @@ describe('counting the fleet, including agents the manager never started', () =>
       a: session({ sessionId: 'a', pid: ALIVE, agentLifecycle: 'running' }),
     });
     const long = FRESH_NOW_MS + 1000 * ABANDONED_AFTER_MS;
-    expect(busyCount(fleet('claude', HOME), long, ABANDONED_AFTER_MS)).toBe(1);
+    expect(busyCount(fleetEntries(HOME), long, ABANDONED_AFTER_MS)).toBe(1);
   });
 });
 
@@ -232,14 +245,13 @@ describe('scoping a repo to its own sessions', () => {
       c: session({ sessionId: 'sibling', cwd: '/repo/wishlist-2' }),
       d: session({ sessionId: 'other', cwd: '/repo/joy' }),
     });
-    const entries = fleet('claude', HOME);
-    const ids = sessionsUnder('/repo/wishlist', entries).map((s) => s.sessionId).sort();
+    const ids = sessionsUnder('/repo/wishlist', fleetEntries(HOME)).map((s) => s.sessionId).sort();
     expect(ids).toEqual(['in', 'nested']);
   });
 
   test('a session with no cwd belongs to no repo', () => {
     writeStore({ a: session({ cwd: '' }) });
-    expect(sessionsUnder('/repo/joy', fleet('claude', HOME))).toEqual([]);
+    expect(sessionsUnder('/repo/joy', fleetEntries(HOME))).toEqual([]);
   });
 });
 
