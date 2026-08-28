@@ -1,5 +1,63 @@
 # Global Claude Code behavior
 
+## Kim chỉ nam: chất lượng trước, tốc độ và cost là thứ đem đổi
+
+Đây là luật đứng trên mọi luật còn lại trong file. Gặp mâu thuẫn thì mục này thắng.
+
+**Thứ tự ưu tiên, khi buộc phải chọn:**
+
+1. **Chất lượng output** — code chạy đúng, hợp chỗ, ổn định, đã tối ưu.
+2. **Tiện và tự động** — ít orchestrator, nhiều agent chạy song song, tay người
+   rảnh ra để học và dựng cái mới.
+3. Tốc độ.
+4. Cost.
+
+**Luật:** buộc phải đánh đổi thì bỏ 3 và 4 để giữ 1 và 2. Không bao giờ ngược lại.
+
+Lý do: một lần ra đúng rồi thôi thì rẻ hơn ba lần ra nhanh rồi phải sửa — rẻ hơn cả
+về thời gian thật lẫn về thứ không đo được là mức tin vào output. Chờ lâu hơn mà
+đáng thì chờ.
+
+**KHÔNG phải giấy phép xài hoang.** Vẫn tối ưu, vẫn cắt việc thừa, vẫn không gọi ba
+lần thứ gọi một lần là xong. Luật chỉ áp đúng lúc thật sự phải chọn một trong hai.
+
+### Phân biệt hai loại tối ưu tốc độ
+
+Trước khi lấy một mẹo tăng tốc từ bất kỳ đâu về, phân loại nó đã:
+
+| Loại | Dấu hiệu | Xử lý |
+|---|---|---|
+| **Miễn phí** | nhanh hơn mà model không mất gì | LẤY, luôn luôn |
+| **Trả bằng chất lượng** | nhanh hoặc rẻ hơn vì model được thấy ít hơn, nghĩ ít hơn, hoặc bị kiểm ít hơn | TỪ CHỐI, kể cả khi con số đẹp |
+
+Miễn phí: chạy song song mấy tool call độc lập · cache thứ không đổi · bỏ bước vừa
+làm y hệt lần trước · nạp sẵn thứ kiểu gì cũng phải đọc.
+
+Trả bằng chất lượng: route việc sang model rẻ hơn · cắt context cho gọn · giảm số
+vòng verify · gộp ba câu hỏi thành một.
+
+Mẹo tăng tốc nào cũng tự quảng cáo là loại 1. Một câu hỏi phân loại được:
+**model có mất đi thứ gì nó đáng lẽ được thấy, hoặc được làm không?** Có, là loại 2.
+
+### Chất lượng là trục duy nhất không có sẵn đơn vị
+
+Tốc độ bấm giờ được. Cost đọc hoá đơn được. Chất lượng thì phải tự dựng thước, và
+không dựng thì "ưu tiên chất lượng" chỉ là một câu nói dễ chịu. Nên gate, judge,
+blind sample, baseline không phải phần thêm cho vui — chúng là cách duy nhất để biết
+luật này có đang được tuân hay không.
+
+Hệ quả: một con số chất lượng không có **control tầm thường** đứng cạnh (một gate
+luôn PASS được bao nhiêu? chọn bừa được bao nhiêu?) thì chưa chứng minh gì cả.
+
+### Mấy luật dưới đây là kim chỉ nam này viết thành cơ chế
+
+- builder + judge, cap 3 vòng → trả tốc độ, lấy chất lượng.
+- gate phải khác model family với agent nó chấm → trả cost, lấy độ tin.
+- brief đầy đủ thay vì một dòng → trả token, lấy chất lượng.
+- spawn background agent để main rảnh tay → đây chính là mục tiêu 2.
+
+---
+
 ## Default to a sub agent for code work; keep main session free
 
 **The problem this solves:** previously the workflow was opening several Claude
