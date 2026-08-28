@@ -8,15 +8,18 @@ import { buildLaunchCommand, parseWorkspaceRef, sendText, waitForSession, writeP
 import { cmuxStorePath, type CmuxSession } from '../lib/cmux-sessions';
 import {
   assistantTexts,
+  buildExecutionLaunchCommand,
+  createCmuxSpawnPort,
   guardIsWired,
   lastAssistantText,
   readPaneOwnership,
   recordEndedPane,
   recordPaneAndWaitForSession,
+  reserveSlot,
   waitForSlot,
   watchSession,
 } from '../lib/cmux-spawn';
-import { resetConfigCache } from '../config';
+import { DEFAULT_CONFIG, resetConfigCache } from '../config';
 import { measuredCost } from '../lib/cost';
 import { managerConfigFile } from '../lib/paths';
 import { resolveSpawnRunner } from '../lib/spawn';
@@ -97,6 +100,8 @@ function session(over: Partial<CmuxSession> = {}): CmuxSession {
 
 beforeEach(() => {
   fs.rmSync(path.join(HOME, '.cmuxterm'), { recursive: true, force: true });
+  fs.rmSync(managerConfigFile(), { force: true });
+  resetConfigCache();
   fs.mkdirSync(WORK, { recursive: true });
 });
 
@@ -155,6 +160,15 @@ describe('pane ownership survives the run that created it', () => {
     ]);
   });
 
+  test('a reusable lane belongs to its current lease rather than an ended historical run', async () => {
+    const old = await recordPaneAndWaitForSession('surface:11', 'joy-old', 'implementer', WORK, {}, async () => null);
+    recordEndedPane(old.record, 'success', 'no');
+    await recordPaneAndWaitForSession('surface:11', 'joy-current', 'implementer', WORK, {}, async () => null);
+    expect(readPaneOwnership(['surface:11'])).toEqual([
+      expect.objectContaining({ ownership: 'manager', taskId: 'joy-current', workspaceRef: 'surface:11' }),
+    ]);
+  });
+
   test('a record not finalized by its run says fate unrecorded and closure unknown', async () => {
     await recordPaneAndWaitForSession('workspace:43', 'joy-t43', 'implementer', WORK, {}, async () => null);
     const ownership = readPaneOwnership(['workspace:43'])[0];
@@ -173,6 +187,294 @@ describe('pane ownership survives the run that created it', () => {
     const ownership = readPaneOwnership(['workspace:44', 'workspace:45']);
     expect(ownership[0].ownership === 'manager' && ownership[0].record.paneClosed).toBe('no');
     expect(ownership[1].ownership === 'manager' && ownership[1].record.paneClosed).toBe('yes');
+  });
+});
+
+describe('lane-backed cmux execution', () => {
+  function configureLane(enabled: boolean, closeOnSuccess = false): void {
+    fs.mkdirSync(path.dirname(managerConfigFile()), { recursive: true });
+    fs.writeFileSync(
+      managerConfigFile(),
+      JSON.stringify({
+        cmuxRoles: ['main'],
+        cmuxSkipPermissions: false,
+        cmuxLaneWorkspace: enabled ? 'improve-harness' : '',
+        cmuxLaneTitles: ['L1'],
+        cmuxCloseOnSuccess: closeOnSuccess,
+        maxAgents: 4,
+      }),
+    );
+    resetConfigCache();
+  }
+
+  function worktree(taskId: string) {
+    return {
+      ok: true as const,
+      reason: '',
+      reused: false,
+      record: {
+        taskId,
+        project: 'fixture',
+        repo: '/tmp/repo',
+        dir: `/tmp/${taskId}-work`,
+        branch: `manager/${taskId}`,
+        baseSha: 'abc',
+        createdAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  async function runLaneOutcome(
+    health: 'finished' | 'blocked' | 'aborted' | 'budget-exhausted',
+    taskId: string,
+    events: string[],
+  ) {
+    configureLane(true);
+    const lane = { title: 'L1', surfaceRef: 'surface:11', workspaceRef: 'workspace:7', foreground: 'shell' as const };
+    const port = createCmuxSpawnPort({
+      cmuxAvailable: () => true,
+      createWorkspace: () => ({ ok: false, ref: '', reason: 'must not create' }),
+      ensureTaskWorktree: () => worktree(taskId),
+      fleet: () => ({ ok: true, entries: [] }),
+      waitForSession: async () => null,
+      watchSession: async () => ({ health, everWorked: true, turns: 1, transcriptPath: '' }),
+      reserveLane: async () => ({ outcome: 'reserved', lane, release: () => events.push('release') }),
+      cmux: (args) => {
+        if (args[0] === 'send-key' && args.at(-1) === 'ctrl+c') events.push('interrupt');
+        if (events.includes('interrupt') && args[0] === 'send' && args.at(-1) === '/exit') events.push('exit');
+        if (events.includes('exit') && args[0] === 'send-key' && args.at(-1) === 'Enter') events.push('exit-enter');
+        return { ok: true, stdout: args[0] === 'read-screen' ? '$' : '', stderr: '' };
+      },
+    });
+    return port.run({
+      role: 'main',
+      taskId,
+      project: 'fixture',
+      issue: 'route it',
+      scope: '/tmp/repo',
+      source: 'cli',
+      prompt: 'work',
+      modelAlias: 'sonnet',
+      maxBudgetUsd: 1,
+    });
+  }
+
+  async function runWorkspaceOutcome(
+    health: 'finished' | 'blocked' | 'aborted' | 'budget-exhausted',
+    taskId: string,
+    closeOnSuccess: boolean,
+    closed: string[],
+  ) {
+    configureLane(false, closeOnSuccess);
+    const port = createCmuxSpawnPort({
+      cmuxAvailable: () => true,
+      createWorkspace: () => ({ ok: true, ref: `workspace:${taskId.length}`, reason: '' }),
+      closeWorkspace: (ref) => {
+        closed.push(ref);
+        return { ok: true, stdout: '', stderr: '' };
+      },
+      ensureTaskWorktree: () => worktree(taskId),
+      fleet: () => ({ ok: true, entries: [] }),
+      waitForSession: async () => null,
+      watchSession: async () => ({ health, everWorked: true, turns: 1, transcriptPath: '' }),
+      cmux: () => ({ ok: true, stdout: '', stderr: '' }),
+    });
+    return port.run({
+      role: 'main',
+      taskId,
+      project: 'fixture',
+      issue: 'route it',
+      scope: '/tmp/repo',
+      source: 'cli',
+      prompt: 'work',
+      modelAlias: 'sonnet',
+      maxBudgetUsd: 1,
+    });
+  }
+
+  test('a codex cmux run completes from JSONL without waiting for a Claude session', async () => {
+    const taskId = 'codex-task';
+    const taskDir = path.join(HOME, `${taskId}-work`);
+    fs.mkdirSync(taskDir, { recursive: true });
+    const fakeCodex = path.join(HOME, 'fake-codex');
+    fs.writeFileSync(
+      fakeCodex,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' '${JSON.stringify({ type: 'thread.started', thread_id: 'codex-thread' })}'`,
+        `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'bun test focused' } })}'`,
+        `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Done.\n```json\n{"verdict":"pass","reason":"sized","root_cause":"","gates":[],"findings":[],"advisories":[],"assumptions":[],"questions":[],"irreversible":[]}\n```' } })}'`,
+        `printf '%s\\n' '${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 8 } })}'`,
+      ].join('\n'),
+    );
+    fs.chmodSync(fakeCodex, 0o700);
+    fs.mkdirSync(path.dirname(managerConfigFile()), { recursive: true });
+    fs.writeFileSync(
+      managerConfigFile(),
+      JSON.stringify({
+        spawnRunner: 'cmux',
+        executionProvider: 'codex',
+        reviewProvider: 'opus-fresh',
+        cmuxCodexBin: fakeCodex,
+        cmuxRoles: ['main'],
+        cmuxLaneWorkspace: '',
+        maxAgents: 4,
+      }),
+    );
+    resetConfigCache();
+    let waitedForClaude = false;
+    let launch = '';
+    const port = createCmuxSpawnPort({
+      cmuxAvailable: () => true,
+      createWorkspace: (opts) => {
+        launch = opts.command;
+        const completed = spawnSync('/bin/zsh', ['-lc', opts.command], { cwd: opts.cwd, encoding: 'utf-8' });
+        return completed.status === 0
+          ? { ok: true, ref: 'workspace:81', reason: '' }
+          : { ok: false, ref: '', reason: completed.stderr || 'launch failed' };
+      },
+      ensureTaskWorktree: () => ({
+        ...worktree(taskId),
+        record: { ...worktree(taskId).record, dir: taskDir },
+      }),
+      fleet: () => ({ ok: true, entries: [] }),
+      waitForSession: async () => {
+        waitedForClaude = true;
+        return null;
+      },
+      watchSession: async () => {
+        throw new Error('Codex must not use the Claude session watcher');
+      },
+      cmux: () => ({ ok: true, stdout: '', stderr: '' }),
+    });
+    const result = await port.run({
+      role: 'main',
+      taskId,
+      project: 'fixture',
+      issue: 'route it',
+      scope: '/tmp/repo',
+      source: 'cli',
+      prompt: 'size this issue',
+      modelAlias: 'sonnet',
+    });
+    expect(launch).toContain('exec -s workspace-write -a never --json');
+    expect(waitedForClaude).toBe(false);
+    expect(result).toMatchObject({
+      exitReason: 'success',
+      model: 'codex',
+      sessionId: 'codex-thread',
+      turnsUsed: 1,
+      costKnown: false,
+    });
+    expect(result.output).toContain('"verdict":"pass"');
+  });
+
+  test('launches in a discovered surface and never creates or closes a workspace', async () => {
+    fs.mkdirSync(path.dirname(managerConfigFile()), { recursive: true });
+    fs.writeFileSync(
+      managerConfigFile(),
+      JSON.stringify({
+        cmuxRoles: ['main'],
+        cmuxSkipPermissions: false,
+        cmuxLaneWorkspace: 'improve-harness',
+        cmuxLaneTitles: ['L1', 'L2', 'L3', 'L4'],
+        maxAgents: 4,
+      }),
+    );
+    resetConfigCache();
+    const calls: string[][] = [];
+    let created = 0;
+    const cmux = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-workspaces') return { ok: true, stdout: 'workspace:7 improve-harness', stderr: '' };
+      if (args[0] === 'list-panes') return { ok: true, stdout: 'pane:1 L1', stderr: '' };
+      if (args[0] === 'list-pane-surfaces') return { ok: true, stdout: 'surface:11 L1', stderr: '' };
+      if (args[0] === 'read-screen') return { ok: true, stdout: '$', stderr: '' };
+      return { ok: true, stdout: '', stderr: '' };
+    };
+    const port = createCmuxSpawnPort({
+      cmuxAvailable: () => true,
+      createWorkspace: () => {
+        created += 1;
+        return { ok: false, ref: '', reason: 'must not create' };
+      },
+      ensureTaskWorktree: () => ({
+        ok: true,
+        reason: '',
+        reused: false,
+        record: {
+          taskId: 'lane-task',
+          project: 'fixture',
+          repo: '/tmp/repo',
+          dir: '/tmp/lane-task-work',
+          branch: 'manager/lane-task',
+          baseSha: 'abc',
+          createdAt: new Date().toISOString(),
+        },
+      }),
+      fleet: () => ({ ok: true, entries: [] }),
+      waitForSession: async () => null,
+      watchSession: async () => ({ health: 'finished', everWorked: true, turns: 1, transcriptPath: '' }),
+      cmux,
+    });
+    const result = await port.run({
+      role: 'main',
+      taskId: 'lane-task',
+      project: 'fixture',
+      issue: 'route it',
+      scope: '/tmp/repo',
+      source: 'cli',
+      prompt: 'work',
+      modelAlias: 'sonnet',
+      maxBudgetUsd: 1,
+    });
+    expect(result.exitReason).toBe('success');
+    expect(created).toBe(0);
+    expect(calls).toContainEqual(expect.arrayContaining(['send', '--surface', 'surface:11']));
+    expect(calls).toContainEqual(['send-key', '--surface', 'surface:11', 'Enter']);
+    fs.rmSync(managerConfigFile(), { force: true });
+    resetConfigCache();
+  });
+
+  test('an ordinary completed lane run exits the process before releasing the lane', async () => {
+    const events: string[] = [];
+    const result = await runLaneOutcome('finished', 'lane-finished', events);
+    expect(result.exitReason).toBe('success');
+    expect(events).toEqual(['interrupt', 'exit', 'exit-enter', 'release']);
+  });
+
+  test('a terminal lane run exits Claude before releasing the lane', async () => {
+    const events: string[] = [];
+    await runLaneOutcome('blocked', 'lane-exit', events);
+    expect(events).toEqual(['interrupt', 'exit', 'exit-enter', 'release']);
+  });
+
+  test.each(['aborted', 'budget-exhausted'] as const)(
+    'a lane run ending as %s still exits before release',
+    async (health) => {
+      const events: string[] = [];
+      await runLaneOutcome(health, `lane-${health}`, events);
+      expect(events).toEqual(['interrupt', 'exit', 'exit-enter', 'release']);
+    },
+  );
+
+  test('non-lane keep-open and close decisions are unchanged', async () => {
+    const failedClosed: string[] = [];
+    const failed = await runWorkspaceOutcome('blocked', 'workspace-blocked', true, failedClosed);
+    expect(failed.exitReason).toBe('blocked_on_permission');
+    expect(failedClosed).toEqual([]);
+
+    const abortedClosed: string[] = [];
+    await runWorkspaceOutcome('aborted', 'workspace-aborted', false, abortedClosed);
+    expect(abortedClosed).toHaveLength(1);
+
+    const budgetClosed: string[] = [];
+    await runWorkspaceOutcome('budget-exhausted', 'workspace-budget', false, budgetClosed);
+    expect(budgetClosed).toHaveLength(1);
+
+    const successClosed: string[] = [];
+    await runWorkspaceOutcome('finished', 'workspace-success', true, successClosed);
+    expect(successClosed).toHaveLength(1);
   });
 });
 
@@ -268,9 +570,31 @@ describe('watching a pane to a state worth reporting', () => {
     const outcome = await watchSession(WORK, { ...FAST, timeoutMs: 400, startupMs: 400 });
     expect(outcome.health).toBe('timeout');
   });
+
+  test('a running pane is stopped when transcript cost exhausts its reservation', async () => {
+    writeStore('running');
+    fs.writeFileSync(
+      path.join(HOME, 'transcript.jsonl'),
+      `${JSON.stringify({ message: { model: 'claude-opus-4-7', usage: { input_tokens: 0, output_tokens: 1_000_000 } } })}\n`,
+    );
+    const outcome = await watchSession(WORK, { ...FAST, timeoutMs: 400, startupMs: 400, maxBudgetUsd: 0.01 });
+    expect(outcome.health).toBe('budget-exhausted');
+  });
 });
 
 describe('the agent cap counts panes the manager never started', () => {
+  test('concurrent admissions cannot claim the same final slot', async () => {
+    const emptyFleet = () => ({ ok: true as const, entries: [] });
+    const first = await reserveSlot(1, 'first', { fleet: emptyFleet, pollMs: 10, timeoutMs: 40 });
+    const second = await reserveSlot(1, 'second', { fleet: emptyFleet, pollMs: 10, timeoutMs: 40 });
+    expect(first.outcome).toBe('reserved');
+    expect(second.outcome).toBe('timeout');
+    if (first.outcome === 'reserved') first.release();
+    const third = await reserveSlot(1, 'third', { fleet: emptyFleet, pollMs: 10, timeoutMs: 40 });
+    expect(third.outcome).toBe('reserved');
+    if (third.outcome === 'reserved') third.release();
+  });
+
   test('a free machine lets a spawn through', async () => {
     writeStore('idle');
     expect(await waitForSlot(2, { home: HOME, pollMs: 20 })).toBe('free');
@@ -324,6 +648,19 @@ describe('the prompt never gets typed into a TUI', () => {
     const file = writePromptFile(path.join(HOME, 'pane3'), 'hi');
     const cmd = buildLaunchCommand({ claudeBin: 'claude', promptFile: file, extraArgs: ['--dangerously-skip-permissions'] });
     expect(cmd.indexOf('--dangerously-skip-permissions')).toBeLessThan(cmd.indexOf('$(cat'));
+  });
+
+  test('a codex execution config builds an unattended sandboxed one-shot command', () => {
+    const file = writePromptFile(path.join(HOME, 'pane-codex'), 'implement this\nthen emit the verdict block');
+    const cmd = buildExecutionLaunchCommand(
+      { ...DEFAULT_CONFIG, executionProvider: 'codex', cmuxCodexBin: 'codex-custom' },
+      file,
+      'sonnet',
+    );
+    expect(cmd).toStartWith("'codex-custom' exec -s workspace-write -a never --json -c model_reasoning_effort=high");
+    expect(cmd).toContain(`"$(cat '${file}')"`);
+    expect(cmd).not.toContain('--dangerously-skip-permissions');
+    expect(cmd).not.toContain('--model');
   });
 
   // Nothing that reaches the builder is user or agent text — it is a binary
@@ -538,9 +875,10 @@ describe('readScreen distinguishes a failed read from a genuinely empty pane', (
     const script = `
       import { mock } from 'bun:test';
       mock.module(${JSON.stringify(configUrl)}, () => ({
-        loadConfig: () => ({ cmuxRoles: ['implementer'], cmuxSkipPermissions: false, worktreeLinks: [], cmuxSlotWaitMs: 1, cmuxClaudeArgs: [], cmuxClaudeBin: 'claude', cmuxStartupMs: 1, cmuxRunTimeoutMs: 1, cmuxNeedsInputGraceMs: 1, cmuxCloseOnSuccess: false }),
+        loadConfig: () => ({ cmuxRoles: ['implementer'], cmuxSkipPermissions: false, worktreeLinks: [], cmuxSlotWaitMs: 1, cmuxClaudeArgs: [], cmuxClaudeBin: 'claude', cmuxLaneWorkspace: '', cmuxLaneTitles: ['L1', 'L2', 'L3', 'L4'], cmuxStartupMs: 1, cmuxRunTimeoutMs: 1, cmuxNeedsInputGraceMs: 1, cmuxCloseOnSuccess: false }),
         resolveMaxAgents: () => 1,
-        resolveModelId: () => 'model'
+        resolveModelId: () => 'model',
+        resolveProjectConcurrency: () => 1
       }));
       mock.module(${JSON.stringify(controlUrl)}, () => ({
         buildLaunchCommand: () => 'launch',
@@ -548,7 +886,10 @@ describe('readScreen distinguishes a failed read from a genuinely empty pane', (
         cmuxAvailable: () => true,
         createWorkspace: () => ({ ok: true, ref: 'workspace:77', reason: '' }),
         readScreen: () => (${JSON.stringify(screenResult)}),
+        runCmux: () => ({ ok: true, stdout: '', stderr: '' }),
         sessionInDir: () => null,
+        shellSafePath: () => true,
+        singleQuote: (value) => "'" + value + "'",
         sleep: async () => {},
         waitForSession: async () => ({ sessionId: 's', transcriptPath: '', cwd: '/tmp/cmux-test-work' }),
         writePromptFile: () => '/tmp/prompt'
@@ -562,7 +903,10 @@ describe('readScreen distinguishes a failed read from a genuinely empty pane', (
       }));
       mock.module(${JSON.stringify(pathsUrl)}, () => ({ atomicWriteJson: () => {}, managerDir: () => '/tmp/cmux-test-manager' }));
       mock.module(${JSON.stringify(runnerUrl)}, () => ({ agentSdkSpawnPort: { run: async () => { throw new Error('unexpected SDK run'); } }, scopeDirective: () => 'scope' }));
-      mock.module(${JSON.stringify(worktreesUrl)}, () => ({ ensureTaskWorktree: () => ({ ok: true, record: { dir: '/tmp/cmux-test-work' } }) }));
+      mock.module(${JSON.stringify(worktreesUrl)}, () => ({
+        cloneNodeModules: () => ({ ok: true, reason: '' }),
+        ensureTaskWorktree: () => ({ ok: true, record: { dir: '/tmp/cmux-test-work' } })
+      }));
       mock.module(${JSON.stringify(costUrl)}, () => ({ measuredCost: () => ({ usd: 0, known: false, model: '' }) }));
       const { cmuxSpawnPort } = await import(${JSON.stringify(`${spawnUrl}?operator-output-test`)});
       const result = await cmuxSpawnPort.run({ role: 'implementer', taskId: 't', project: 'p', issue: 'i', scope: '/tmp/cmux-test-work', source: 'cli', prompt: 'x', modelAlias: 'm' });

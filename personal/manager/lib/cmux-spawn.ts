@@ -648,6 +648,14 @@ export interface CmuxSpawnDeps {
   reserveLane: typeof reserveLane;
 }
 
+function endLaneAgent(lane: ReservedLane, cfg: ManagerConfig, executor: LaneCmuxExecutor): void {
+  const interrupted = interruptLane(lane, executor);
+  if (!interrupted.ok || cfg.executionProvider !== 'claude') return;
+  const exited = executor(['send', '--surface', lane.surfaceRef, '--', '/exit']);
+  if (!exited.ok) return;
+  executor(['send-key', '--surface', lane.surfaceRef, 'Enter']);
+}
+
 export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPort {
   const checkAvailable = deps.cmuxAvailable ?? cmuxAvailable;
   const makeWorkspace = deps.createWorkspace ?? createWorkspace;
@@ -831,7 +839,7 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
             ? readScreen(created.ref, 120)
             : null;
         const screen = screenResult?.ok ? screenResult.screen : '';
-        if (lane) interruptLane(lane, cmuxExecutor);
+        if (lane) endLaneAgent(lane, cfg, cmuxExecutor);
         const shouldClose = !lane && (aborted || timedOut || (!keepOpen && cfg.cmuxCloseOnSuccess));
         const closeResult = shouldClose
           ? deps.closeWorkspace
@@ -897,7 +905,7 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
           ? readScreen(created.ref, 120)
           : null;
       const screen = screenResult?.ok ? screenResult.screen : '';
-      if (lane) interruptLane(lane, cmuxExecutor);
+      if (lane) endLaneAgent(lane, cfg, cmuxExecutor);
       const shouldClose = !lane && (aborted || budgetStopped || (!keepOpen && cfg.cmuxCloseOnSuccess));
       const closeResult = shouldClose
         ? deps.closeWorkspace

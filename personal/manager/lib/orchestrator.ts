@@ -29,7 +29,7 @@ import type { AgentRole, AssertRunRecord, TaskRecord, TaskSource, TaskState } fr
 import { ACTIVE_STATES, isTerminal } from '../types';
 import { logGate, shouldBlindSample } from './gate-log-port';
 import { parseEnvelope, preserveRejectedOutput, preserveTaskDiff, rejectedOutputText, type RejectedOutputEvidence } from './envelope';
-import { acquire, BROWSER_TOKEN, projectLock, release, releaseAll } from './locks';
+import { acquire, acquireProject, BROWSER_TOKEN, release, releaseAll, releaseProject } from './locks';
 import {
   BLOCKING_HOOK_GATES,
   BROWSER_GATES,
@@ -47,7 +47,13 @@ import { buildApprovalEvent, buildReportEvent, emit } from './events';
 import type { AssertRun } from './assert-runner';
 import { resolveProjectScope } from './paths';
 import { executePrompt, sizingPrompt } from './prompts';
-import { applyTransition, isNoRetryReason, nextAfterVerifyFailure, RESUME_REASON } from './state-machine';
+import {
+  applyTransition,
+  INFRA_RETRY_REASON,
+  isNoRetryReason,
+  nextAfterVerifyFailure,
+  RESUME_REASON,
+} from './state-machine';
 import {
   abortTask,
   clearTaskAbort,
@@ -82,6 +88,8 @@ export interface OrchestratorDeps {
   exec?: ChainContext['exec'];
   /** Reads the staged diff the review gates judge. Stubbed in tests. */
   diff?: ChainContext['diff'];
+  /** Replaces infrastructure backoff in tests so no wall-clock delay is paid. */
+  infraRetryDelay?: (delayMs: number) => Promise<void>;
 }
 
 export interface SubmitInput {
@@ -103,8 +111,11 @@ const APPROVAL_BUDGET = 'raise the budget';
 const APPROVAL_START = 'start this task';
 const APPROVAL_ORACLE = 'fix the oracle, then re-verify';
 const APPROVAL_ASSERT_CMD = 'run this test command';
+const INFRA_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 
 type HumanTouchKind = 'answer' | 'approve' | 'stop' | 'stopall' | 'budget-raise';
+
+class BudgetParkedError extends Error {}
 
 function spawnFailureReason(phase: 'sizing' | 'execution', run: SpawnResult): string {
   const detail = run.output.trim();
@@ -160,6 +171,7 @@ export class Orchestrator {
   private readonly blindSample: () => boolean;
   private readonly exec: ChainContext['exec'];
   private readonly diff: ChainContext['diff'];
+  private readonly infraRetryDelay: (delayMs: number) => Promise<void>;
   private readonly stopRequested = new Set<string>();
   private readonly running = new Map<string, Promise<void>>();
   private readonly roundTwoFail = new Set<string>();
@@ -171,6 +183,7 @@ export class Orchestrator {
     this.blindSample = deps.blindSample ?? (() => shouldBlindSample());
     this.exec = deps.exec;
     this.diff = deps.diff;
+    this.infraRetryDelay = deps.infraRetryDelay ?? ((delayMs) => Bun.sleep(delayMs));
   }
 
   async submit(input: SubmitInput): Promise<SubmitResult> {
@@ -201,6 +214,7 @@ export class Orchestrator {
     if (existing) return existing;
     const promise = this.advance(id)
       .catch(async (err) => {
+        if (err instanceof BudgetParkedError) return;
         const task = loadTask(id);
         if (task && !isTerminal(task.state)) {
           await this.terminate(task, 'FAILED', String((err as Error)?.message ?? err));
@@ -269,7 +283,7 @@ export class Orchestrator {
    * revokes a crashed holder. Idempotent when already held.
    */
   private async ensureProjectLock(task: TaskRecord): Promise<void> {
-    await acquire(projectLock(task.project), task.id, process.pid, { timeoutMs: 0 });
+    await acquireProject(task.project, task.id, undefined, process.pid, { timeoutMs: 0 });
   }
 
   private async phaseSize(task: TaskRecord): Promise<boolean> {
@@ -282,21 +296,8 @@ export class Orchestrator {
       return false;
     }
     const prompt = sizingPrompt(task.project, task.issue);
-    let run = await this.spawn(task, 'main', prompt, this.spawnPort);
-    let transient = transientRunFailure(run);
-    if (transient) {
-      const afforded = this.retryAfforded(task);
-      if (!afforded.ok) {
-        await this.terminate(task, 'BLOCKED', `${transientFailureReason('sizing', run, transient)}; no retry: ${afforded.reason}`);
-        return false;
-      }
-      run = await this.spawn(loadTask(task.id) ?? task, 'main', prompt, this.spawnPort);
-      transient = transientRunFailure(run);
-    }
-    if (transient) {
-      await this.terminate(task, 'BLOCKED', transientFailureReason('sizing', run, transient));
-      return false;
-    }
+    const run = await this.runAgentWithInfraRetry(task, 'sizing', 'main', () => prompt, this.spawnPort);
+    if (!run) return false;
     const parsed = parseRunEnvelope(run, this.roundTwoFail.has(task.id));
     if (!parsed.ok || !parsed.envelope) {
       const reason = withRejectedOutputEvidence(
@@ -368,30 +369,15 @@ export class Orchestrator {
       await this.parkForApproval(task, APPROVAL_BUDGET, budget.reason);
       return false;
     }
-    task.attempt_started_at = new Date().toISOString();
-    saveTask(task);
-    const priorFailure = task.failure_reason || 'unspecified';
-    const prompt = executePrompt(envelope, task.attempt, priorFailure);
-    let run = await this.spawn(
+    const run = await this.runAgentWithInfraRetry(
       task,
+      'execution',
       'subagent',
-      prompt,
+      (attemptTask) => executePrompt(envelope, attemptTask.attempt, attemptTask.failure_reason || 'unspecified'),
       this.spawnPort,
+      true,
     );
-    let transient = transientRunFailure(run);
-    if (transient) {
-      const afforded = this.retryAfforded(task);
-      if (!afforded.ok) {
-        await this.terminate(task, 'BLOCKED', `${transientFailureReason('execution', run, transient)}; no retry: ${afforded.reason}`);
-        return false;
-      }
-      run = await this.spawn(loadTask(task.id) ?? task, 'subagent', prompt, this.spawnPort);
-      transient = transientRunFailure(run);
-    }
-    if (transient) {
-      await this.terminate(task, 'BLOCKED', transientFailureReason('execution', run, transient));
-      return false;
-    }
+    if (!run) return false;
     const verdict = parseVerdictCandidates(run.outputs, run.output);
     const current = this.absorbVerdict(loadTask(task.id) ?? task, verdict);
 
@@ -620,6 +606,7 @@ export class Orchestrator {
     saveTask(task);
     logGate({
       project: task.project,
+      task_id: task.id,
       issue: task.issue,
       lane: task.envelope?.lane ?? 'unsized',
       gate: `human-${kind}`,
@@ -720,6 +707,52 @@ export class Orchestrator {
   // Internals
   // -------------------------------------------------------------------------
 
+  private async runAgentWithInfraRetry(
+    task: TaskRecord,
+    phase: 'sizing' | 'execution',
+    role: AgentRole,
+    prompt: (task: TaskRecord) => string,
+    port: SpawnPort,
+    markAttemptStart = false,
+  ): Promise<SpawnResult | null> {
+    let current = task;
+    for (;;) {
+      if (markAttemptStart) {
+        current.attempt_started_at = new Date().toISOString();
+        saveTask(current);
+      }
+      const run = await this.spawn(current, role, prompt(current), port);
+      const transient = transientRunFailure(run);
+      if (!transient) return run;
+      current = loadTask(current.id) ?? current;
+      if (isTerminal(current.state)) return null;
+      const why = transientFailureReason(phase, run, transient);
+      if (current.attempt >= current.max_attempts) {
+        await this.terminate(current, 'BLOCKED', `retry cap ${current.max_attempts} reached; still failing: ${why}`);
+        return null;
+      }
+      const afforded = this.retryAfforded(current);
+      if (!afforded.ok) {
+        await this.terminate(current, 'BLOCKED', `${why}; no retry: ${afforded.reason}`);
+        return null;
+      }
+      const from = current.state;
+      const retried = applyTransition(current, from, {
+        reason: INFRA_RETRY_REASON,
+        failureReason: why,
+      });
+      await saveTaskAndIndex(retried);
+      this.logTransition(retried, from, from, 'caught', why);
+      await releaseProject(retried.project, retried.id);
+      const delayIndex = Math.min(current.attempt - 1, INFRA_RETRY_DELAYS_MS.length - 1);
+      await this.infraRetryDelay(INFRA_RETRY_DELAYS_MS[delayIndex]);
+      current = loadTask(retried.id) ?? retried;
+      if (isTerminal(current.state)) return null;
+      await this.ensureProjectLock(current);
+      current = loadTask(current.id) ?? current;
+    }
+  }
+
   /**
    * `opts.scope` overrides the project root for one run. The chain gates use
    * it to sit in the task's own worktree; nothing else passes it.
@@ -733,7 +766,12 @@ export class Orchestrator {
   ) {
     const cfg = loadConfig();
     const modelAlias = modelForRole(role, { lane: task.envelope?.lane, attempt: task.attempt, cfg });
-    const maxBudgetUsd = this.reserveBudget(task, cfg);
+    const reservation = this.reserveBudget(task, cfg);
+    if (!reservation.ok) {
+      await this.parkForApproval(loadTask(task.id) ?? task, APPROVAL_BUDGET, reservation.reason);
+      throw new BudgetParkedError(reservation.reason);
+    }
+    const maxBudgetUsd = reservation.amount;
     const req: SpawnRequest = {
       role,
       taskId: task.id,
@@ -789,13 +827,21 @@ export class Orchestrator {
   }
 
   /** Reservations make concurrent runs divide daily headroom instead of each authorizing the same dollars. */
-  private reserveBudget(task: TaskRecord, cfg: ManagerConfig): number {
+  private reserveBudget(task: TaskRecord, cfg: ManagerConfig): { ok: true; amount: number } | { ok: false; reason: string } {
     const taskHeadroom = task.cost_ceiling_usd <= 0 ? Number.POSITIVE_INFINITY : task.cost_ceiling_usd - task.cost_usd_actual;
     const reserved = [...this.budgetReservations.values()].reduce((sum, amount) => sum + amount, 0);
-    const dayHeadroom = cfg.dayCeilingUsd - spentToday() - reserved;
+    const spent = spentToday();
+    const dayHeadroom = cfg.dayCeilingUsd - spent - reserved;
     const amount = round6(Math.max(0, Math.min(taskHeadroom, dayHeadroom)));
+    if (amount <= 0) {
+      const reason =
+        taskHeadroom <= 0
+          ? `task spend $${task.cost_usd_actual.toFixed(2)} reached ceiling $${task.cost_ceiling_usd.toFixed(2)}`
+          : `daily budget has no unreserved headroom: spent $${spent.toFixed(2)} plus $${reserved.toFixed(2)} reserved of $${cfg.dayCeilingUsd.toFixed(2)}`;
+      return { ok: false, reason };
+    }
     this.budgetReservations.set(task.id, amount);
-    return amount;
+    return { ok: true, amount };
   }
 
   /**
@@ -862,6 +908,7 @@ export class Orchestrator {
   private chainContext(task: TaskRecord, envelope: NonNullable<TaskRecord['envelope']>, hasRealBrowser: boolean): ChainContext {
     const workdir = resolveTaskWorkdir(task.id, task.scope, task.worktree_created !== undefined);
     return {
+      taskId: task.id,
       project: task.project,
       issue: task.issue,
       scope: task.scope,
@@ -946,6 +993,7 @@ export class Orchestrator {
       verdict.gates.filter((gate) => !MANAGER_OWNED_GATES.includes(gate.gate)),
       {
         project: task.project,
+        taskId: task.id,
         since: task.run_started_at || task.created_at,
         until: new Date().toISOString(),
       },
@@ -957,6 +1005,7 @@ export class Orchestrator {
     for (const gate of verdict.gates) {
       logGate({
         project: task.project,
+        task_id: task.id,
         issue: task.issue,
         lane: task.envelope?.lane ?? 'unsized',
         gate: gate.gate,
@@ -1037,6 +1086,7 @@ export class Orchestrator {
       }));
     const window = {
       project: task.project,
+      taskId: task.id,
       since: task.attempt_started_at || task.created_at,
       until: new Date().toISOString(),
       attempt: task.attempt,
@@ -1112,7 +1162,7 @@ export class Orchestrator {
     parked.pending_action = action;
     parked.resume_state = from === 'SIZED' || from === 'INTAKE' ? '' : from;
     await saveTaskAndIndex(parked);
-    await release(projectLock(parked.project), parked.id);
+    await releaseProject(parked.project, parked.id);
     this.logTransition(parked, from, 'APPROVAL', 'pass', detail);
     emit(buildApprovalEvent(parked, action, detail));
   }
@@ -1154,6 +1204,7 @@ export class Orchestrator {
   ): void {
     logGate({
       project: task.project,
+      task_id: task.id,
       issue: task.issue,
       lane: task.envelope?.lane ?? 'unsized',
       gate: `lifecycle:${from}->${to}`,

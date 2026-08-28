@@ -5,18 +5,21 @@
  *                 |        |            |          |           |
  *              BLOCKED  REJECTED     BLOCKED   RETRY(<=3)   BLOCKED
  *
- * The retry edge is the load-bearing rule: VERIFYING -> RUNNING exists ONLY
- * for a B8 verify failure. A block at B2 (root cause not proven) or B4
- * (red-team hole) is terminal, because a second attempt starts from the same
- * empty evidence and cannot reach a different answer. This mirrors
- * /fix-bug-loop and is not a knob.
+ * The retry edges are the load-bearing rule. VERIFYING -> RUNNING exists only
+ * for a B8 verify failure. A same-state retry in INTAKE or RUNNING exists only
+ * when infrastructure kept the agent from answering. Both consume the shared
+ * attempt budget. A block at B2 (root cause not proven) or B4 (red-team hole)
+ * is terminal because a second attempt starts from the same empty evidence.
  */
 
 import type { TaskRecord, TaskState } from '../types';
 import { isTerminal } from '../types';
 
-/** Only this reason may consume a retry attempt. */
+/** Only this reason may retry a failed verification. */
 export const RETRY_REASON = 'b8-verify-failed';
+
+/** Only this reason may retry an agent run without advancing its phase. */
+export const INFRA_RETRY_REASON = 'infra-run-failed';
 
 /** Only this reason may move a task back out of a mid-run APPROVAL park. */
 export const RESUME_REASON = 'resume-after-approval';
@@ -41,10 +44,10 @@ export const NO_RETRY_REASONS = ['b2-root-cause-unproven', 'b4-red-team-hole'] a
  * it parked instead of silently restarting a phase.
  */
 const ALLOWED: Record<TaskState, readonly TaskState[]> = {
-  INTAKE: ['SIZED', 'BLOCKED', 'REJECTED', 'FAILED'],
+  INTAKE: ['INTAKE', 'SIZED', 'APPROVAL', 'BLOCKED', 'REJECTED', 'FAILED'],
   SIZED: ['APPROVAL', 'RUNNING', 'BLOCKED', 'REJECTED', 'FAILED'],
   APPROVAL: ['RUNNING', 'VERIFYING', 'REVIEW', 'REJECTED', 'BLOCKED', 'FAILED'],
-  RUNNING: ['VERIFYING', 'APPROVAL', 'BLOCKED', 'FAILED'],
+  RUNNING: ['RUNNING', 'VERIFYING', 'APPROVAL', 'BLOCKED', 'FAILED'],
   VERIFYING: ['REVIEW', 'RUNNING', 'APPROVAL', 'BLOCKED', 'FAILED'],
   REVIEW: ['REPORTED', 'APPROVAL', 'BLOCKED', 'FAILED'],
   REPORTED: [],
@@ -67,6 +70,23 @@ export function canTransition(record: TaskRecord, to: TaskState, reason = ''): T
   }
   if (!ALLOWED[from].includes(to)) {
     return { ok: false, error: `illegal transition ${from} -> ${to}`, consumesAttempt: false };
+  }
+  if ((from === 'INTAKE' || from === 'RUNNING') && to === from) {
+    if (reason !== INFRA_RETRY_REASON) {
+      return {
+        ok: false,
+        error: `same-state retry from ${from} requires reason "${INFRA_RETRY_REASON}", got "${reason || '(none)'}"`,
+        consumesAttempt: false,
+      };
+    }
+    if (record.attempt >= record.max_attempts) {
+      return {
+        ok: false,
+        error: `retry cap reached (${record.attempt}/${record.max_attempts})`,
+        consumesAttempt: false,
+      };
+    }
+    return { ok: true, error: '', consumesAttempt: true };
   }
   if (from === 'VERIFYING' && to === 'RUNNING') {
     if (reason !== RETRY_REASON) {

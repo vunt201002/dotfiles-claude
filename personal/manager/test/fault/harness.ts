@@ -170,6 +170,7 @@ export async function runOrchestrator(world: FaultWorld, reply: RunnerReply, bli
     blindSample: () => blindSample,
     exec: fakeExec(),
     diff: fakeDiff,
+    infraRetryDelay: async () => undefined,
   });
   const submitted = await orchestrator.submit({ project: PROJECT, issue: 'fault-contract', source: 'cli' });
   if (!submitted.accepted) throw new Error(submitted.error);

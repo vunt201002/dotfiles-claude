@@ -158,7 +158,7 @@ function makePort(
   const port: SpawnPort = {
     async run(req) {
       for (const gate of hookGates) {
-        appendGateLog({ project: req.project, gate, gate_family: 'deterministic', verdict: 'pass' });
+        appendGateLog({ project: req.project, task_id: req.taskId, gate, gate_family: 'deterministic', verdict: 'pass' });
       }
       const call: MockCall = {
         phase: phaseOf(req),
@@ -205,7 +205,7 @@ function happyReply(phase: Phase): string {
 function newOrchestrator(
   port: SpawnPort,
   blindSample = () => false,
-  opts: { exec?: ExecFn; diff?: () => DiffResult } = {},
+  opts: { exec?: ExecFn; diff?: () => DiffResult; infraRetryDelay?: (delayMs: number) => Promise<void> } = {},
 ): Orchestrator {
   return new Orchestrator({
     spawnPort: port,
@@ -213,6 +213,7 @@ function newOrchestrator(
     blindSample,
     exec: opts.exec ?? execStub(() => ({})).exec,
     diff: opts.diff ?? stubDiff,
+    infraRetryDelay: opts.infraRetryDelay ?? (async () => undefined),
   });
 }
 
@@ -705,6 +706,53 @@ describe('scarce resources', () => {
     expect(holderOf(projectLock('other'))).toBeNull();
   }, 20_000);
 
+  test('an opted-in project runs two tasks concurrently and queues the third', async () => {
+    fs.writeFileSync(
+      managerConfigFile(),
+      JSON.stringify({ browserTools: ['mcp__test-browser__navigate'], projectConcurrency: { [PROJECT]: 2 } }),
+    );
+    resetConfigCache();
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let enteredFirst!: () => void;
+    let enteredSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve;
+    });
+    const secondEntered = new Promise<void>((resolve) => {
+      enteredSecond = resolve;
+    });
+    const { port } = makePort(async (phase, call) => {
+      if (phase === 'size' && call.taskId.includes('-lane-first-')) {
+        enteredFirst();
+        await firstGate;
+      }
+      if (phase === 'size' && call.taskId.includes('-lane-second-')) {
+        enteredSecond();
+        await secondGate;
+      }
+      return happyReply(phase);
+    });
+    const manager = newOrchestrator(port);
+    const first = await manager.submit({ project: PROJECT, issue: 'lane-first', source: 'cli' });
+    await firstEntered;
+    const second = await manager.submit({ project: PROJECT, issue: 'lane-second', source: 'cli' });
+    await secondEntered;
+    const third = await manager.submit({ project: PROJECT, issue: 'lane-third', source: 'cli' });
+    await Bun.sleep(50);
+    expect(queueFor(projectLock(PROJECT))).toEqual([third.taskId]);
+    releaseFirst();
+    releaseSecond();
+    await Promise.all([manager.settle(first.taskId), manager.settle(second.taskId), manager.settle(third.taskId)]);
+    expect(loadTask(third.taskId)?.state).toBe('REPORTED');
+  }, 20_000);
+
   test('a third task queued behind two slow live holders is not terminated for waiting', async () => {
     fs.writeFileSync(
       managerConfigFile(),
@@ -763,6 +811,76 @@ describe('scarce resources', () => {
 });
 
 describe('cost ceilings', () => {
+  test('concurrent reservations park a zero-headroom INTAKE task without invoking its runner', async () => {
+    fs.writeFileSync(
+      managerConfigFile(),
+      JSON.stringify({ browserTools: ['mcp__test-browser__navigate'], bootstrapTaskCeilingUsd: 40, dayCeilingUsd: 40 }),
+    );
+    resetConfigCache();
+    let releaseFirst!: () => void;
+    let enteredFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve;
+    });
+    const requests: SpawnRequest[] = [];
+    const port: SpawnPort = {
+      async run(req) {
+        requests.push(req);
+        if (req.project === 'reservation-first') {
+          enteredFirst();
+          await firstGate;
+        }
+        return {
+          output: 'no parseable envelope',
+          outputs: ['no parseable envelope'],
+          exitReason: 'success',
+          turnsUsed: 1,
+          costUsd: 0,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: `reservation-${requests.length}`,
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const first = await manager.submit({ project: 'reservation-first', issue: 'first', source: 'cli', scope: REPO });
+    await firstEntered;
+    const second = await manager.submit({ project: 'reservation-second', issue: 'second', source: 'cli', scope: REPO });
+    await manager.settle(second.taskId);
+
+    const parked = loadTask(second.taskId);
+    expect(parked?.state).toBe('APPROVAL');
+    expect(parked?.pending_action).toBe('raise the budget');
+    expect(parked?.failure_reason).toBe('');
+    expect(requests.map((request) => request.taskId)).toEqual([first.taskId]);
+
+    releaseFirst();
+    await manager.settle(first.taskId);
+  });
+
+  test('a queued task parks from INTAKE when prior tasks have exhausted the daily budget', async () => {
+    const prior = newTaskRecord({ project: 'other', issue: 'prior-spend', source: 'cli', scope: REPO, ceilingUsd: 50 });
+    prior.cost_usd_actual = 40;
+    await saveTaskAndIndex(prior);
+    const { port, calls } = makePort(happyReply);
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'daily-budget-park', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('APPROVAL');
+    expect(task?.pending_action).toBe('raise the budget');
+    expect(task?.resume_state).toBe('');
+    expect(task?.failure_reason).toBe('');
+    expect(task?.report_lines.join(' ')).toContain('daily spend $40.00 reached ceiling $40.00');
+    expect(calls).toHaveLength(0);
+  });
+
   test('a single run that overshoots its ceiling is capped and records the breach loudly', async () => {
     const requests: SpawnRequest[] = [];
     const port: SpawnPort = {
@@ -1128,6 +1246,7 @@ describe('findings and the ensemble rule', () => {
       if (call.phase === 'execute') {
         appendGateLog({
           project: PROJECT,
+          task_id: call.taskId,
           gate: 'tsc',
           gate_family: 'deterministic',
           verdict: 'caught',
@@ -1588,13 +1707,53 @@ describe('bad agent output', () => {
 
     const task = loadTask(taskId);
     expect(task?.state).toBe('BLOCKED');
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(task?.agents).toHaveLength(0);
+    expect(task?.attempt).toBe(3);
     expect(task?.failure_reason).toContain('cmux_unavailable');
     expect(task?.failure_reason).toContain('Start the cmux app');
     expect(task?.failure_reason).toContain('spawn failed');
     expect(task?.failure_reason).not.toContain('envelope rejected');
     expect(task?.failure_reason).not.toContain('no JSON object found');
+  });
+
+  test('sizing infrastructure failures retry later and recover within the shared attempt cap', async () => {
+    const attempts: number[] = [];
+    const delays: number[] = [];
+    const { port: healthy } = makePort(happyReply);
+    const port: SpawnPort = {
+      async run(req) {
+        if (phaseOf(req) === 'size') {
+          attempts.push(req.attempt ?? 0);
+          if (attempts.length < 3) {
+            return {
+              output: 'cmux is temporarily unavailable',
+              outputs: [],
+              exitReason: 'cmux_unavailable',
+              turnsUsed: 0,
+              costUsd: 0,
+              costKnown: true,
+              model: req.modelAlias,
+              sessionId: '',
+              durationMs: 1,
+              worktreeCreated: false,
+            };
+          }
+        }
+        return healthy.run(req);
+      },
+    };
+    const manager = newOrchestrator(port, () => false, {
+      infraRetryDelay: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    });
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'infra-recovers', source: 'cli' });
+    await manager.settle(taskId);
+
+    expect(loadTask(taskId)).toMatchObject({ state: 'REPORTED', attempt: 3, max_attempts: 3 });
+    expect(attempts).toEqual([1, 2, 3]);
+    expect(delays).toEqual([5_000, 30_000]);
   });
 
   test('a success result with no evidence of an agent is a retried spawn failure', async () => {
@@ -1621,8 +1780,9 @@ describe('bad agent output', () => {
     await manager.settle(taskId);
 
     const task = loadTask(taskId);
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(task?.state).toBe('BLOCKED');
+    expect(task?.attempt).toBe(3);
     expect(task?.agents).toHaveLength(0);
     expect(task?.failure_reason).toContain('spawn failed');
     expect(task?.failure_reason).not.toContain('envelope rejected');
@@ -1644,16 +1804,18 @@ describe('bad agent output', () => {
     expect(task?.failure_reason).toContain('no retry');
   });
 
-  test('an agent that returns empty output is retried once and named without blaming parsing', async () => {
+  test('an agent that returns empty output retries to the shared cap and is named without blaming parsing', async () => {
     const { port, calls } = makePort((phase) => (phase === 'size' ? envelopeJson() : ''));
     const manager = newOrchestrator(port);
     const { taskId } = await manager.submit({ project: PROJECT, issue: 't1', source: 'cli' });
     await manager.settle(taskId);
 
     const task = loadTask(taskId);
-    expect(calls.filter((call) => call.phase === 'execute')).toHaveLength(2);
+    expect(calls.filter((call) => call.phase === 'execute')).toHaveLength(3);
     expect(task?.state).toBe('BLOCKED');
-    expect(task?.failure_reason).toBe('execution agent produced no output');
+    expect(task?.attempt).toBe(3);
+    expect(task?.failure_reason).toContain('execution agent produced no output');
+    expect(task?.failure_reason).toContain('retry cap 3 reached');
     expect(task?.failure_reason).not.toContain('parseable verdict');
   });
 

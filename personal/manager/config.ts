@@ -82,7 +82,7 @@ export interface ManagerConfig {
    * number read as a spend limit.
    */
   maxUnmeasuredRunsPerTask: number;
-  /** Retry cap. Only a B8 verify failure consumes an attempt (§5). */
+  /** Retry cap shared by B8 verification and infrastructure failures (§5). */
   maxAttempts: number;
   /**
    * §6.3 — how long a task waits for a scarce lock before it gives up. A hung
