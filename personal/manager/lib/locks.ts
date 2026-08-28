@@ -26,7 +26,7 @@
 
 import { randomUUID } from 'crypto';
 import { isProcessAlive } from '../../../browse/src/error-handling';
-import { loadConfig } from '../config';
+import { loadConfig, resolveProjectConcurrency } from '../config';
 import { logGate } from './gate-log-port';
 import { loadTask, mutateState, readState } from './store';
 import type { ManagerState } from '../types';
@@ -35,6 +35,15 @@ export const BROWSER_TOKEN = 'browser-token';
 
 export function projectLock(project: string): string {
   return `project:${project}`;
+}
+
+function projectSlotLock(project: string, slot: number): string {
+  return slot === 0 ? projectLock(project) : `${projectLock(project)}#${slot + 1}`;
+}
+
+function projectNameFromLock(lock: string): string | null {
+  if (!lock.startsWith('project:')) return null;
+  return lock.slice('project:'.length).replace(/#\d+$/, '');
 }
 
 type Waiter = { resolve: () => void; reject: (err: Error) => void };
@@ -112,7 +121,8 @@ function wakeWaiter(lock: string, taskId: string): void {
 function projectForTask(lock: string, taskId: string): string {
   const record = loadTask(taskId);
   if (record?.project) return record.project;
-  if (lock.startsWith('project:')) return lock.slice('project:'.length);
+  const project = projectNameFromLock(lock);
+  if (project) return project;
   return 'manager';
 }
 
@@ -145,6 +155,7 @@ function logLockTimeout(lock: string, taskId: string, waitedMs: number): void {
   const record = loadTask(taskId);
   logGate({
     project: projectForTask(lock, taskId),
+    task_id: taskId,
     issue: record?.issue,
     lane: record?.envelope?.lane ?? 'unsized',
     gate: 'lock-wait',
@@ -210,6 +221,81 @@ export async function acquire(
   }
 }
 
+function claimProject(state: ManagerState, project: string, taskId: string, capacity: number, pid: number): AcquireOutcome {
+  const slots = Array.from({ length: capacity }, (_, index) => projectSlotLock(project, index));
+  if (slots.some((lock) => state.locks[lock]?.task_id === taskId)) return 'acquired';
+  const free = slots.find((lock) => !state.locks[lock]);
+  if (free) {
+    state.locks[free] = { task_id: taskId, pid, boot: bootNonce, acquired_at: new Date().toISOString() };
+    return 'acquired';
+  }
+  const queue = (state.queues[projectLock(project)] ??= []);
+  if (!queue.some((entry) => entry.task_id === taskId)) {
+    queue.push({ task_id: taskId, pid, requested_at: new Date().toISOString() });
+  }
+  return 'queued';
+}
+
+async function abandonProjectWait(project: string, taskId: string, capacity: number): Promise<boolean> {
+  return mutateState((state) => {
+    const held = Array.from({ length: capacity }, (_, index) => projectSlotLock(project, index)).some(
+      (lock) => state.locks[lock]?.task_id === taskId,
+    );
+    if (held) return true;
+    const lock = projectLock(project);
+    const queue = state.queues[lock];
+    if (!queue) return false;
+    const kept = queue.filter((entry) => entry.task_id !== taskId);
+    if (kept.length === 0) delete state.queues[lock];
+    else state.queues[lock] = kept;
+    return false;
+  });
+}
+
+export async function acquireProject(
+  project: string,
+  taskId: string,
+  capacity = resolveProjectConcurrency(project),
+  pid = process.pid,
+  opts: AcquireOptions = {},
+): Promise<void> {
+  const lock = projectLock(project);
+  const key = waiterKey(lock, taskId);
+  let settle!: Waiter;
+  const woken = new Promise<void>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  woken.catch(() => undefined);
+  waiters.set(key, settle);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await mutateState((state) => claimProject(state, project, taskId, capacity, pid));
+    if (outcome === 'acquired') return;
+    const timeoutMs = resolveTimeoutMs(lock, opts);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      await woken;
+      return;
+    }
+    const expired = new Promise<void>((resolve, reject) => {
+      timer = setTimeout(() => {
+        void abandonProjectWait(project, taskId, capacity).then((promoted) => {
+          if (promoted) {
+            resolve();
+            return;
+          }
+          logLockTimeout(lock, taskId, timeoutMs);
+          reject(new LockWaitTimeoutError(lock, taskId, timeoutMs));
+        }, reject);
+      }, timeoutMs);
+    });
+    expired.catch(() => undefined);
+    await Promise.race([woken, expired]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    waiters.delete(key);
+  }
+}
+
 /** Hands the lock to the FIFO head, if any. Returns the new holder's task id. */
 export async function release(lock: string, taskId: string): Promise<string | null> {
   const nextHolder = await mutateState((state) => {
@@ -235,10 +321,50 @@ export async function release(lock: string, taskId: string): Promise<string | nu
   return nextHolder;
 }
 
+export async function releaseProject(
+  project: string,
+  taskId: string,
+  capacity = resolveProjectConcurrency(project),
+): Promise<string | null> {
+  const lock = projectLock(project);
+  const nextHolder = await mutateState((state) => {
+    const slots = Array.from({ length: capacity }, (_, index) => projectSlotLock(project, index));
+    const held = slots.find((slot) => state.locks[slot]?.task_id === taskId);
+    if (!held) return null;
+    delete state.locks[held];
+    const queue = state.queues[lock] ?? [];
+    const head = queue.shift();
+    if (!head) {
+      delete state.queues[lock];
+      return null;
+    }
+    if (queue.length === 0) delete state.queues[lock];
+    else state.queues[lock] = queue;
+    state.locks[held] = {
+      task_id: head.task_id,
+      pid: head.pid,
+      boot: bootNonce,
+      acquired_at: new Date().toISOString(),
+    };
+    return head.task_id;
+  });
+  if (nextHolder) wakeWaiter(lock, nextHolder);
+  return nextHolder;
+}
+
+export function projectHolders(project: string, capacity = resolveProjectConcurrency(project)): string[] {
+  const state = readState();
+  return Array.from({ length: capacity }, (_, index) => state.locks[projectSlotLock(project, index)]?.task_id).filter(
+    (taskId): taskId is string => typeof taskId === 'string',
+  );
+}
+
 /** Drop a task out of every queue and every lock it holds. Used by stop/fail. */
 export async function releaseAll(taskId: string): Promise<string[]> {
   const held = heldBy(taskId);
-  for (const lock of held) await release(lock, taskId);
+  const projects = new Set(held.map(projectNameFromLock).filter((project): project is string => project !== null));
+  for (const project of projects) await releaseProject(project, taskId);
+  for (const lock of held.filter((heldLock) => projectNameFromLock(heldLock) === null)) await release(lock, taskId);
   await mutateState((state) => {
     for (const [lock, queue] of Object.entries(state.queues)) {
       const filtered = queue.filter((q) => q.task_id !== taskId);
@@ -316,6 +442,26 @@ export async function revokeOrphans(isTaskActive: (taskId: string) => boolean): 
       else state.queues[lock] = kept;
     }
     for (const [lock, queue] of Object.entries(state.queues)) {
+      const project = projectNameFromLock(lock);
+      if (project) {
+        const capacity = resolveProjectConcurrency(project);
+        for (let slot = 0; slot < capacity && queue.length > 0; slot++) {
+          const slotLock = projectSlotLock(project, slot);
+          if (state.locks[slotLock]) continue;
+          const head = queue.shift();
+          if (!head) break;
+          state.locks[slotLock] = {
+            task_id: head.task_id,
+            pid: head.pid,
+            boot: bootNonce,
+            acquired_at: new Date().toISOString(),
+          };
+          out.promoted.push({ lock, task_id: head.task_id });
+        }
+        if (queue.length === 0) delete state.queues[lock];
+        else state.queues[lock] = queue;
+        continue;
+      }
       if (state.locks[lock]) continue;
       const head = queue.shift();
       if (!head) {

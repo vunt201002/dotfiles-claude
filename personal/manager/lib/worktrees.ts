@@ -118,12 +118,12 @@ export interface EnsureResult {
 }
 
 /**
- * Gitignored paths linked into a fresh worktree.
+ * Gitignored paths linked into a fresh serial worktree.
  *
  * A worktree starts with tracked files only, so `node_modules` is absent and
- * the first command a task runs fails on a missing dependency. Symlinked
- * rather than copied: a copy is hundreds of megabytes per task and is stale the
- * moment the main checkout installs anything.
+ * the first command a task runs fails on a missing dependency. The serial path
+ * symlinks rather than copying; concurrent callers clone `node_modules` with
+ * `cloneNodeModules` below so their writes cannot cross worktrees.
  *
  * The cost of sharing is real and is not hidden: two tasks that both run an
  * install command are writing to the same tree. That is the same exposure as
@@ -131,6 +131,48 @@ export interface EnsureResult {
  * belong behind the project lock rather than in a task.
  */
 export const DEFAULT_WORKTREE_LINKS = ['node_modules', '.env', '.env.local'];
+
+export interface CloneNodeModulesResult {
+  ok: boolean;
+  reason: string;
+}
+
+/**
+ * Gives a concurrent worktree private dependency inodes without paying for a
+ * deep copy up front. The copy operation requires clonefile/reflink semantics and
+ * fails closed when the filesystem cannot provide them.
+ */
+export function cloneNodeModules(repo: string, worktreeDir: string): CloneNodeModulesResult {
+  const source = path.join(path.resolve(repo), 'node_modules');
+  const destination = path.join(path.resolve(worktreeDir), 'node_modules');
+  if (!fs.existsSync(source)) return { ok: false, reason: `${source} does not exist` };
+  const sourceReal = fs.realpathSync(source);
+  if (!fs.statSync(sourceReal).isDirectory()) return { ok: false, reason: `${source} is not a directory` };
+  if (fs.existsSync(destination)) {
+    const existing = fs.lstatSync(destination);
+    return existing.isDirectory() && !existing.isSymbolicLink()
+      ? { ok: true, reason: '' }
+      : { ok: false, reason: `${destination} exists but is not a private directory` };
+  }
+
+  const temporary = `${destination}.clone-${process.pid}-${Date.now()}`;
+  try {
+    fs.cpSync(sourceReal, temporary, { recursive: true, mode: fs.constants.COPYFILE_FICLONE_FORCE });
+  } catch (error) {
+    fs.rmSync(temporary, { recursive: true, force: true });
+    return {
+      ok: false,
+      reason: `copy-on-write clone of node_modules failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  try {
+    fs.renameSync(temporary, destination);
+  } catch (error) {
+    fs.rmSync(temporary, { recursive: true, force: true });
+    return { ok: false, reason: `could not install cloned node_modules: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  return { ok: true, reason: '' };
+}
 
 export function linkInto(worktreeDir: string, repo: string, links: string[]): string[] {
   const linked: string[] = [];

@@ -16,14 +16,17 @@ import * as path from 'path';
 import type { AgentSdkResult } from '../../../test/helpers/agent-sdk-runner';
 import {
   loadConfig,
+  type ManagerConfig,
   resolveMaxAgents,
   resolveModelId,
+  resolveProjectConcurrency,
   resolveReviewProvider,
   SPAWN_RUNNERS,
   type SpawnRunner,
 } from '../config';
 import { runCost, type TokenUsage } from './cost';
 import type { AgentRole, Lane, TaskSource } from '../types';
+import { cloneNodeModules, ensureTaskWorktree } from './worktrees';
 
 export interface SpawnRequest {
   role: AgentRole;
@@ -94,6 +97,9 @@ export const TRANSPORT_FAILURES: readonly string[] = [
   'cmux_create_failed',
   'worktree_failed',
   'no_free_slot',
+  'no_free_lane',
+  'cmux_lane_unavailable',
+  'cmux_lane_launch_failed',
   'aborted',
 ];
 
@@ -103,6 +109,37 @@ export function transportFailed(exitReason: string): boolean {
 
 export interface SpawnPort {
   run(req: SpawnRequest): Promise<SpawnResult>;
+}
+
+export type IsolatedSpawnRequest =
+  | { ok: true; req: SpawnRequest }
+  | { ok: false; reason: string };
+
+export function isolateSpawnRequest(req: SpawnRequest, cfg: ManagerConfig = loadConfig()): IsolatedSpawnRequest {
+  const concurrent = resolveProjectConcurrency(req.project, cfg) > 1;
+  const links = concurrent ? cfg.worktreeLinks.filter((entry) => entry !== 'node_modules') : cfg.worktreeLinks;
+  const worktree = ensureTaskWorktree(req.taskId, req.project, req.scope, { links });
+  if (!worktree.ok || !worktree.record) return { ok: false, reason: worktree.reason };
+  if (concurrent) {
+    const cloned = cloneNodeModules(req.scope, worktree.record.dir);
+    if (!cloned.ok) return { ok: false, reason: cloned.reason };
+  }
+  return { ok: true, req: { ...req, scope: worktree.record.dir } };
+}
+
+function isolationFailure(req: SpawnRequest, reason: string): SpawnResult {
+  return {
+    output: `could not prepare a worktree for ${req.taskId}: ${reason}`,
+    outputs: [],
+    exitReason: 'worktree_failed',
+    turnsUsed: 0,
+    costUsd: 0,
+    costKnown: true,
+    model: req.modelAlias,
+    sessionId: '',
+    durationMs: 0,
+    worktreeCreated: false,
+  };
 }
 
 /**
@@ -258,6 +295,9 @@ function sessionIdFromEvents(result: AgentSdkResult): string {
 export const agentSdkSpawnPort: SpawnPort = {
   async run(req) {
     const cfg = loadConfig();
+    const isolation = isolateSpawnRequest(req, cfg);
+    if (!isolation.ok) return isolationFailure(req, isolation.reason);
+    req = isolation.req;
     const policy = cfg.spawn[req.source] ?? cfg.spawn.cli;
     const { runAgentSdkTest } = await agentSdkRunner();
     const tools = toolsFor(req, policy);
@@ -286,7 +326,7 @@ export const agentSdkSpawnPort: SpawnPort = {
       model: result.model,
       sessionId: sessionIdFromEvents(result),
       durationMs: result.durationMs,
-      worktreeCreated: false,
+      worktreeCreated: true,
     };
   },
 };
@@ -295,6 +335,9 @@ export const agentSdkSpawnPort: SpawnPort = {
 export const cliSpawnPort: SpawnPort = {
   async run(req) {
     const cfg = loadConfig();
+    const isolation = isolateSpawnRequest(req, cfg);
+    if (!isolation.ok) return isolationFailure(req, isolation.reason);
+    req = isolation.req;
     const policy = cfg.spawn[req.source] ?? cfg.spawn.cli;
     const { runSkillTest } = await sessionRunner();
     const result = await runSkillTest({
@@ -302,6 +345,7 @@ export const cliSpawnPort: SpawnPort = {
       workingDirectory: path.resolve(req.scope),
       model: resolveModelId(req.modelAlias),
       maxTurns: req.maxTurns ?? cfg.maxTurns[req.role],
+      maxBudgetUsd: req.maxBudgetUsd,
       timeout: cfg.cliRunTimeoutMs,
       allowedTools: toolsFor(req, policy).allowedTools,
       testName: `${req.taskId}:${req.role}`,
@@ -319,7 +363,7 @@ export const cliSpawnPort: SpawnPort = {
       model: result.model,
       sessionId: result.sessionId,
       durationMs: result.duration,
-      worktreeCreated: false,
+      worktreeCreated: true,
     };
   },
 };

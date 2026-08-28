@@ -13,12 +13,15 @@ import {
   __clearWaiters,
   __setBootNonceForTests,
   acquire,
+  acquireProject,
   currentBootNonce,
   heldBy,
   holderOf,
   projectLock,
+  projectHolders,
   queueFor,
   release,
+  releaseProject,
   releaseAll,
   revokeOrphans,
   tryAcquire,
@@ -31,6 +34,7 @@ const REAL_BOOT = currentBootNonce();
 
 beforeEach(() => {
   writeState(emptyState());
+  fs.rmSync(path.join(HOME, 'gate-log'), { recursive: true, force: true });
   __setBootNonceForTests(REAL_BOOT);
 });
 
@@ -43,6 +47,26 @@ afterAll(() => {
 });
 
 describe('project lock — one main agent per repo', () => {
+  test('an opted-in project admits N holders and queues the next task FIFO', async () => {
+    await acquireProject('kivora', 'a', 2);
+    await acquireProject('kivora', 'b', 2);
+    const waiting = acquireProject('kivora', 'c', 2, process.pid, { timeoutMs: 500 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(projectHolders('kivora', 2)).toEqual(['a', 'b']);
+    expect(queueFor(projectLock('kivora'))).toEqual(['c']);
+    expect(await releaseProject('kivora', 'a', 2)).toBe('c');
+    await waiting;
+    expect(projectHolders('kivora', 2)).toEqual(['c', 'b']);
+  });
+
+  test('the semaphore wait obeys the same bounded timeout', async () => {
+    await acquireProject('kivora', 'a', 1);
+    await expect(acquireProject('kivora', 'b', 1, process.pid, { timeoutMs: 30 })).rejects.toThrow(
+      LockWaitTimeoutError,
+    );
+    expect(queueFor(projectLock('kivora'))).toEqual([]);
+  });
+
   test('the first task takes it, the second queues', async () => {
     expect(await tryAcquire(projectLock('kivora'), 'kivora-t1-01')).toBe('acquired');
     expect(await tryAcquire(projectLock('kivora'), 'kivora-t2-01')).toBe('queued');

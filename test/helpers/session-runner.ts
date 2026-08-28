@@ -119,6 +119,12 @@ function truncate(s: string, max: number): string {
 
 // --- Main runner ---
 
+export function skillBudgetArgs(maxBudgetUsd: number | undefined): string[] {
+  return Number.isFinite(maxBudgetUsd) && (maxBudgetUsd ?? 0) > 0
+    ? ['--max-budget-usd', String(maxBudgetUsd)]
+    : [];
+}
+
 export async function runSkillTest(options: {
   prompt: string;
   workingDirectory: string;
@@ -129,6 +135,7 @@ export async function runSkillTest(options: {
   runId?: string;
   /** Model to use. Defaults to claude-sonnet-4-6 (overridable via EVALS_MODEL env). */
   model?: string;
+  maxBudgetUsd?: number;
   /** Extra env vars merged into the spawned claude -p process. Useful for
    *  per-test GSTACK_HOME overrides so the test doesn't have to spell out
    *  env setup in the prompt itself. */
@@ -169,6 +176,7 @@ export async function runSkillTest(options: {
     '--verbose',
     '--dangerously-skip-permissions',
     '--max-turns', String(maxTurns),
+    ...skillBudgetArgs(options.maxBudgetUsd),
     '--allowed-tools', ...allowedTools,
   ];
   // Hermetic children get zero MCP servers (no --mcp-config is passed).
