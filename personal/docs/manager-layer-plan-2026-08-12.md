@@ -1343,3 +1343,212 @@ Chưa có ba thứ đó thì `/explain-diff` là công cụ đọc, chưa phải
 - **Shared spaces** — không gian chung cho cả nhóm dựng mental model chung. Chưa hợp: harness
   này đang là một người.
 - **In ra giấy đọc offline** — rẻ, thử được ngay, không cần xây gì.
+
+---
+
+## 15. Bullet (YC S26) — tối ưu đúng cái trục ở đây sẵn sàng đem đổi
+
+Nguồn: [Launch HN: Bullet (YC S26) – A Faster Coding Agent](https://news.ycombinator.com/item?id=49283063)
+(121 điểm, 88 comment lúc đọc), trang chủ [`codewithbullet.com`](https://www.codewithbullet.com),
+trang benchmark [`codewithbullet.com/blog/benchmark-results.html`](https://www.codewithbullet.com/blog/benchmark-results.html).
+Bản dịch + tóm tắt tiếng Việt đã commit trong repo này:
+`personal/read-vi/2026-08-14-launch-hn-bullet-yc-s26--a-faster-coding-agent/` (`dich.md` +
+`tom-tat.md`).
+
+**Giới hạn của nguồn, ghi trước.** Bản dịch viết lúc thread mới có **73** comment; nay **88**, và
+9 tài khoản chưa xuất hiện trong bản dịch: `lrvick`, `sparse-Matrix`, `sgammon`, `brainless`,
+`the_monocle`, `v11climbs`, `johntash`, `tmzt`, `shunia_huang`. Phần `brainless` và `lrvick` dưới
+đây đọc thẳng từ thread, không qua bản dịch. Con số benchmark lấy từ trang của chính Bullet, chưa
+ai chạy lại.
+
+**Lăng kính đọc mục này** là mục đầu `personal/global-CLAUDE.md` — *"Kim chỉ nam: chất lượng
+trước, tốc độ và cost là thứ đem đổi"*: (1) chất lượng output, (2) tiện + tự động — ít
+orchestrator, nhiều agent song song, tay người rảnh, (3) tốc độ, (4) cost. Buộc phải chọn thì bỏ
+3-4 giữ 1-2. Kèm bộ phân loại **tối ưu miễn phí** so với **tối ưu trả bằng chất lượng**, và luận
+điểm *"chất lượng là trục duy nhất không có sẵn đơn vị"*.
+
+**Luận điểm khung.** Bullet bán đúng một chữ: nhanh. Tức nó tối ưu đúng cái trục kim chỉ nam xếp
+**thứ ba** — đúng cái trục ở đây sẵn sàng đem đổi. Nên phần lớn cơ chế của **chính sản phẩm** là
+sai hướng với plan này. Nhưng **những người phản biện trong thread lại rất đúng hướng**. Đồ đáng
+lấy nằm ở phần comment, không nằm ở sản phẩm — trang gốc chừng 460 từ marketing, phần comment dài
+gấp sáu lần.
+
+### 15.1 Control tầm thường — điều kiện sống, không phải "ROI cao"
+
+Thứ đáng lấy nhất cả thread đến từ **một người**, `seizethecheese`, đẩy qua **5 comment** liên
+tiếp. Lập luận không phải "các anh gian lận" mà là "bảng đã bão hoà nên 95.8% không phân biệt
+được gì". Sức nặng nằm ở **cách chứng minh**: thay vì than trừu tượng, anh ta dựng một control ai
+cũng kiểm được. Trên một bảng đã bão hoà, chỉ cần một router **chọn model ngẫu nhiên** là đã công
+bố được *"điểm cao hơn, chi phí thấp hơn"* — mọi model đều sát trần nên router thừa hưởng giá rẻ
+mà gần như không mất điểm. Đẩy tiếp sang trục tốc độ: chọn bừa giữa Fable và Gemini 3.7 Flash đã
+nhanh hơn chừng 50% mà điểm còn tốt hơn (Flash 0.1 phút, Fable 0.8 phút); luôn luôn chọn Flash thì
+công bố được mức giảm 87.5% thời gian. Neo bằng số thật ở GPQA Diamond: Fable 92.6% với $0.22 mỗi
+task, trong khi vài model điểm cao hơn mà chỉ $0.01.
+
+**Đây chính là hệ quả mà kim chỉ nam vừa viết ra thành luật:** *một con số chất lượng không có
+control tầm thường đứng cạnh — một gate luôn PASS được bao nhiêu? chọn bừa được bao nhiêu? — thì
+chưa chứng minh gì cả.* Áp thẳng vào bảng §8 (đo 13/08):
+
+| Số ở §8 | Control tầm thường đứng cạnh | Trạng thái |
+|---|---|---|
+| `spec-check` precision **57%** | cổng lúc nào cũng kêu "có bug" = **50%** | **đã có** — và chính nó làm 57% đọc ra "tệ" chứ không phải "ổn" |
+| `reviewer` precision **62%** | cùng mốc **50%** | đã có |
+| `red-test` precision **100%** | chưa có | thiếu, nhưng caveat "cận trên của B5 khi đã có ticket" đã ghi |
+| `deterministic_catch_share` **36%** | chưa có | thiếu |
+| `guard` precision **71.4%** | chưa có, và số đã cũ hơn `e6e1efae` | thiếu |
+| **cả bộ điều kiện mở P8** | chưa có: một chain **phát verdict bừa** qua được mấy điều kiện? | thiếu |
+
+Dòng đầu bảng là bằng chứng luật này đúng **và** rẻ: mốc 50% chỉ tốn một câu để nghĩ ra, mà nó
+biến `detect 90%` của `spec-check` từ "cổng tốt nhất bảng" thành "gần như không phân biệt được
+gì". Không có mốc đó thì §8 đã kết luận ngược. Bốn dòng dưới là chỗ cùng một câu hỏi chưa được
+hỏi.
+
+**Dưới kim chỉ nam mới, đây không còn là "việc ROI cao" — nó là điều kiện sống.** Người vận hành
+vừa tuyên bố sẵn sàng trả tốc độ và tiền để lấy chất lượng. Một tuyên bố như vậy chỉ có nghĩa khi
+có cách biết đã **mua được cái gì**. Không có control, "ưu tiên chất lượng" và "tiêu nhiều hơn"
+là hai câu không phân biệt được.
+
+### 15.2 Kiến trúc hai model của `brainless` — cơ chế CHẤT LƯỢNG, không phải mẹo kiến trúc
+
+Thiết kế anh ta mô tả:
+
+| | model nhỏ | model lớn |
+|---|---|---|
+| tool | **có**, cộng repo graph | **không có** |
+| lịch sử hội thoại | giữ — nó là bên đi đọc repo | **không có** — mỗi lượt một prompt mới tinh |
+| vai | đọc repo, dựng prompt | nghĩ và trả lời |
+
+Ở giữa là **rất nhiều code orchestration deterministic**, không phải multi-turn chat.
+
+Nhìn qua thì giống mẹo tiết kiệm. **Nó không phải.** Bài "How Compaction Works in Pi" (đã dịch tại
+`personal/read-vi/2026-08-14-how-compaction-works-in-pi/`) nói thẳng:
+
+> the performance of LLM outputs decrease as the context size grows
+
+Nghĩa là một hội thoại dài **không đứng yên về chất lượng, nó tụt dần**. Và compaction — thứ mọi
+harness dài hơi đều phải làm — là **thuế chất lượng** trả để đi tiếp, vì bản tóm tắt luôn nghèo
+hơn thứ nó thay. Kiến trúc của `brainless` không tối ưu cái thuế đó cho rẻ; nó **không bao giờ
+vào thế phải trả**. Model lớn mỗi lượt nhìn một context được dựng có chủ đích, đúng kích cỡ, không
+mang theo 40 lượt tool result đã hết giá trị.
+
+Vừa trúng mục tiêu **1** (chất lượng), vừa trúng mục tiêu **2** (phần dựng prompt là code
+deterministic, không phải người ngồi canh). Và nó cộng hưởng với nguyên tắc lõi 3 ở §0 — *"model
+khác không thay được context độc lập"*: một prompt dựng mới tinh mỗi lượt **là** context độc lập,
+theo nghĩa mạnh nhất của từ đó.
+
+**Chỗ áp thử trước tiên: cổng và judge.** Chúng vốn one-shot — `spec-check`, `reviewer`,
+`design-judge` không cần lịch sử, chúng cần đúng diff cộng đúng spec. Đó là thí nghiệm rẻ nhất
+trong plan này: không đụng đường chạy của agent, có sẵn 19 fixture để đo lại, và có sẵn cột
+`precision` để so trước-sau. Nếu precision không nhúc nhích thì luận điểm sai và biết ngay; nếu
+nhúc nhích thì đã có đường mở P8.
+
+**Phân biệt cho khỏi lẫn với thứ ở §15.5:** đây **không** phải route việc sang model rẻ hơn. Model
+nhỏ không quyết định gì cả, nó **lắp ráp**. Model lớn vẫn thấy đủ mọi thứ liên quan, chỉ là thấy
+lần đầu chứ không thấy qua một chồng lịch sử. Không ai bị "thấy ít hơn".
+
+### 15.3 `andai` — nạp sẵn thay vì để agent tự mò, và anh ta làm NGƯỢC Bullet
+
+Nguyên văn:
+
+> The main difference is that I do the opposite of what you said, i.e. I do dump the context in
+> the prompt. You don't need to grep for what's right in front of you.
+
+Cơ chế: lúc mở session chạy một script dump **outline** — header của function, class, interface —
+thẳng vào context. Bản anh ta kể ở nhánh khác đơn giản tới mức buồn cười: `grep def`, sang
+JavaScript thì thêm `grep function`, `grep class`, `interface`. Cho model một cái outline để đỡ
+mò mù.
+
+Bullet grep để tiết kiệm token — hình minh hoạ khoe chỉ `08%` repo bị đụng tới. `andai` nạp sẵn vì
+**token rẻ hơn một đường đi sai**. Hai người tối ưu ngược nhau trên cùng một sự việc, và dưới kim
+chỉ nam này **`andai` mới là người đúng hướng**: "nạp sẵn thứ kiểu gì cũng phải đọc" nằm đúng
+trong danh sách **tối ưu miễn phí**, còn "cắt context cho gọn" nằm đúng trong danh sách **trả bằng
+chất lượng**.
+
+**Chỗ cắm đã có sẵn:** `personal/hooks/session-start-inject.sh` — SessionStart hook, matcher
+`startup|resume|compact`, stdout đi thẳng vào context.
+
+**Hai ràng buộc, cả hai đều thật:**
+
+1. **Nạp outline, không nạp file.** Đây là giới hạn `andai` tự nêu: cách này hợp repo nhỏ, repo
+   lớn thì outline lại thành một cục to. Ngưỡng cắt phải đo trước, không đoán.
+2. **Không nhồi vào chung block IRON LAWS.** Chính file hook đó mang luật *"Giữ block này NGẮN
+   (~15 dòng) — nó chiếm context mọi session."* Luật đó vẫn đúng, nhưng lý do của nó là **cost**
+   (hạng 4) trộn với một lý do chất lượng thật: pha loãng IRON LAWS bằng vài trăm dòng outline là
+   làm hỏng chính thứ hook này sinh ra để bảo vệ. Nên outline đi đường riêng, có ngưỡng riêng.
+
+Đối chiếu với §13.3 — luật **spill** (tool output quá lớn thì ghi ra file, trả locator) đẩy ngược
+chiều. Không mâu thuẫn: spill nói về **output đã sinh ra rồi**, preload nói về **thứ kiểu gì cũng
+phải đọc**. Nhưng cả hai đều là quyết định về ngân sách context, nên chỉnh cái này phải nhìn cái
+kia.
+
+### 15.4 Nhặt lẻ
+
+- **`ojr` — propose-rồi-accept thay cho sửa-rồi-revert.** Agent bên đó **đề xuất** thay đổi file
+  trước, không sửa luôn: prompt → đề xuất → duyệt. Mâu thuẫn thật với mục tiêu 2 — cổng nào có
+  người đứng thì hết rảnh tay. Lối thoát: để **judge** làm bên accept, tức dời cổng builder+judge
+  lên **trước** lúc diff đáp xuống, thay vì chấm sau. Không thêm người vào vòng, chỉ đổi chỗ đặt
+  cổng.
+- **`ojr` + `esafak` — vector search + grep hơn grep trần cả về thời gian lẫn cost.** `ojr` nói
+  thẳng chỉ dùng grep thì lâu hơn và mỗi task tốn hơn; `esafak` liệt kê MCP search theo AST và
+  theo embedding đã có sẵn (`codebase-memory-mcp`). Ngược hẳn Protocol 02 của Bullet, và
+  **ủng hộ giữ gbrain** — đây là một trong ít lần trục tốc độ và trục chất lượng chỉ cùng hướng.
+- **`ojr` — bằng chứng thật là thứ dựng được BẰNG tool, không phải điểm của tool.** `alsima` đồng
+  ý ngay. Chiếu vào đây thì lộ một điểm yếu hiện tại: harness này chủ yếu đang được dùng để **sửa
+  chính nó**. Vòng tự chứng minh đó yếu — cùng lớp lỗi với luật ensemble §7.3, chỉ ở tầng dự án
+  thay vì tầng cổng.
+- **`andai` — dựng MCP + startup hook rồi phát hiện đang đánh nhau với system prompt của Claude**,
+  thứ bảo model làm mấy việc triệt tiêu gần hết phần lợi. Bài học dùng được: **luật nào trong
+  CLAUDE.md bị bỏ qua lặp lại thì phải xuống tầng hook, không phải viết to hơn.** §7.3b đã rút
+  đúng luật này từ hướng khác — *"một directive trong prompt không phải một hàng rào"* — và đó là
+  lý do `pre-tool-use-guard.sh` tồn tại. Hai nguồn độc lập, cùng một kết luận.
+- **`lrvick` — supply chain.** File `.deb` đòi root, không có source, 198 dependency; nguyên văn
+  đại ý *mức tin tưởng đó tôi còn không dành cho người nhà*. Dưới mục tiêu 2, đây không phải chuyện
+  bên lề: càng nhiều agent chạy không người trông thì **bán kính sát thương càng lớn**, và cái
+  chạy trong đó là thứ ai cấp cũng được.
+- **`japborst` — cái phanh.** *Người ta không muốn dựng harness, người ta muốn xong việc*, kèm câu
+  kinh điển "Dropbox thì cũng chỉ là rsync". Câu này càng cần hơn dưới trục chất lượng, vì một
+  harness ưu tiên chất lượng **không có điểm dừng tự nhiên**: luôn còn một cổng nữa để thêm, một
+  vòng judge nữa để chạy. Tiêu chí giết ở §0 chính là phanh đó, viết trước lúc còn khách quan.
+
+### 15.5 Ba thứ loại thẳng — và lý do loại
+
+Giá trị của mục này nằm ở chỗ **biết vì sao từ chối**, không nằm ở danh sách.
+
+| Loại thẳng | Vì sao |
+|---|---|
+| **Route việc sang model rẻ hơn** (Protocol 01) | Đúng sách giáo khoa *"tối ưu trả bằng chất lượng"*. Và chính `alsima` khai ra: benchmark chạy **không kèm router**, vì phần lợi về tốc độ và chi phí khi đó chủ yếu do dùng model rẻ và đơn giản hơn — *"cái đó không chứng minh được harness tốt hơn"*. Người bán tự nói phần lợi này mua bằng chất lượng |
+| **Context hygiene kiểu Bullet** (cắt tool output, xoá lịch sử cho gọn) | Loại 2 theo phân loại. Và `yetanotherjosh` chỉ ra nó **chưa chắc lời**: phần đã nằm trong context là **cached token**, gần như không thêm latency; mà rút một mẩu ra khỏi giữa lịch sử là **đổi prefix**, nên mọi thứ sau đó phải tính lại. Bài compaction ở §15.2 mô tả đúng cơ chế đó từ phía Pi: cùng token cũ, đứng sau prefix khác, cache cũ vô dụng. Trả chất lượng để lấy một khoản tiết kiệm có thể âm |
+| **"Ít round trip hơn" làm MỤC TIÊU** (bài đăng khoe giảm 16% vòng đi lại, 27% chi phí) | Phải tách đôi. **Gộp mấy việc điều tra độc lập** là loại 1 → lấy. **"Một edit gọn rồi một lần verify"** là cắt vòng verify → từ chối. Đếm round trip vẫn dùng được để **chẩn đoán** (đi lại nhiều = đang mò), nhưng đặt làm **mục tiêu tối ưu** thì nó tự động đẩy mình cắt đúng cái không được cắt |
+
+Cả ba đều tự quảng cáo là loại 1. Câu hỏi phân loại của kim chỉ nam giải được cả ba trong một
+lượt: **model có mất đi thứ gì nó đáng lẽ được thấy, hoặc được làm không?**
+
+### 15.6 Một điểm bênh Bullet, cho công bằng
+
+**Protocol 03 — chạy song song mấy tool call độc lập — là tối ưu loại 1 thật, miễn phí thật.** Nó
+nằm nguyên văn trong danh sách "miễn phí" của kim chỉ nam, và nó còn phục vụ luôn mục tiêu 2. Đây
+là chỗ Bullet đúng, và đúng không kèm điều kiện.
+
+Nên việc đáng làm không phải khen họ mà là **tự kiểm**: trong chuỗi cổng §7.2, những cổng không
+phụ thuộc kết quả của nhau có đang chạy cùng lúc không, hay đang xếp hàng chỉ vì viết tuần tự cho
+dễ đọc. Câu hỏi này chưa ai đo. Nó không tốn gì để trả lời, và nếu câu trả lời là "đang xếp hàng"
+thì đó là thời gian lấy lại được mà không phải đổi bằng thứ gì.
+
+### 15.7 Một quan sát chưa ai trong thread nói ra
+
+Trang benchmark của **chính Bullet** ghi bản production chạy **GPT-5.6 Sol** ở dưới và được
+**95.8%**. Cũng trang đó dẫn Vals đo **mini-swe-agent + cùng con Sol** được **96.2%**.
+
+Cùng model. Harness của Bullet **thấp hơn 0.4 điểm**.
+
+Đọc cho đúng cỡ: trên 500 instance, 0.4pp là **2 instance** — nằm trong nhiễu, nên gọi là **hoà**
+thì đúng hơn là thua. Không có chuyện "harness của họ tệ hơn".
+
+Nhưng chính vì hoà, con số **95.8% in chữ to trên trang chủ không chứng minh harness tốt**. Nó
+chứng minh harness **không làm mất điểm** trong khi chạy nhanh hơn và rẻ hơn. Đó là một lời hứa
+hợp lý, và với người mua tốc độ thì là lời hứa đủ. Nhưng nó **không phải** lời hứa mà cỡ chữ đó
+gợi ra.
+
+Và đây chính là §15.1 lặp lại một lần nữa, ở dạng gọn nhất: control cho con số 95.8% đã nằm sẵn
+trên chính trang công bố nó — cùng model, harness khác, 96.2%. Không ai trong 88 comment đọc ra,
+kể cả `seizethecheese`, người đã đi đúng năm comment để dựng bằng tay đúng cái control đó.
