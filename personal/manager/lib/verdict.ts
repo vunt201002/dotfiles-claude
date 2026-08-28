@@ -154,6 +154,7 @@ export const UNVERIFIED_MARK = 'unverified-self-report';
 
 export interface GateEvidenceWindow {
   project: string;
+  taskId?: string;
   /** ISO timestamp the agent run started. */
   since: string;
   /** ISO timestamp the verdict was collected. */
@@ -213,7 +214,13 @@ export function verifyDeterministicGates(
   }
   const corroborated = new Set(
     entries
-      .filter((e) => e.gate_family === 'deterministic' && originOf(e) === 'work' && withinWindow(e.ts, window))
+      .filter(
+        (e) =>
+          e.gate_family === 'deterministic' &&
+          originOf(e) === 'work' &&
+          (window.taskId === undefined || e.task_id === window.taskId) &&
+          withinWindow(e.ts, window),
+      )
       .map((e) => e.gate),
   );
   return gates.map((gate) =>

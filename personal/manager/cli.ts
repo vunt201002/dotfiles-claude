@@ -118,7 +118,7 @@ async function cmdDaemon(): Promise<number> {
   // and the reason would only surface one task at a time. Say it at boot.
   if (runner === 'cmux') {
     if (!cmuxAvailable()) line('  ⚠ cmux is not answering — every spawn will fail until the app is running');
-    if (cfg.cmuxSkipPermissions && !guardIsWired()) {
+    if (cfg.executionProvider === 'claude' && cfg.cmuxSkipPermissions && !guardIsWired()) {
       line('  ⚠ pre-tool-use-guard.sh is not wired in ~/.claude/settings.json — permission-free panes will be refused');
     }
   }

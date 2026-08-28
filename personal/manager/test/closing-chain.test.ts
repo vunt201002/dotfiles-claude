@@ -38,7 +38,7 @@ import { approveCommands } from '../lib/assert-approvals';
 import type { DiffResult } from '../lib/git';
 import { ensureManagerDirs, managerConfigFile, projectsFile } from '../lib/paths';
 import { executePrompt } from '../lib/prompts';
-import { applyEnsembleRule, parseVerdict, verifyDeterministicGates, UNVERIFIED_MARK, type GateReport } from '../lib/verdict';
+import { applyEnsembleRule, parseVerdict, parseVerdictCandidates, verifyDeterministicGates, UNVERIFIED_MARK, type GateReport } from '../lib/verdict';
 import type { Lane, TaskEnvelope } from '../types';
 import type { WorktreeRecord } from '../lib/worktrees';
 
@@ -74,6 +74,20 @@ function verdictJson(body: Record<string, unknown>): string {
   return `Done.\n\`\`\`json\n${JSON.stringify({ verdict: 'pass', reason: 'ok', ...body })}\n\`\`\``;
 }
 
+test('a realistic codex final message uses the existing verdict parser', () => {
+  const output = `Implemented the scoped change and ran the focused checks.
+
+\`\`\`json
+{"verdict":"pass","reason":"implementation and focused checks completed","root_cause":"the provider selector always chose Claude","gates":[{"gate":"tsc","gate_family":"deterministic","verdict":"pass","caught":""}],"findings":[],"advisories":["full suite is manager-owned"],"assumptions":[],"questions":[],"irreversible":[]}
+\`\`\``;
+  expect(parseVerdictCandidates([output], '')).toMatchObject({
+    verdict: 'pass',
+    reason: 'implementation and focused checks completed',
+    root_cause: 'the provider selector always chose Claude',
+    advisories: ['full suite is manager-owned'],
+  });
+});
+
 function loggedEntries(project = PROJECT): GateLogEntry[] {
   const result = readEntries(project);
   if (!result.ok) throw new Error(result.reason);
@@ -92,6 +106,7 @@ function harness(
   const prompts: GateSpawnRequest[] = [];
   const exec: ExecFn = async () => ({ exitCode: 0, stdout: GREEN, stderr: '', timedOut: false });
   const ctx: ChainContext = {
+    taskId: 'demo-t7',
     project: PROJECT,
     issue: 't7',
     scope: REPO,
@@ -697,6 +712,34 @@ describe('hook rows are read, not re-run', () => {
     const inWindow = collectHookGates({ project: PROJECT, since: '2026-08-12T09:00:00Z', until: '2026-08-12T11:00:00Z' });
     expect(inWindow.map((g) => g.gate)).toEqual(['lint']);
     expect(inWindow[0].caught).toBe('unused var');
+  });
+
+  test('overlapping tasks only consume hook evidence stamped with their own task id', () => {
+    appendGateLog({
+      project: PROJECT,
+      task_id: 'demo-t1',
+      gate: 'tsc',
+      gate_family: 'deterministic',
+      verdict: 'pass',
+      ts: '2026-08-12T10:00:00Z',
+    } as Parameters<typeof appendGateLog>[0]);
+    appendGateLog({
+      project: PROJECT,
+      task_id: 'demo-t2',
+      gate: 'lint',
+      gate_family: 'deterministic',
+      verdict: 'caught',
+      caught: 'belongs to another task',
+      ts: '2026-08-12T10:00:00Z',
+    } as Parameters<typeof appendGateLog>[0]);
+
+    const gates = collectHookGates({
+      project: PROJECT,
+      taskId: 'demo-t1',
+      since: '2026-08-12T09:00:00Z',
+      until: '2026-08-12T11:00:00Z',
+    } as Parameters<typeof collectHookGates>[0]);
+    expect(gates.map((gate) => gate.gate)).toEqual(['tsc']);
   });
 
   test('an llm row is never mistaken for a hook row', () => {

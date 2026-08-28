@@ -27,7 +27,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadConfig, resolveMaxAgents, resolveModelId } from '../config';
+import {
+  loadConfig,
+  resolveMaxAgents,
+  resolveModelId,
+  resolveProjectConcurrency,
+  type ManagerConfig,
+} from '../config';
+import { parseCodexJSONL } from '../../../test/helpers/codex-session-runner';
 import { measuredCost } from './cost';
 import {
   buildLaunchCommand,
@@ -35,11 +42,20 @@ import {
   cmuxAvailable,
   createWorkspace,
   readScreen,
+  runCmux,
   sessionInDir,
   sleep,
   waitForSession,
   writePromptFile,
 } from './cmux-control';
+import {
+  buildLaneLaunchCommand,
+  interruptLane,
+  launchInLane,
+  reserveLane,
+  type LaneCmuxExecutor,
+  type ReservedLane,
+} from './cmux-lanes';
 import {
   busyCount,
   fleet,
@@ -52,8 +68,14 @@ import {
   type TranscriptUsageRead,
 } from './cmux-sessions';
 import { atomicWriteJson, managerDir } from './paths';
-import { agentSdkSpawnPort, scopeDirective, type SpawnPort, type SpawnRequest, type SpawnResult } from './spawn';
-import { ensureTaskWorktree } from './worktrees';
+import {
+  agentSdkSpawnPort,
+  scopeDirective,
+  type SpawnPort,
+  type SpawnRequest,
+  type SpawnResult,
+} from './spawn';
+import { cloneNodeModules, ensureTaskWorktree } from './worktrees';
 
 /**
  * Where a task's prompt file and pane bookkeeping live. Outside the worktree
@@ -188,8 +210,9 @@ export function readPaneOwnership(workspaceRefs: readonly string[] = []): PaneOw
         ? { ownership: 'unknown', workspaceRef, recordFile: panesDir, reason: unreadableDir }
         : { ownership: 'unknown', workspaceRef };
     }
-    if (records.length > 1) return { ownership: 'unknown', workspaceRef, reason: 'multiple pane records claim this workspace ref' };
-    const record = records[0];
+    const active = records.filter((record) => record.fate === 'unrecorded');
+    if (active.length > 1) return { ownership: 'unknown', workspaceRef, reason: 'multiple pane records claim this workspace ref' };
+    const record = active[0] ?? records.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     return {
       ownership: 'manager',
       workspaceRef,
@@ -236,6 +259,80 @@ function childEnv(req: SpawnRequest, scope: string): Record<string, string> {
     GSTACK_MANAGER_SOURCE: req.source,
     GSTACK_MANAGER_ROLE: req.role,
   };
+}
+
+export interface CodexRunArtifacts {
+  stdoutFile: string;
+  stderrFile: string;
+  exitCodeFile: string;
+}
+
+function codexRunArtifacts(stateDir: string): CodexRunArtifacts {
+  return {
+    stdoutFile: path.join(stateDir, 'codex.jsonl'),
+    stderrFile: path.join(stateDir, 'codex.stderr'),
+    exitCodeFile: path.join(stateDir, 'codex.exit'),
+  };
+}
+
+function resetCodexRunArtifacts(artifacts: CodexRunArtifacts): void {
+  for (const file of Object.values(artifacts)) fs.rmSync(file, { force: true });
+}
+
+export function buildExecutionLaunchCommand(
+  cfg: ManagerConfig,
+  promptFile: string,
+  modelAlias: string,
+  capture?: CodexRunArtifacts,
+): string {
+  if (cfg.executionProvider === 'codex') {
+    return buildLaunchCommand({
+      claudeBin: cfg.cmuxCodexBin,
+      promptFile,
+      extraArgs: ['exec', '-s', 'workspace-write', '-a', 'never', '--json', '-c', 'model_reasoning_effort=high'],
+      capture,
+    });
+  }
+  const extraArgs = [...cfg.cmuxClaudeArgs];
+  if (cfg.cmuxSkipPermissions) extraArgs.push('--dangerously-skip-permissions');
+  return buildLaunchCommand({
+    claudeBin: cfg.cmuxClaudeBin,
+    promptFile,
+    model: resolveModelId(modelAlias),
+    extraArgs,
+  });
+}
+
+export interface CodexWatchOutcome {
+  health: 'finished' | 'aborted' | 'timeout';
+  exitCode: number;
+}
+
+export async function watchCodexRun(
+  artifacts: CodexRunArtifacts,
+  opts: { timeoutMs: number; pollMs?: number; signal?: AbortSignal },
+): Promise<CodexWatchOutcome> {
+  const deadline = Date.now() + opts.timeoutMs;
+  const pollMs = opts.pollMs ?? 1_000;
+  while (true) {
+    if (opts.signal?.aborted) return { health: 'aborted', exitCode: 130 };
+    try {
+      const raw = fs.readFileSync(artifacts.exitCodeFile, 'utf-8').trim();
+      if (/^\d+$/.test(raw)) return { health: 'finished', exitCode: Number(raw) };
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+    if (Date.now() >= deadline) return { health: 'timeout', exitCode: 124 };
+    await sleep(pollMs);
+  }
+}
+
+function readText(file: string): string {
+  try {
+    return fs.readFileSync(file, 'utf-8');
+  } catch {
+    return '';
+  }
 }
 
 /** The last thing the agent said, which is what the orchestrator parses. */
@@ -300,7 +397,7 @@ export function assistantTexts(transcriptPath: string): string[] {
 }
 
 export interface WatchOutcome {
-  health: SessionHealth | 'never-started' | 'aborted' | 'timeout' | 'fleet-unreadable';
+  health: SessionHealth | 'never-started' | 'aborted' | 'timeout' | 'fleet-unreadable' | 'budget-exhausted';
   /** Set once the session was observed doing work, so idle-at-boot is not read as done. */
   everWorked: boolean;
   turns: number;
@@ -329,6 +426,7 @@ export async function watchSession(
     home?: string;
     sessionId?: string;
     startedAfter?: number;
+    maxBudgetUsd?: number;
   },
 ): Promise<WatchOutcome> {
   const pollMs = opts.pollMs ?? 1_000;
@@ -384,7 +482,13 @@ export async function watchSession(
     }
     if (transcriptPath) {
       const usage = usageFromTranscript(transcriptPath);
-      if (usage.ok) turns = usage.turns;
+      if (usage.ok) {
+        turns = usage.turns;
+        const cost = measuredTranscriptCost(usage);
+        if (cost.known && opts.maxBudgetUsd !== undefined && cost.usd >= opts.maxBudgetUsd) {
+          return { health: 'budget-exhausted', everWorked, turns, transcriptPath };
+        }
+      }
     }
     await sleep(pollMs);
   }
@@ -400,10 +504,50 @@ const EXIT_REASON: Record<string, string> = {
   timeout: 'timeout',
   'never-started': 'never_started',
   'fleet-unreadable': 'fleet_unreadable',
+  'budget-exhausted': 'budget_exhausted',
   working: 'timeout',
 };
 
 export type SlotOutcome = 'free' | 'aborted' | 'timeout' | { outcome: 'unreadable'; reason: string };
+export type SlotReservationOutcome =
+  | { outcome: 'reserved'; release: () => void }
+  | { outcome: 'aborted' | 'timeout' }
+  | { outcome: 'unreadable'; reason: string };
+
+const slotReservations = new Set<string>();
+
+export async function reserveSlot(
+  cap: number,
+  reservationId: string,
+  opts: {
+    signal?: AbortSignal;
+    pollMs?: number;
+    timeoutMs?: number;
+    home?: string;
+    abandonedAfterMs?: number;
+    now?: () => number;
+    fleet?: (agent?: string, home?: string) => FleetRead;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<SlotReservationOutcome> {
+  const now = opts.now ?? Date.now;
+  const readFleet = opts.fleet ?? fleet;
+  const wait = opts.sleep ?? sleep;
+  const deadline = now() + (opts.timeoutMs ?? 30 * 60_000);
+  const pollMs = opts.pollMs ?? 2_000;
+  const abandonedAfterMs = opts.abandonedAfterMs ?? loadConfig().abandonedPaneAfterMs;
+  while (true) {
+    if (opts.signal?.aborted) return { outcome: 'aborted' };
+    const read = readFleet('claude', opts.home);
+    if (!read.ok) return { outcome: 'unreadable', reason: read.reason };
+    if (busyCount(read.entries, now(), abandonedAfterMs) + slotReservations.size < cap) {
+      slotReservations.add(reservationId);
+      return { outcome: 'reserved', release: () => slotReservations.delete(reservationId) };
+    }
+    if (now() >= deadline) return { outcome: 'timeout' };
+    await wait(pollMs);
+  }
+}
 
 /**
  * Blocks until the fleet has room.
@@ -495,10 +639,13 @@ export function measuredTranscriptCost(usage: TranscriptUsageRead | null): Retur
 export interface CmuxSpawnDeps {
   cmuxAvailable: () => boolean;
   createWorkspace: typeof createWorkspace;
+  closeWorkspace: typeof closeWorkspace;
   waitForSession: typeof waitForSession;
   watchSession: typeof watchSession;
   ensureTaskWorktree: typeof ensureTaskWorktree;
   fleet: typeof fleet;
+  cmux: LaneCmuxExecutor;
+  reserveLane: typeof reserveLane;
 }
 
 export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPort {
@@ -508,6 +655,8 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
   const watcher = deps.watchSession ?? watchSession;
   const ensureWorktree = deps.ensureTaskWorktree ?? ensureTaskWorktree;
   const fleetReader = deps.fleet ?? fleet;
+  const cmuxExecutor = deps.cmux ?? runCmux;
+  const laneReserver = deps.reserveLane ?? reserveLane;
 
   return {
     async run(req) {
@@ -519,30 +668,40 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
           'cmux is not answering on its socket, so no pane could be opened. Start the cmux app, or set MANAGER_SPAWN_RUNNER to sdk.',
         );
       }
-      if (cfg.cmuxSkipPermissions && !guardIsWired()) {
+      if (cfg.executionProvider === 'claude' && cfg.cmuxSkipPermissions && !guardIsWired()) {
         return refusal(
           'guard_not_wired',
           'refusing to launch a permission-skipping pane: the pre-tool-use guard is not installed in ~/.claude/settings.json, so nothing would stop a write outside the task scope.',
         );
       }
 
-      const worktree = ensureWorktree(req.taskId, req.project, req.scope, { links: cfg.worktreeLinks });
+      const concurrent = resolveProjectConcurrency(req.project, cfg) > 1;
+      const links = concurrent ? cfg.worktreeLinks.filter((entry) => entry !== 'node_modules') : cfg.worktreeLinks;
+      const worktree = ensureWorktree(req.taskId, req.project, req.scope, { links });
       if (!worktree.ok || !worktree.record) {
         return refusal('worktree_failed', `could not prepare a worktree for ${req.taskId}: ${worktree.reason}`);
       }
       const dir = worktree.record.dir;
+      if (concurrent) {
+        const cloned = cloneNodeModules(req.scope, dir);
+        if (!cloned.ok) return refusal('worktree_failed', `could not prepare a worktree for ${req.taskId}: ${cloned.reason}`);
+      }
       const worktreeCreated = true as const;
 
       const cap = resolveMaxAgents(cfg);
-      const slot = await waitForSlot(cap, { signal: req.signal, timeoutMs: cfg.cmuxSlotWaitMs, fleet: fleetReader });
-      if (slot === 'aborted') return { ...refusal('aborted', 'stopped while waiting for a free agent slot'), worktreeCreated };
-      if (typeof slot === 'object') {
+      const slot = await reserveSlot(cap, `${req.taskId}:${req.role}`, {
+        signal: req.signal,
+        timeoutMs: cfg.cmuxSlotWaitMs,
+        fleet: fleetReader,
+      });
+      if (slot.outcome === 'aborted') return { ...refusal('aborted', 'stopped while waiting for a free agent slot'), worktreeCreated };
+      if (slot.outcome === 'unreadable') {
         return {
           ...refusal('fleet_unreadable', `cmux fleet is unreadable; refusing a new agent slot: ${slot.reason}`),
           worktreeCreated,
         };
       }
-      if (slot === 'timeout') {
+      if (slot.outcome === 'timeout') {
         return {
           ...refusal(
             'no_free_slot',
@@ -551,41 +710,154 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
           worktreeCreated,
         };
       }
+      if (slot.outcome !== 'reserved') throw new Error(`unhandled slot outcome ${slot.outcome}`);
+      const releaseSlot = slot.release;
 
       const stateDir = paneStateDir(req.taskId, req.role);
       const promptFile = writePromptFile(stateDir, `${scopeDirective({ ...req, scope: dir })}\n\n---\n\n${req.prompt}`);
-      const extraArgs = [...cfg.cmuxClaudeArgs];
-      if (cfg.cmuxSkipPermissions) extraArgs.push('--dangerously-skip-permissions');
+      const codexExecution = cfg.executionProvider === 'codex';
+      const codexArtifacts = codexRunArtifacts(stateDir);
+      if (codexExecution) resetCodexRunArtifacts(codexArtifacts);
 
       const startedAt = Date.now();
-      const created = makeWorkspace({
-        name: `${req.project}/${req.taskId}:${req.role}`,
-        cwd: dir,
-        env: childEnv(req, dir),
-        focus: false,
-        command: buildLaunchCommand({
-          claudeBin: cfg.cmuxClaudeBin,
+      let created: ReturnType<typeof createWorkspace>;
+      let recorded: Awaited<ReturnType<typeof recordPaneAndWaitForSession>>;
+      let lane: ReservedLane | null = null;
+      let releaseLane: () => void = () => undefined;
+      let slotHeldForCodex = false;
+      try {
+        const launch = buildExecutionLaunchCommand(
+          cfg,
           promptFile,
-          model: resolveModelId(req.modelAlias),
-          extraArgs,
-        }),
-      });
-      if (!created.ok) {
+          req.modelAlias,
+          codexExecution ? codexArtifacts : undefined,
+        );
+        if (cfg.cmuxLaneWorkspace.trim()) {
+          const lease = await laneReserver(req.taskId, cfg.cmuxLaneWorkspace, cfg.cmuxLaneTitles, {
+            executor: cmuxExecutor,
+            fleet: fleetReader,
+            timeoutMs: cfg.cmuxSlotWaitMs,
+            signal: req.signal,
+          });
+          if (lease.outcome === 'aborted') {
+            return { ...refusal('aborted', 'stopped while waiting for a reusable cmux lane'), worktreeCreated };
+          }
+          if (lease.outcome === 'timeout') {
+            return {
+              ...refusal('no_free_lane', `all reusable lanes in ${cfg.cmuxLaneWorkspace} stayed busy until the wait expired`),
+              worktreeCreated,
+            };
+          }
+          if (lease.outcome === 'unavailable') {
+            return {
+              ...refusal('cmux_lane_unavailable', lease.reason ?? `could not discover reusable lanes in ${cfg.cmuxLaneWorkspace}`),
+              worktreeCreated,
+            };
+          }
+          if (lease.outcome !== 'reserved') throw new Error(`unhandled lane outcome ${lease.outcome}`);
+          lane = lease.lane;
+          releaseLane = lease.release;
+          const launched = await launchInLane(lane, buildLaneLaunchCommand(dir, childEnv(req, dir), launch), cmuxExecutor);
+          created = launched.ok
+            ? { ok: true, ref: lane.surfaceRef, reason: '' }
+            : { ok: false, ref: '', reason: launched.stderr || launched.stdout || 'cmux lane launch failed' };
+        } else {
+          created = makeWorkspace({
+            name: `${req.project}/${req.taskId}:${req.role}`,
+            cwd: dir,
+            env: childEnv(req, dir),
+            focus: false,
+            command: launch,
+          });
+        }
+        if (!created.ok) {
+          releaseLane();
+          return {
+            ...launchFailure(
+              lane ? 'cmux_lane_launch_failed' : 'cmux_create_failed',
+              lane
+                ? `cmux could not launch in ${lane.title}: ${created.reason}`
+                : `cmux did not hand back a workspace ref: ${created.reason}. A pane may be open and running unattended; check cmux and close it by hand.`,
+            ),
+            worktreeCreated,
+          };
+        }
+        if (codexExecution) {
+          recorded = { record: recordCreatedPane(created.ref, req.taskId, req.role), session: null };
+          slotHeldForCodex = true;
+        } else {
+          recorded = await recordPaneAndWaitForSession(created.ref, req.taskId, req.role, dir, {
+            timeoutMs: cfg.cmuxStartupMs,
+            startedAfter: startedAt / 1000,
+          }, waiter);
+        }
+      } catch (error) {
+        releaseLane();
+        throw error;
+      } finally {
+        if (!slotHeldForCodex) releaseSlot();
+      }
+      const paneRecord = recorded.record;
+      const booted = recorded.session;
+      try {
+      if (codexExecution) {
+        const { codexOutcome } = await import('./spawn');
+        const watched = await watchCodexRun(codexArtifacts, {
+          timeoutMs: cfg.cmuxRunTimeoutMs,
+          signal: req.signal,
+        });
+        const parsed = parseCodexJSONL(readText(codexArtifacts.stdoutFile).split('\n'));
+        const stderr = readText(codexArtifacts.stderrFile);
+        const completed = codexOutcome({ output: parsed.output, exitCode: watched.exitCode, stderr });
+        const exitReason =
+          watched.health === 'aborted'
+            ? 'aborted'
+            : watched.health === 'timeout'
+              ? 'codex_timeout'
+              : completed.exitReason;
+        const output =
+          watched.health === 'timeout'
+            ? codexOutcome({ output: '', exitCode: 124, stderr }).output
+            : completed.output;
+        const aborted = exitReason === 'aborted';
+        const timedOut = exitReason === 'codex_timeout';
+        const keepOpen = exitReason !== 'success' && !aborted;
+        const laneScreen = lane && keepOpen ? cmuxExecutor(['read-screen', '--surface', lane.surfaceRef, '--lines', '120']) : null;
+        const screenResult = laneScreen
+          ? laneScreen.ok
+            ? { ok: true as const, screen: laneScreen.stdout }
+            : { ok: false as const, error: laneScreen.stderr || 'cmux read-screen failed' }
+          : keepOpen
+            ? readScreen(created.ref, 120)
+            : null;
+        const screen = screenResult?.ok ? screenResult.screen : '';
+        if (lane) interruptLane(lane, cmuxExecutor);
+        const shouldClose = !lane && (aborted || timedOut || (!keepOpen && cfg.cmuxCloseOnSuccess));
+        const closeResult = shouldClose
+          ? deps.closeWorkspace
+            ? deps.closeWorkspace(created.ref)
+            : closeWorkspace(created.ref)
+          : null;
+        const paneClosed: PaneClosedState = lane ? 'no' : closeResult ? (closeResult.ok ? 'yes' : 'unknown') : 'no';
+        recordEndedPane(paneRecord, exitReason, paneClosed);
         return {
-          ...launchFailure(
-            'cmux_create_failed',
-            `cmux did not hand back a workspace ref: ${created.reason}. A pane may be open and running unattended; check cmux and close it by hand.`,
-          ),
+          output:
+            output ||
+            screen ||
+            (screenResult && !screenResult.ok
+              ? `cmux pane ${created.ref} ended as "${exitReason}": screen was unreadable (${screenResult.error})`
+              : `cmux pane ${created.ref} ended as "${exitReason}" with no Codex agent message.`),
+          outputs: parsed.output ? [parsed.output] : [],
+          exitReason,
+          turnsUsed: parsed.toolCalls.length,
+          costUsd: 0,
+          costKnown: false,
+          model: 'codex',
+          sessionId: parsed.sessionId ?? '',
+          durationMs: Date.now() - startedAt,
           worktreeCreated,
         };
       }
-
-      const recorded = await recordPaneAndWaitForSession(created.ref, req.taskId, req.role, dir, {
-        timeoutMs: cfg.cmuxStartupMs,
-        startedAfter: startedAt / 1000,
-      }, waiter);
-      const paneRecord = recorded.record;
-      const booted = recorded.session;
       const outcome = await watcher(dir, {
         timeoutMs: cfg.cmuxRunTimeoutMs,
         startupMs: cfg.cmuxStartupMs,
@@ -593,6 +865,7 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
         signal: req.signal,
         sessionId: booted?.sessionId,
         startedAfter: startedAt / 1000,
+        maxBudgetUsd: req.maxBudgetUsd,
       });
 
       const recovered = booted ?? sessionInDir(dir, 'claude', undefined, startedAt / 1000);
@@ -613,11 +886,25 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
       // observing it. Closing the workspace is what actually ends the process,
       // so stop has to mean stop even though it costs the post-mortem.
       const aborted = exitReason === 'aborted';
-      const keepOpen = exitReason !== 'success' && !aborted;
-      const screenResult = keepOpen ? readScreen(created.ref, 120) : null;
+      const budgetStopped = exitReason === 'budget_exhausted';
+      const keepOpen = exitReason !== 'success' && !aborted && !budgetStopped;
+      const laneScreen = lane && keepOpen ? cmuxExecutor(['read-screen', '--surface', lane.surfaceRef, '--lines', '120']) : null;
+      const screenResult = laneScreen
+        ? laneScreen.ok
+          ? { ok: true as const, screen: laneScreen.stdout }
+          : { ok: false as const, error: laneScreen.stderr || 'cmux read-screen failed' }
+        : keepOpen
+          ? readScreen(created.ref, 120)
+          : null;
       const screen = screenResult?.ok ? screenResult.screen : '';
-      const shouldClose = aborted || (!keepOpen && cfg.cmuxCloseOnSuccess);
-      const paneClosed: PaneClosedState = shouldClose ? (closeWorkspace(created.ref).ok ? 'yes' : 'unknown') : 'no';
+      if (lane) interruptLane(lane, cmuxExecutor);
+      const shouldClose = !lane && (aborted || budgetStopped || (!keepOpen && cfg.cmuxCloseOnSuccess));
+      const closeResult = shouldClose
+        ? deps.closeWorkspace
+          ? deps.closeWorkspace(created.ref)
+          : closeWorkspace(created.ref)
+        : null;
+      const paneClosed: PaneClosedState = lane ? 'no' : closeResult ? (closeResult.ok ? 'yes' : 'unknown') : 'no';
       recordEndedPane(paneRecord, exitReason, paneClosed);
 
       return {
@@ -638,6 +925,10 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
         durationMs: Date.now() - startedAt,
         worktreeCreated,
       };
+      } finally {
+        if (slotHeldForCodex) releaseSlot();
+        releaseLane();
+      }
     },
   };
 }

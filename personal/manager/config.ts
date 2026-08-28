@@ -14,12 +14,18 @@ import { managerConfigFile } from './lib/paths';
 import type { AgentRole, Lane, TaskSource } from './types';
 
 export type ReviewProvider = 'opus-fresh' | 'codex';
+export type ExecutionProvider = 'claude' | 'codex';
 
 /** Two gates of the same family are one opinion wearing two labels (§7.3). */
 export type ModelFamily = 'anthropic' | 'openai' | 'unknown';
 
 export const REVIEW_PROVIDER_FAMILY: Record<ReviewProvider, ModelFamily> = {
   'opus-fresh': 'anthropic',
+  codex: 'openai',
+};
+
+export const EXECUTION_PROVIDER_FAMILY: Record<ExecutionProvider, ModelFamily> = {
+  claude: 'anthropic',
   codex: 'openai',
 };
 
@@ -61,6 +67,7 @@ export interface ManagerConfig {
   readonly host: '127.0.0.1';
   /** §6.3 — global agent cap. Resolved from cores when null. */
   maxAgents: number | null;
+  projectConcurrency: Record<string, number>;
   /** §6.5 — bootstrap flat ceilings, used until a lane has enough history. */
   bootstrapTaskCeilingUsd: number;
   dayCeilingUsd: number;
@@ -111,6 +118,7 @@ export interface ManagerConfig {
    * what every other entry point does.
    */
   spawnRunner: SpawnRunner;
+  executionProvider: ExecutionProvider;
   /**
    * Roles that get their own cmux pane. Everything else falls back to the SDK
    * port even when the cmux runner is selected.
@@ -128,7 +136,10 @@ export interface ManagerConfig {
    */
   cmuxSkipPermissions: boolean;
   cmuxClaudeBin: string;
+  cmuxCodexBin: string;
   cmuxClaudeArgs: string[];
+  cmuxLaneWorkspace: string;
+  cmuxLaneTitles: string[];
   /** How long a pane has to register a session and start its first turn. */
   cmuxStartupMs: number;
   cmuxRunTimeoutMs: number;
@@ -203,6 +214,7 @@ export const DEFAULT_CONFIG: ManagerConfig = {
   port: 8787,
   host: '127.0.0.1',
   maxAgents: null,
+  projectConcurrency: {},
   bootstrapTaskCeilingUsd: 10,
   dayCeilingUsd: 40,
   p90MinSamples: 20,
@@ -213,10 +225,14 @@ export const DEFAULT_CONFIG: ManagerConfig = {
   assertTimeoutMs: 10 * 60_000,
   browserTools: [],
   spawnRunner: 'sdk',
+  executionProvider: 'claude',
   cmuxRoles: ['main', 'subagent'],
   cmuxSkipPermissions: true,
   cmuxClaudeBin: 'claude',
+  cmuxCodexBin: 'codex',
   cmuxClaudeArgs: [],
+  cmuxLaneWorkspace: '',
+  cmuxLaneTitles: ['L1', 'L2', 'L3', 'L4'],
   cmuxStartupMs: 3 * 60_000,
   cmuxRunTimeoutMs: 45 * 60_000,
   cliRunTimeoutMs: 45 * 60_000,
@@ -276,6 +292,10 @@ export function resolveMaxAgents(cfg: ManagerConfig = loadConfig()): number {
   return Math.max(1, Math.min(8, cores - 2));
 }
 
+export function resolveProjectConcurrency(project: string, cfg: ManagerConfig = loadConfig()): number {
+  return Math.max(1, Math.floor(cfg.projectConcurrency[project] ?? 1));
+}
+
 /** Which model actually runs a role for this attempt. */
 export function modelForRole(
   role: AgentRole,
@@ -332,6 +352,7 @@ export interface ReviewIndependence {
  * attempt 3 — the attempt that matters most.
  */
 function agentModels(cfg: ManagerConfig): string[] {
+  if (cfg.executionProvider === 'codex') return ['codex'];
   const route = cfg.models.subagent;
   const models = [route.model];
   if (cfg.escalateSubagentOnLastAttempt && route.fallback) models.push(route.fallback);
@@ -480,6 +501,10 @@ function assertManagerConfig(value: unknown): asserts value is ManagerConfig {
   ];
   if (numericKeys.some((key) => !isFiniteNumber(value[key]))) throw new Error('config has a non-numeric number field');
   if (value.maxAgents !== null && !isFiniteNumber(value.maxAgents)) throw new Error('maxAgents must be null or numeric');
+  if (!isRecord(value.projectConcurrency)) throw new Error('projectConcurrency must be an object');
+  if (Object.values(value.projectConcurrency).some((limit) => !isFiniteNumber(limit) || limit < 1 || !Number.isInteger(limit))) {
+    throw new Error('projectConcurrency values must be positive integers');
+  }
   if (value.host !== '127.0.0.1') throw new Error('host must remain 127.0.0.1');
 
   const booleanKeys: Array<keyof ManagerConfig> = [
@@ -489,16 +514,36 @@ function assertManagerConfig(value: unknown): asserts value is ManagerConfig {
   ];
   if (booleanKeys.some((key) => typeof value[key] !== 'boolean')) throw new Error('config has a non-boolean boolean field');
 
-  if (typeof value.cmuxClaudeBin !== 'string') throw new Error('cmuxClaudeBin must be a string');
+  if (
+    typeof value.cmuxClaudeBin !== 'string' ||
+    typeof value.cmuxCodexBin !== 'string' ||
+    typeof value.cmuxLaneWorkspace !== 'string'
+  ) {
+    throw new Error('cmux binary and lane workspace must be strings');
+  }
   if (!isSpawnRunner(value.spawnRunner)) throw new Error('spawnRunner is invalid');
+  if (
+    typeof value.executionProvider !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(EXECUTION_PROVIDER_FAMILY, value.executionProvider)
+  ) {
+    throw new Error('executionProvider is invalid');
+  }
   if (
     typeof value.reviewProvider !== 'string' ||
     !Object.prototype.hasOwnProperty.call(REVIEW_PROVIDER_FAMILY, value.reviewProvider)
   ) {
     throw new Error('reviewProvider is invalid');
   }
+  if (value.executionProvider === 'codex' && value.reviewProvider === 'codex') {
+    throw new Error('executionProvider codex requires reviewProvider opus-fresh');
+  }
 
-  if (!isStringArray(value.browserTools) || !isStringArray(value.cmuxClaudeArgs) || !isStringArray(value.worktreeLinks)) {
+  if (
+    !isStringArray(value.browserTools) ||
+    !isStringArray(value.cmuxClaudeArgs) ||
+    !isStringArray(value.cmuxLaneTitles) ||
+    !isStringArray(value.worktreeLinks)
+  ) {
     throw new Error('config has an invalid string array');
   }
   const roles: AgentRole[] = ['main', 'subagent', 'review', 'judge'];
@@ -551,6 +596,7 @@ function buildConfig(): ManagerConfig {
       DEFAULT_CONFIG.lockWaitTimeoutOverrideMs,
       overrides.lockWaitTimeoutOverrideMs,
     ),
+    projectConcurrency: mergeObject(DEFAULT_CONFIG.projectConcurrency, overrides.projectConcurrency),
   };
   assertManagerConfig(merged);
   const envPort = numberFromEnv('MANAGER_PORT');

@@ -56,6 +56,10 @@ function cmux(args: string[], timeoutMs = 30_000): CmuxRun {
   };
 }
 
+export function runCmux(args: string[], timeoutMs?: number): CmuxRun {
+  return cmux(args, timeoutMs);
+}
+
 /**
  * True only when the app is actually up, not merely installed.
  *
@@ -256,6 +260,11 @@ export interface LaunchCommandOptions {
   promptFile: string;
   model?: string;
   extraArgs?: string[];
+  capture?: {
+    stdoutFile: string;
+    stderrFile: string;
+    exitCodeFile: string;
+  };
 }
 
 /**
@@ -274,5 +283,7 @@ export function buildLaunchCommand(opts: LaunchCommandOptions): string {
     parts.push(arg);
   }
   parts.push(`"$(cat ${singleQuote(opts.promptFile)})"`);
-  return parts.join(' ');
+  const command = parts.join(' ');
+  if (!opts.capture) return command;
+  return `${command} > ${singleQuote(opts.capture.stdoutFile)} 2> ${singleQuote(opts.capture.stderrFile)}; printf '%s' "$?" > ${singleQuote(opts.capture.exitCodeFile)}`;
 }

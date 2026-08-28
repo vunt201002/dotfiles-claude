@@ -28,6 +28,16 @@ afterAll(() => {
 // someone remembered to restart, so the safety decision was made, acknowledged,
 // and silently not in effect.
 describe('a config edit reaches a process that already read the config', () => {
+  test('the shipped execution provider remains claude', () => {
+    expect(loadConfig().executionProvider).toBe('claude');
+    expect(loadConfig().cmuxCodexBin).toBe('codex');
+  });
+
+  test('codex cannot execute and review the same task', () => {
+    writeOverrides({ executionProvider: 'codex', reviewProvider: 'codex' });
+    expect(() => loadConfig()).toThrow('executionProvider codex requires reviewProvider opus-fresh');
+  });
+
   test('an override written after the first read is picked up', () => {
     expect(loadConfig().reviewProvider).toBe('codex');
     writeOverrides({ reviewProvider: 'opus-fresh' });

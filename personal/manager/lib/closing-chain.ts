@@ -189,6 +189,7 @@ export interface ChainRun {
 }
 
 export interface ChainContext {
+  taskId: string;
   project: string;
   issue: string;
   /** The project's own checkout. Only B8-assert's command plan is resolved from it. */
@@ -255,6 +256,7 @@ export const BLOCKING_HOOK_GATES: readonly string[] = ['lint', 'tsc', 'test'];
 
 export interface HookWindow {
   project: string;
+  taskId?: string;
   since: string;
   until: string;
   /**
@@ -292,6 +294,7 @@ export function collectLoggedGates(
     .filter(
       (entry) =>
         gates.includes(entry.gate) &&
+        (window.taskId === undefined || entry.task_id === window.taskId) &&
         typeof entry.ts === 'string' &&
         entry.ts >= window.since &&
         (!window.until || entry.ts <= window.until) &&
@@ -331,6 +334,7 @@ const NOTHING_SPENT: GateCost = { usd: 0, known: true };
 function write(ctx: ChainContext, report: GateReport, cost: GateCost): void {
   logGate({
     project: ctx.project,
+    task_id: ctx.taskId,
     issue: ctx.issue,
     lane: ctx.envelope.lane,
     gate: report.gate,

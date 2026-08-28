@@ -61,6 +61,16 @@ describe('the review path is not the same model family as the agent it grades', 
     expect(collapsed.line).toContain('§7.3');
   });
 
+  test('opus review and judge remain independent from a codex executor', () => {
+    const independence = reviewIndependence(
+      config({ executionProvider: 'codex', reviewProvider: 'opus-fresh' }),
+    );
+    expect(independence.reviewIndependent).toBe(true);
+    expect(independence.judgeIndependent).toBe(true);
+    expect(independence.fullyIndependent).toBe(true);
+    expect(independence.line).toContain('agent=codex[openai]');
+  });
+
   // modelForRole swaps subagent to its fallback on the last bug-lon attempt.
   // Reading route.model alone cleared a pairing that goes same-family on
   // attempt 3 — the attempt that matters most.

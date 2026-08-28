@@ -23,6 +23,7 @@ function record(overrides: Partial<TaskRecord> = {}): TaskRecord {
 describe('happy path edges', () => {
   const happy: Array<[TaskState, TaskState]> = [
     ['INTAKE', 'SIZED'],
+    ['INTAKE', 'APPROVAL'],
     ['SIZED', 'APPROVAL'],
     ['SIZED', 'RUNNING'],
     ['APPROVAL', 'RUNNING'],
