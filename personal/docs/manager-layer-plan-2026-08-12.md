@@ -680,8 +680,16 @@ chi phí p90, brainstorm, crash recovery, scope theo project, `/stopall`.
 
 **DoD:** có `detection_rate` + `false_positives` thật cho từng cổng, thay con số đi mượn
 `~60-70%` đang nằm trong `workflow.md`.
-**→ ĐẠT 13/08** cho phần đo (bảng ngay dưới, cả 6 cổng đều có số thật). **Còn nợ**: cưỡng chế
-red test — B5 vẫn chỉ là prose, chưa lưu output lần chạy đỏ để B8 đối chiếu.
+**→ ĐẠT 13/08** cho phần đo (bảng ngay dưới, cả 6 cổng đều có số thật).
+
+**→ ĐẠT 18/08, xác nhận lại 28/08.** Cưỡng chế red-test không còn là prose: commit `d8ed79838`
+thay dòng `red-test ... skipped: pre-fix failing output capture is not implemented` bằng replay
+thật — `personal/manager/lib/red-test-runner.ts` tạo checkout riêng tại `baseSha`, chạy lại đúng
+test đã đổi, và chỉ chấp nhận ca `red tại base, green tại HEAD` làm bằng chứng; ca giả (xanh sẵn
+tại base) bị chặn ở `verdict.ts`. Test `personal/manager/test/closing-chain.test.ts:305` dựng
+đúng ca giả đó và xác nhận nó bị block — 12/12 pass cho nhóm red-test, 1/1 cho ca giả. Không lưu
+raw stdout của lần chạy đỏ thành file riêng, nhưng tự dựng lại và chạy lại độc lập tại `baseSha`
+bất biến — mạnh hơn việc tin output do agent tự nộp.
 
 #### Kết quả đo — 19 fixture từ lỗi THẬT (12/08, đo lại đầy đủ 13/08)
 
