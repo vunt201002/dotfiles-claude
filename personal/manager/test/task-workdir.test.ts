@@ -168,6 +168,7 @@ function contaminateCheckout(): void {
 function chainContext(overrides: Partial<ChainContext> = {}): ChainContext {
   const { exec } = countingExec();
   return {
+    taskId: 'fixture-t1',
     project: PROJECT,
     issue: 't1',
     scope: REPO,

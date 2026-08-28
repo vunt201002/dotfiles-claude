@@ -26,11 +26,13 @@ import {
 let sandbox: string;
 const originalDir = process.env.GSTACK_GATE_LOG_DIR;
 const originalOrigin = process.env[ORIGIN_ENV];
+const originalTask = process.env.GSTACK_MANAGER_TASK;
 
 beforeEach(() => {
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-log-test-'));
   process.env.GSTACK_GATE_LOG_DIR = sandbox;
   delete process.env[ORIGIN_ENV];
+  delete process.env.GSTACK_MANAGER_TASK;
 });
 
 afterEach(() => {
@@ -38,10 +40,18 @@ afterEach(() => {
   else process.env.GSTACK_GATE_LOG_DIR = originalDir;
   if (originalOrigin === undefined) delete process.env[ORIGIN_ENV];
   else process.env[ORIGIN_ENV] = originalOrigin;
+  if (originalTask === undefined) delete process.env.GSTACK_MANAGER_TASK;
+  else process.env.GSTACK_MANAGER_TASK = originalTask;
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
 describe('append / read round-trip', () => {
+  test('the task environment stamps hook rows with their owning task', () => {
+    process.env.GSTACK_MANAGER_TASK = 'kivora-t105';
+    appendGateLog({ project: 'kivora', gate: 'tsc', gate_family: 'deterministic', verdict: 'pass' });
+    expect((readGateLog('kivora')[0] as { task_id?: string }).task_id).toBe('kivora-t105');
+  });
+
   test('a full §3.3 entry survives the round-trip unchanged', () => {
     appendGateLog({
       project: 'kivora',
@@ -278,6 +288,29 @@ describe('project name never escapes the gate-log directory', () => {
 });
 
 describe('rotation at 10MB keeps 5 generations', () => {
+  test('an append waits for another process holding the rotation lock', async () => {
+    const file = gateLogPath('kivora');
+    const lock = `${file}.lock`;
+    const holder = path.join(sandbox, 'hold-lock.ts');
+    fs.writeFileSync(
+      holder,
+      `import fs from 'fs';
+const lock = process.argv[2];
+fs.writeFileSync(lock, String(process.pid));
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+fs.unlinkSync(lock);
+`,
+    );
+    const child = Bun.spawn(['bun', 'run', holder, lock], { stdout: 'ignore', stderr: 'pipe' });
+    for (let i = 0; i < 100 && !fs.existsSync(lock); i++) await Bun.sleep(5);
+    expect(fs.existsSync(lock)).toBe(true);
+
+    const started = Date.now();
+    appendGateLog({ project: 'kivora', gate: 'lint', gate_family: 'deterministic', verdict: 'pass' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+    expect(await child.exited).toBe(0);
+  });
+
   test('an oversized log rotates to .1 and the new line lands in a fresh file', () => {
     const file = gateLogPath('kivora');
     fs.mkdirSync(path.dirname(file), { recursive: true });

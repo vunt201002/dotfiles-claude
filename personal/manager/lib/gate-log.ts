@@ -45,6 +45,7 @@ export interface Reclassification {
 export interface GateLogEntry {
   ts: string;
   project: string;
+  task_id?: string;
   issue?: string;
   lane?: string;
   gate: string;
@@ -105,6 +106,7 @@ export const GATE_ORIGINS: readonly GateOrigin[] = ['work', 'gate-test'];
  * produces is stamped, including lines written by shell hooks it never sees.
  */
 export const ORIGIN_ENV = 'GSTACK_GATE_LOG_ORIGIN';
+export const TASK_ID_ENV = 'GSTACK_MANAGER_TASK';
 export const DEFAULT_ORIGIN: GateOrigin = 'work';
 
 /**
@@ -219,6 +221,12 @@ function resolveOrigin(value: unknown): GateOrigin {
   return requireOneOf(fromEnv, GATE_ORIGINS, ORIGIN_ENV);
 }
 
+function resolveTaskId(value: unknown): string | undefined {
+  const explicit = optionalString(value, 'task_id');
+  if (explicit) return explicit;
+  return process.env[TASK_ID_ENV]?.trim() || undefined;
+}
+
 /** Key order follows the §3.3 example so a raw log line reads like the spec. */
 export function validateGateLogEntry(input: Omit<GateLogEntry, 'ts'> & { ts?: string }): GateLogEntry {
   const gate = optionalString(input.gate, 'gate');
@@ -233,6 +241,7 @@ export function validateGateLogEntry(input: Omit<GateLogEntry, 'ts'> & { ts?: st
   const entry: GateLogEntry = {
     ts: optionalString(input.ts, 'ts') ?? new Date().toISOString(),
     project: projectSlug(input.project),
+    task_id: resolveTaskId(input.task_id),
     issue: optionalString(input.issue, 'issue'),
     lane: optionalString(input.lane, 'lane'),
     gate,
@@ -270,6 +279,54 @@ function rotateIfNeeded(file: string): void {
   } catch {}
 }
 
+const LOG_LOCK_TIMEOUT_MS = 5_000;
+const LOG_LOCK_STALE_MS = 30_000;
+const LOG_LOCK_POLL_MS = 10;
+const LOG_LOCK_WAIT = new Int32Array(new SharedArrayBuffer(4));
+
+function acquireLogLock(file: string): () => void {
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + LOG_LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      const fd = fs.openSync(lock, 'wx', 0o600);
+      fs.writeFileSync(fd, `${process.pid}\n`);
+      fs.closeSync(fd);
+      return () => {
+        try {
+          fs.unlinkSync(lock);
+        } catch (error) {
+          if (!isEnoent(error)) throw error;
+        }
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs >= LOG_LOCK_STALE_MS) {
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch (statError) {
+        if (isEnoent(statError)) continue;
+        throw statError;
+      }
+      if (Date.now() >= deadline) throw new Error(`gate-log: timed out waiting for append lock ${lock}`);
+      Atomics.wait(LOG_LOCK_WAIT, 0, 0, LOG_LOCK_POLL_MS);
+    }
+  }
+}
+
+function appendLine(file: string, line: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const release = acquireLogLock(file);
+  try {
+    rotateIfNeeded(file);
+    fs.appendFileSync(file, `${line}\n`, 'utf8');
+  } finally {
+    release();
+  }
+}
+
 /**
  * One complete `\n`-terminated line per `appendFileSync` call, so parallel agents
  * appending to the same project file never interleave a half-written record.
@@ -277,9 +334,7 @@ function rotateIfNeeded(file: string): void {
 export function appendGateLog(input: Omit<GateLogEntry, 'ts'> & { ts?: string }): void {
   const entry = validateGateLogEntry(input);
   const file = gateLogPath(entry.project);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  rotateIfNeeded(file);
-  fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, 'utf8');
+  appendLine(file, JSON.stringify(entry));
 }
 
 interface ParsedLog {
@@ -455,9 +510,7 @@ export function reclassify(target: GateLogRef, verdict: Verdict, note: string): 
   };
 
   const file = gateLogPath(project);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  rotateIfNeeded(file);
-  fs.appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
+  appendLine(file, JSON.stringify(record));
 }
 
 /**

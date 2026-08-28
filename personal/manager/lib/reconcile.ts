@@ -43,6 +43,7 @@ export async function reconcile(): Promise<ReconcileReport> {
     report.failed.push({ id: task.id, from: task.state, why });
     logGate({
       project: failed.project,
+      task_id: failed.id,
       issue: failed.issue,
       lane: failed.envelope?.lane ?? 'unsized',
       gate: `lifecycle:${task.state}->FAILED`,

@@ -137,6 +137,7 @@ function cmdAppend(args: string[]): void {
   } else {
     input = {
       project: str(flags, 'project'),
+      task_id: str(flags, 'task-id'),
       issue: str(flags, 'issue'),
       lane: str(flags, 'lane'),
       gate: str(flags, 'gate'),
