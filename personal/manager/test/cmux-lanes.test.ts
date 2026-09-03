@@ -218,6 +218,17 @@ describe('reusable cmux lanes', () => {
     expect(laneLooksIdle({ ok: true, stdout: REAL_CAPTURED_CODEX_IDLE_SCREEN, stderr: '' })).toBe(true);
   });
 
+  test('an unreadable screen is unknown, never a shell available for reservation', async () => {
+    const executor = fixtureExecutor({ 'surface:11': { ok: false, text: 'screen unavailable' } });
+    expect(laneLooksIdle({ ok: false, stdout: '', stderr: 'screen unavailable' })).toBe(false);
+    expect(
+      await reserveLane('unreadable-screen', 'improve-harness', ['L1'], {
+        executor,
+        timeoutMs: 0,
+      }),
+    ).toEqual({ outcome: 'timeout' });
+  });
+
   test.each([
     ['bare shell prompt', 'manager@host ~/repo %'],
     ['bare ❯ prompt', '❯'],
@@ -268,6 +279,26 @@ describe('reusable cmux lanes', () => {
         lifecycle: 'unknown',
         health: 'working',
         updatedAt: (TEST_NOW_MS - 3 * TEST_ABANDONED_AFTER_MS) / 1000,
+      }),
+    ).toEqual({ outcome: 'reserved', screenReads: 1 });
+  });
+
+  test('an uncleared finished session record does not hide an idle lane', async () => {
+    expect(
+      await reserveAgainstStructuredBusySession(REAL_CAPTURED_CODEX_IDLE_SCREEN, {
+        lifecycle: 'idle',
+        health: 'finished',
+        updatedAt: TEST_NOW_MS / 1000,
+      }),
+    ).toEqual({ outcome: 'reserved', screenReads: 1 });
+  });
+
+  test('a waiting session stops hiding the lane after the configured abandonment window', async () => {
+    expect(
+      await reserveAgainstStructuredBusySession(REAL_CAPTURED_CODEX_IDLE_SCREEN, {
+        lifecycle: 'needsInput',
+        health: 'waiting',
+        updatedAt: (TEST_NOW_MS - TEST_ABANDONED_AFTER_MS - 1) / 1000,
       }),
     ).toEqual({ outcome: 'reserved', screenReads: 1 });
   });
@@ -399,6 +430,85 @@ describe('reusable cmux lanes', () => {
         ['send', '--surface', 'surface:11', '--', 'launch'],
         ['send-key', '--surface', 'surface:11', 'Enter'],
       ],
+    });
+  });
+
+  test.each([
+    ['send', 'L1 could not send /exit: cmux send failed'],
+    ['send-key', 'L1 could not submit /exit: cmux send-key failed'],
+  ] as const)('a failed %s exit operation names the lane and the operation that failed', async (failedOperation, reason) => {
+    const executor: LaneCmuxExecutor = (args) => {
+      if (args[0] === 'read-screen') return { ok: true, stdout: REAL_CAPTURED_CODEX_IDLE_SCREEN, stderr: '' };
+      if (args[0] === failedOperation) return { ok: false, stdout: '', stderr: '' };
+      return { ok: true, stdout: '', stderr: '' };
+    };
+
+    expect(
+      await launchInLane(
+        { title: 'L1', surfaceRef: 'surface:11', workspaceRef: 'workspace:7', foreground: 'agent' },
+        'launch',
+        executor,
+        { shellReadyTimeoutMs: 250 },
+      ),
+    ).toEqual({ ok: false, stdout: '', stderr: reason });
+  });
+
+  test('a slow TUI that needs more than the old twenty polls still reaches the shell', async () => {
+    let now = 0;
+    let screenReads = 0;
+    const executor: LaneCmuxExecutor = (args) => {
+      if (args[0] === 'read-screen') {
+        screenReads += 1;
+        return {
+          ok: true,
+          stdout: screenReads < 25 ? REAL_CAPTURED_CODEX_IDLE_SCREEN : 'manager@host ~/repo %',
+          stderr: '',
+        };
+      }
+      return { ok: true, stdout: '', stderr: '' };
+    };
+
+    const result = await launchInLane(
+      { title: 'L1', surfaceRef: 'surface:11', workspaceRef: 'workspace:7', foreground: 'agent' },
+      'launch',
+      executor,
+      {
+        shellReadyTimeoutMs: 10_000,
+        now: () => now,
+        wait: async (delayMs) => {
+          now += delayMs;
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(screenReads).toBe(25);
+  });
+
+  test('a TUI that never returns to a shell fails with the configured wait in the reason', async () => {
+    let now = 0;
+    const executor: LaneCmuxExecutor = (args) =>
+      args[0] === 'read-screen'
+        ? { ok: true, stdout: REAL_CAPTURED_CODEX_IDLE_SCREEN, stderr: '' }
+        : { ok: true, stdout: '', stderr: '' };
+
+    const result = await launchInLane(
+      { title: 'L1', surfaceRef: 'surface:11', workspaceRef: 'workspace:7', foreground: 'agent' },
+      'launch',
+      executor,
+      {
+        shellReadyTimeoutMs: 250,
+        now: () => now,
+        wait: async (delayMs) => {
+          now += delayMs;
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      stdout: '',
+      stderr: 'L1 did not return to a shell after /exit within 250ms',
     });
   });
 

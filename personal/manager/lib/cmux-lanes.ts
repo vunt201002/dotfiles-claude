@@ -66,7 +66,7 @@ export function discoverLanes(
 }
 
 function idleLaneForeground(run: CmuxRun): ReservedLane['foreground'] | null {
-  if (!run.ok) return 'shell';
+  if (!run.ok) return null;
   const screen = run.stdout.trimEnd();
   if (!screen) return 'shell';
   const lines = screen.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -175,24 +175,76 @@ export function buildLaneLaunchCommand(dir: string, env: Record<string, string>,
   return `cd ${singleQuote(cwd)} && env ${assignments.join(' ')} ${launch}`;
 }
 
-export async function launchInLane(lane: ReservedLane, command: string, executor: LaneCmuxExecutor): Promise<CmuxRun> {
-  if (lane.foreground === 'agent') {
-    const exit = executor(['send', '--surface', lane.surfaceRef, '--', '/exit']);
-    if (!exit.ok) return exit;
-    const submitted = executor(['send-key', '--surface', lane.surfaceRef, 'Enter']);
-    if (!submitted.ok) return submitted;
-    let shellReady = false;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      await sleep(50);
-      const ready = executor(['read-screen', '--surface', lane.surfaceRef, '--lines', '20']);
-      if (!ready.ok) return ready;
-      if (idleLaneForeground(ready) === 'shell') {
-        shellReady = true;
-        break;
-      }
-    }
-    if (!shellReady) return { ok: false, stdout: '', stderr: `${lane.title} did not return to a shell after /exit` };
+export interface LaneShellReadyOptions {
+  shellReadyTimeoutMs: number;
+  now?: () => number;
+  wait?: (delayMs: number) => Promise<void>;
+}
+
+const LANE_SHELL_POLL_BACKOFF_MS = [50, 100, 200, 250] as const;
+
+function laneFailure(lane: DiscoveredLane, reason: string): CmuxRun {
+  return { ok: false, stdout: '', stderr: `${lane.title} ${reason}` };
+}
+
+function sendLaneExit(lane: DiscoveredLane, executor: LaneCmuxExecutor): CmuxRun {
+  const exit = executor(['send', '--surface', lane.surfaceRef, '--', '/exit']);
+  if (!exit.ok) return laneFailure(lane, `could not send /exit: ${exit.stderr || exit.stdout || 'cmux send failed'}`);
+  const submitted = executor(['send-key', '--surface', lane.surfaceRef, 'Enter']);
+  if (!submitted.ok) {
+    return laneFailure(lane, `could not submit /exit: ${submitted.stderr || submitted.stdout || 'cmux send-key failed'}`);
   }
+  return submitted;
+}
+
+/** Returns only after the terminal is observably at a shell prompt. */
+export async function ensureLaneShell(
+  lane: DiscoveredLane,
+  executor: LaneCmuxExecutor,
+  opts: LaneShellReadyOptions,
+  initialForeground: ReservedLane['foreground'] | null = null,
+): Promise<CmuxRun> {
+  const now = opts.now ?? Date.now;
+  const wait = opts.wait ?? sleep;
+  const timeoutMs = Math.max(0, opts.shellReadyTimeoutMs);
+  const deadline = now() + timeoutMs;
+  let exitSent = false;
+  let poll = 0;
+  if (initialForeground === 'shell') return { ok: true, stdout: '', stderr: '' };
+  if (initialForeground === 'agent') {
+    const submitted = sendLaneExit(lane, executor);
+    if (!submitted.ok) return submitted;
+    exitSent = true;
+  }
+  while (true) {
+    const ready = executor(['read-screen', '--surface', lane.surfaceRef, '--lines', '20']);
+    if (!ready.ok) return laneFailure(lane, `could not verify its shell: ${ready.stderr || 'read-screen failed'}`);
+    const foreground = idleLaneForeground(ready);
+    if (foreground === 'shell') return ready;
+    if (foreground === 'agent' && !exitSent) {
+      const submitted = sendLaneExit(lane, executor);
+      if (!submitted.ok) return submitted;
+      exitSent = true;
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      const afterExit = exitSent ? ' after /exit' : '';
+      return laneFailure(lane, `did not return to a shell${afterExit} within ${timeoutMs}ms`);
+    }
+    const delay = Math.min(LANE_SHELL_POLL_BACKOFF_MS[Math.min(poll, LANE_SHELL_POLL_BACKOFF_MS.length - 1)], remaining);
+    poll += 1;
+    await wait(delay);
+  }
+}
+
+export async function launchInLane(
+  lane: ReservedLane,
+  command: string,
+  executor: LaneCmuxExecutor,
+  opts: LaneShellReadyOptions = { shellReadyTimeoutMs: loadConfig().cmuxLaneShellReadyMs },
+): Promise<CmuxRun> {
+  const shell = await ensureLaneShell(lane, executor, opts, lane.foreground);
+  if (!shell.ok) return shell;
   const sent = executor(['send', '--surface', lane.surfaceRef, '--', command]);
   if (!sent.ok) return sent;
   return executor(['send-key', '--surface', lane.surfaceRef, 'Enter']);

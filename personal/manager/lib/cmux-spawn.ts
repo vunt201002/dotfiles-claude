@@ -50,6 +50,7 @@ import {
 } from './cmux-control';
 import {
   buildLaneLaunchCommand,
+  ensureLaneShell,
   interruptLane,
   launchInLane,
   reserveLane,
@@ -648,12 +649,49 @@ export interface CmuxSpawnDeps {
   reserveLane: typeof reserveLane;
 }
 
-function endLaneAgent(lane: ReservedLane, cfg: ManagerConfig, executor: LaneCmuxExecutor): void {
+async function recordLaneCleanupFailure(taskId: string, reason: string): Promise<void> {
+  const line = `LANE CLEANUP FAILED: ${reason}`;
+  try {
+    const { loadTask, saveTask } = await import('./store');
+    const task = loadTask(taskId);
+    if (task && !task.report_lines.includes(line)) {
+      task.report_lines.push(line);
+      saveTask(task);
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`manager: could not record lane cleanup failure for ${taskId}: ${detail}`);
+  }
+  console.error(`manager: ${line}`);
+}
+
+async function endLaneAgent(
+  lane: ReservedLane,
+  taskId: string,
+  cfg: ManagerConfig,
+  executor: LaneCmuxExecutor,
+  foreground: ReservedLane['foreground'] | null,
+): Promise<ReturnType<LaneCmuxExecutor>> {
   const interrupted = interruptLane(lane, executor);
-  if (!interrupted.ok || cfg.executionProvider !== 'claude') return;
-  const exited = executor(['send', '--surface', lane.surfaceRef, '--', '/exit']);
-  if (!exited.ok) return;
-  executor(['send-key', '--surface', lane.surfaceRef, 'Enter']);
+  if (!interrupted.ok) {
+    const failure = {
+      ok: false,
+      stdout: '',
+      stderr: `${lane.title} could not be interrupted before release: ${interrupted.stderr || interrupted.stdout || 'cmux send-key failed'}`,
+    };
+    await recordLaneCleanupFailure(taskId, failure.stderr);
+    return failure;
+  }
+  const shell = await ensureLaneShell(
+    lane,
+    executor,
+    { shellReadyTimeoutMs: cfg.cmuxLaneShellReadyMs },
+    foreground,
+  );
+  if (!shell.ok) {
+    await recordLaneCleanupFailure(taskId, shell.stderr || shell.stdout || `${lane.title} shell verification failed`);
+  }
+  return shell;
 }
 
 export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPort {
@@ -733,6 +771,13 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
       let lane: ReservedLane | null = null;
       let releaseLane: () => void = () => undefined;
       let slotHeldForCodex = false;
+      let laneAgentLaunched = false;
+      let laneCleanupAttempted = false;
+      const cleanupLane = async (): Promise<void> => {
+        if (!lane || !laneAgentLaunched || laneCleanupAttempted) return;
+        laneCleanupAttempted = true;
+        await endLaneAgent(lane, req.taskId, cfg, cmuxExecutor, codexExecution ? null : 'agent');
+      };
       try {
         const launch = buildExecutionLaunchCommand(
           cfg,
@@ -765,7 +810,13 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
           if (lease.outcome !== 'reserved') throw new Error(`unhandled lane outcome ${lease.outcome}`);
           lane = lease.lane;
           releaseLane = lease.release;
-          const launched = await launchInLane(lane, buildLaneLaunchCommand(dir, childEnv(req, dir), launch), cmuxExecutor);
+          const launched = await launchInLane(
+            lane,
+            buildLaneLaunchCommand(dir, childEnv(req, dir), launch),
+            cmuxExecutor,
+            { shellReadyTimeoutMs: cfg.cmuxLaneShellReadyMs },
+          );
+          laneAgentLaunched = launched.ok;
           created = launched.ok
             ? { ok: true, ref: lane.surfaceRef, reason: '' }
             : { ok: false, ref: '', reason: launched.stderr || launched.stdout || 'cmux lane launch failed' };
@@ -800,7 +851,11 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
           }, waiter);
         }
       } catch (error) {
-        releaseLane();
+        try {
+          await cleanupLane();
+        } finally {
+          releaseLane();
+        }
         throw error;
       } finally {
         if (!slotHeldForCodex) releaseSlot();
@@ -839,7 +894,7 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
             ? readScreen(created.ref, 120)
             : null;
         const screen = screenResult?.ok ? screenResult.screen : '';
-        if (lane) endLaneAgent(lane, cfg, cmuxExecutor);
+        await cleanupLane();
         const shouldClose = !lane && (aborted || timedOut || (!keepOpen && cfg.cmuxCloseOnSuccess));
         const closeResult = shouldClose
           ? deps.closeWorkspace
@@ -905,7 +960,7 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
           ? readScreen(created.ref, 120)
           : null;
       const screen = screenResult?.ok ? screenResult.screen : '';
-      if (lane) endLaneAgent(lane, cfg, cmuxExecutor);
+      await cleanupLane();
       const shouldClose = !lane && (aborted || budgetStopped || (!keepOpen && cfg.cmuxCloseOnSuccess));
       const closeResult = shouldClose
         ? deps.closeWorkspace
@@ -934,8 +989,12 @@ export function createCmuxSpawnPort(deps: Partial<CmuxSpawnDeps> = {}): SpawnPor
         worktreeCreated,
       };
       } finally {
-        if (slotHeldForCodex) releaseSlot();
-        releaseLane();
+        try {
+          await cleanupLane();
+        } finally {
+          if (slotHeldForCodex) releaseSlot();
+          releaseLane();
+        }
       }
     },
   };

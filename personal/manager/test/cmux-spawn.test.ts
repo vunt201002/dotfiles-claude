@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, test, expect, beforeEach, afterAll, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -23,6 +23,7 @@ import { DEFAULT_CONFIG, resetConfigCache } from '../config';
 import { measuredCost } from '../lib/cost';
 import { managerConfigFile } from '../lib/paths';
 import { resolveSpawnRunner } from '../lib/spawn';
+import { loadTask, newTaskRecord, saveTask } from '../lib/store';
 
 const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cmux-spawn-')));
 process.env.MANAGER_HOME = HOME;
@@ -191,7 +192,15 @@ describe('pane ownership survives the run that created it', () => {
 });
 
 describe('lane-backed cmux execution', () => {
-  function configureLane(enabled: boolean, closeOnSuccess = false): void {
+  test('lane shell handoff defaults to twenty seconds instead of the agent startup budget', () => {
+    expect(DEFAULT_CONFIG.cmuxLaneShellReadyMs).toBe(20_000);
+  });
+
+  function configureLane(
+    enabled: boolean,
+    closeOnSuccess = false,
+    overrides: Record<string, unknown> = {},
+  ): void {
     fs.mkdirSync(path.dirname(managerConfigFile()), { recursive: true });
     fs.writeFileSync(
       managerConfigFile(),
@@ -202,6 +211,7 @@ describe('lane-backed cmux execution', () => {
         cmuxLaneTitles: ['L1'],
         cmuxCloseOnSuccess: closeOnSuccess,
         maxAgents: 4,
+        ...overrides,
       }),
     );
     resetConfigCache();
@@ -228,22 +238,48 @@ describe('lane-backed cmux execution', () => {
     health: 'finished' | 'blocked' | 'aborted' | 'budget-exhausted',
     taskId: string,
     events: string[],
+    opts: {
+      stuckExit?: boolean;
+      agentScreen?: string;
+      watchError?: Error;
+      interruptError?: string;
+      config?: Record<string, unknown>;
+    } = {},
   ) {
-    configureLane(true);
+    configureLane(true, false, opts.config);
     const lane = { title: 'L1', surfaceRef: 'surface:11', workspaceRef: 'workspace:7', foreground: 'shell' as const };
+    let screen = '$';
+    let pendingText = '';
     const port = createCmuxSpawnPort({
       cmuxAvailable: () => true,
       createWorkspace: () => ({ ok: false, ref: '', reason: 'must not create' }),
       ensureTaskWorktree: () => worktree(taskId),
       fleet: () => ({ ok: true, entries: [] }),
       waitForSession: async () => null,
-      watchSession: async () => ({ health, everWorked: true, turns: 1, transcriptPath: '' }),
+      watchSession: async () => {
+        if (opts.watchError) throw opts.watchError;
+        return { health, everWorked: true, turns: 1, transcriptPath: '' };
+      },
       reserveLane: async () => ({ outcome: 'reserved', lane, release: () => events.push('release') }),
       cmux: (args) => {
-        if (args[0] === 'send-key' && args.at(-1) === 'ctrl+c') events.push('interrupt');
-        if (events.includes('interrupt') && args[0] === 'send' && args.at(-1) === '/exit') events.push('exit');
-        if (events.includes('exit') && args[0] === 'send-key' && args.at(-1) === 'Enter') events.push('exit-enter');
-        return { ok: true, stdout: args[0] === 'read-screen' ? '$' : '', stderr: '' };
+        if (args[0] === 'send-key' && args.at(-1) === 'ctrl+c') {
+          events.push('interrupt');
+          if (opts.interruptError) return { ok: false, stdout: '', stderr: opts.interruptError };
+        }
+        if (args[0] === 'send') {
+          pendingText = args.at(-1) ?? '';
+          if (events.includes('interrupt') && pendingText === '/exit') events.push('exit');
+        }
+        if (args[0] === 'send-key' && args.at(-1) === 'Enter') {
+          if (pendingText === '/exit') {
+            events.push('exit-enter');
+            if (!opts.stuckExit) screen = '$';
+          } else if (pendingText) {
+            screen = opts.agentScreen ?? '❯\n────────────────────────────────────────────────────────────────────────────────';
+          }
+          pendingText = '';
+        }
+        return { ok: true, stdout: args[0] === 'read-screen' ? screen : '', stderr: '' };
       },
     });
     return port.run({
@@ -440,6 +476,175 @@ describe('lane-backed cmux execution', () => {
     const events: string[] = [];
     const result = await runLaneOutcome('finished', 'lane-finished', events);
     expect(result.exitReason).toBe('success');
+    expect(events).toEqual(['interrupt', 'exit', 'exit-enter', 'release']);
+  });
+
+  test('a codex provider verifies its one-shot process returned the lane to a shell before release', async () => {
+    const taskId = 'codex-lane-release';
+    const taskDir = path.join(HOME, `${taskId}-work`);
+    const fakeCodex = path.join(HOME, 'fake-codex-lane');
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(
+      fakeCodex,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' '${JSON.stringify({ type: 'thread.started', thread_id: 'codex-lane-thread' })}'`,
+        `printf '%s\\n' '${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } })}'`,
+      ].join('\n'),
+    );
+    fs.chmodSync(fakeCodex, 0o700);
+    configureLane(true, false, {
+      executionProvider: 'codex',
+      reviewProvider: 'opus-fresh',
+      cmuxCodexBin: fakeCodex,
+    });
+    const events: string[] = [];
+    const lane = { title: 'L1', surfaceRef: 'surface:11', workspaceRef: 'workspace:7', foreground: 'shell' as const };
+    let pendingText = '';
+    const port = createCmuxSpawnPort({
+      cmuxAvailable: () => true,
+      createWorkspace: () => ({ ok: false, ref: '', reason: 'must not create' }),
+      ensureTaskWorktree: () => ({ ...worktree(taskId), record: { ...worktree(taskId).record, dir: taskDir } }),
+      fleet: () => ({ ok: true, entries: [] }),
+      reserveLane: async () => ({ outcome: 'reserved', lane, release: () => events.push('release') }),
+      cmux: (args) => {
+        if (args[0] === 'send') pendingText = args.at(-1) ?? '';
+        if (args[0] === 'send-key' && args.at(-1) === 'Enter' && pendingText) {
+          const completed = spawnSync('/bin/zsh', ['-lc', pendingText], { cwd: taskDir, encoding: 'utf-8' });
+          expect(completed.status, completed.stderr).toBe(0);
+          events.push('codex-exited-to-shell');
+          pendingText = '';
+        }
+        if (args[0] === 'send-key' && args.at(-1) === 'ctrl+c') events.push('interrupt');
+        if (args[0] === 'read-screen') {
+          events.push('shell-verified');
+          return { ok: true, stdout: '$', stderr: '' };
+        }
+        return { ok: true, stdout: '', stderr: '' };
+      },
+    });
+
+    const result = await port.run({
+      role: 'main',
+      taskId,
+      project: 'fixture',
+      issue: 'route it',
+      scope: '/tmp/repo',
+      source: 'cli',
+      prompt: 'work',
+      modelAlias: 'sonnet',
+      maxBudgetUsd: 1,
+    });
+
+    expect(result.exitReason).toBe('success');
+    expect(events).toEqual(['codex-exited-to-shell', 'interrupt', 'shell-verified', 'release']);
+  });
+
+  test('a completed TUI that never returns to a shell reports the cleanup failure and still releases the lane', async () => {
+    const events: string[] = [];
+    const report = spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const result = await runLaneOutcome('finished', 'stuck-cleanup', events, {
+        stuckExit: true,
+        config: { cmuxStartupMs: 60_000, cmuxLaneShellReadyMs: 250 },
+      });
+      expect(result.exitReason).toBe('success');
+      expect(report).toHaveBeenCalledWith(expect.stringContaining('did not return to a shell after /exit within 250ms'));
+      expect(events).toEqual(['interrupt', 'exit', 'exit-enter', 'release']);
+    } finally {
+      report.mockRestore();
+    }
+  });
+
+  test('a lane that never reaches a shell fails loudly and releases its reservation', async () => {
+    configureLane(true, false, { cmuxStartupMs: 60_000, cmuxLaneShellReadyMs: 250 });
+    const events: string[] = [];
+    const lane = { title: 'L1', surfaceRef: 'surface:11', workspaceRef: 'workspace:7', foreground: 'agent' as const };
+    const port = createCmuxSpawnPort({
+      cmuxAvailable: () => true,
+      createWorkspace: () => ({ ok: false, ref: '', reason: 'must not create' }),
+      ensureTaskWorktree: () => worktree('stuck-lane'),
+      fleet: () => ({ ok: true, entries: [] }),
+      reserveLane: async () => ({ outcome: 'reserved', lane, release: () => events.push('release') }),
+      cmux: (args) =>
+        args[0] === 'read-screen'
+          ? { ok: true, stdout: '› Ask Codex to do anything\n\ngpt-5.6-sol high · ~/repo', stderr: '' }
+          : { ok: true, stdout: '', stderr: '' },
+    });
+
+    const result = await port.run({
+      role: 'main',
+      taskId: 'stuck-lane',
+      project: 'fixture',
+      issue: 'route it',
+      scope: '/tmp/repo',
+      source: 'cli',
+      prompt: 'work',
+      modelAlias: 'sonnet',
+      maxBudgetUsd: 1,
+    });
+
+    expect(result.exitReason).toBe('cmux_lane_launch_failed');
+    expect(result.output).toContain('did not return to a shell after /exit within 250ms');
+    expect(events).toEqual(['release']);
+  });
+
+  test('cleanup sends exit after an unrecognized agent screen instead of dropping the lane', async () => {
+    const events: string[] = [];
+    const result = await runLaneOutcome('finished', 'unknown-cleanup-screen', events, {
+      agentScreen: 'Permission required\nAllow this command?',
+      config: { cmuxLaneShellReadyMs: 50 },
+    });
+
+    expect(result.exitReason).toBe('success');
+    expect(events).toEqual(['interrupt', 'exit', 'exit-enter', 'release']);
+  });
+
+  test('cleanup failure is recorded on the task before its lane is released', async () => {
+    const task = newTaskRecord({ project: 'fixture', issue: 'record lane cleanup', source: 'cli', scope: '/tmp/repo', ceilingUsd: 1 });
+    saveTask(task);
+    const events: string[] = [];
+    const report = spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await runLaneOutcome('finished', task.id, events, {
+        stuckExit: true,
+        config: { cmuxLaneShellReadyMs: 50 },
+      });
+
+      expect(loadTask(task.id)?.report_lines).toContain(
+        'LANE CLEANUP FAILED: L1 did not return to a shell after /exit within 50ms',
+      );
+      expect(events.at(-1)).toBe('release');
+    } finally {
+      report.mockRestore();
+    }
+  });
+
+  test('interrupt failure is recorded on the task before its lane is released', async () => {
+    const task = newTaskRecord({ project: 'fixture', issue: 'record lane interrupt', source: 'cli', scope: '/tmp/repo', ceilingUsd: 1 });
+    saveTask(task);
+    const events: string[] = [];
+    const report = spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await runLaneOutcome('finished', task.id, events, { interruptError: 'cmux socket closed' });
+
+      expect(loadTask(task.id)?.report_lines).toContain(
+        'LANE CLEANUP FAILED: L1 could not be interrupted before release: cmux socket closed',
+      );
+      expect(events).toEqual(['interrupt', 'release']);
+    } finally {
+      report.mockRestore();
+    }
+  });
+
+  test('an exception after launch cleans the agent before releasing its lane', async () => {
+    const events: string[] = [];
+    await expect(
+      runLaneOutcome('finished', 'watcher-throws', events, {
+        watchError: new Error('watch failed'),
+        config: { cmuxLaneShellReadyMs: 50 },
+      }),
+    ).rejects.toThrow('watch failed');
     expect(events).toEqual(['interrupt', 'exit', 'exit-enter', 'release']);
   });
 

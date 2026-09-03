@@ -140,6 +140,7 @@ export interface ManagerConfig {
   cmuxClaudeArgs: string[];
   cmuxLaneWorkspace: string;
   cmuxLaneTitles: string[];
+  cmuxLaneShellReadyMs: number;
   /** How long a pane has to register a session and start its first turn. */
   cmuxStartupMs: number;
   cmuxRunTimeoutMs: number;
@@ -233,6 +234,7 @@ export const DEFAULT_CONFIG: ManagerConfig = {
   cmuxClaudeArgs: [],
   cmuxLaneWorkspace: '',
   cmuxLaneTitles: ['L1', 'L2', 'L3', 'L4'],
+  cmuxLaneShellReadyMs: 20_000,
   cmuxStartupMs: 3 * 60_000,
   cmuxRunTimeoutMs: 45 * 60_000,
   cliRunTimeoutMs: 45 * 60_000,
@@ -492,6 +494,7 @@ function assertManagerConfig(value: unknown): asserts value is ManagerConfig {
     'maxAttempts',
     'lockWaitTimeoutMs',
     'assertTimeoutMs',
+    'cmuxLaneShellReadyMs',
     'cmuxStartupMs',
     'cmuxRunTimeoutMs',
     'cliRunTimeoutMs',
