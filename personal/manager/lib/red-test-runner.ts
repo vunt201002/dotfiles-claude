@@ -2,7 +2,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadConfig } from '../config';
-import { runAssertGate, type AssertGateResult, type ExecFn } from './assert-runner';
+import {
+  assertLines,
+  classifyRun,
+  directExec,
+  resolveAssertPlan,
+  runAssertCommands,
+  summarizeAssertRuns,
+  tokenizeCommand,
+  type AssertCommand,
+  type AssertGateResult,
+  type AssertPlan,
+  type ExecFn,
+} from './assert-runner';
 import type { GateReport } from './verdict';
 import { gitRaw as git, linkInto, type WorktreeRecord } from './worktrees';
 
@@ -17,6 +29,7 @@ export interface RedTestInput {
 export interface RedTestBaseline {
   report: GateReport | null;
   assert: AssertGateResult | null;
+  headAssert?: AssertGateResult;
   testFiles: string[];
 }
 
@@ -114,6 +127,79 @@ function classifyTestFiles(scope: string, files: string[]): { tests: string[]; r
   return { tests, reason: '' };
 }
 
+const UNSUPPORTED_FOCUS = 'red-test cannot target changed test files';
+const UNSAFE_FOCUS = 'red-test cannot safely pass changed test path';
+
+type FocusStyle = 'append' | 'jest' | 'npm-script';
+
+function focusStyle(argv: readonly string[]): FocusStyle | null {
+  if (argv[0] === 'bun' && argv[1] === 'test') return 'append';
+  if (argv[0] === 'bun' && argv[1] === 'run' && argv[2] === 'test') return 'append';
+  if (argv[0] === 'npm' && argv[1] === 'run' && argv[2] === 'test') return 'npm-script';
+  if (argv[0] === 'npx' && argv[1] === 'jest') return 'jest';
+  if (argv[0] === 'jest') return 'jest';
+  return null;
+}
+
+function focusedTestPlan(project: string, scope: string, testFiles: string[]): AssertPlan {
+  const approved = resolveAssertPlan(project, scope, false);
+  if (approved.commands.length === 0) return approved;
+  let selected: { command: AssertCommand; style: FocusStyle } | null = null;
+  for (const command of approved.commands) {
+    if (command.kind !== 'suite') continue;
+    const parsed = tokenizeCommand(command.cmd);
+    if (parsed.error) continue;
+    const style = focusStyle(parsed.argv);
+    if (style) {
+      selected = { command, style };
+      break;
+    }
+  }
+  if (!selected) {
+    return {
+      commands: [],
+      pending: [],
+      source: approved.source,
+      reason: `${UNSUPPORTED_FOCUS} with the approved command(s): ${approved.commands.map((command) => command.cmd).join(' | ')}`,
+    };
+  }
+  const unsafe = testFiles.find(
+    (file) => path.isAbsolute(file) || file.split('/').includes('..') || !/^[A-Za-z0-9_./@+-]+$/.test(file),
+  );
+  if (unsafe) {
+    return {
+      commands: [],
+      pending: [],
+      source: approved.source,
+      reason: `${UNSAFE_FOCUS}: ${unsafe}`,
+    };
+  }
+  const separator = selected.style === 'npm-script' && !tokenizeCommand(selected.command.cmd).argv.includes('--') ? ' --' : '';
+  const exactPath = selected.style === 'jest' && !tokenizeCommand(selected.command.cmd).argv.includes('--runTestsByPath')
+    ? ' --runTestsByPath'
+    : '';
+  const command: AssertCommand = { cmd: `${selected.command.cmd}${separator}${exactPath} ${testFiles.join(' ')}`, kind: 'suite' };
+  return { commands: [command], pending: [], source: approved.source, reason: '' };
+}
+
+async function runFocusedBaselineAssert(input: RedTestInput, cwd: string, testFiles: string[]): Promise<AssertGateResult> {
+  const plan = focusedTestPlan(input.project, input.scope, testFiles);
+  const runs =
+    plan.commands.length === 0
+      ? []
+      : await runAssertCommands(plan.commands, cwd, {
+          timeoutMs: input.timeoutMs,
+          exec: input.exec ?? directExec,
+        });
+  const outcomes = runs.map(classifyRun);
+  const summary = summarizeAssertRuns(outcomes, plan);
+  const reports =
+    outcomes.length > 0
+      ? outcomes.map((outcome) => outcome.report)
+      : [{ gate: 'B8-assert', gate_family: 'deterministic' as const, verdict: summary.verdict, caught: summary.caught }];
+  return { reports, outcomes, runs, plan, summary, lines: assertLines(runs) };
+}
+
 function cleanupCheckout(repo: string, dir: string): void {
   git(['worktree', 'remove', '--force', dir], repo);
   try {
@@ -155,21 +241,23 @@ export async function runRedTestBaseline(input: RedTestInput): Promise<RedTestBa
     if (!applied.ok) {
       return { report: row('skipped', `cannot apply isolated test diff at baseSha: ${applied.stderr || 'git apply failed'}`), assert: null, testFiles: classified.tests };
     }
-    const assertion = await runAssertGate({
+    const assertion = await runFocusedBaselineAssert({
       project: input.project,
       scope: input.scope,
-      cwd: checkout,
       exec: input.exec,
       timeoutMs: input.timeoutMs,
-      persist: false,
-    });
+      record: input.record,
+    }, checkout, classified.tests);
     if (assertion.plan.commands.length === 0) {
       return { report: row('skipped', `red-test has no runnable assert command: ${assertion.plan.reason}`), assert: assertion, testFiles: classified.tests };
     }
     if (assertion.summary.oracle_fault) {
       return { report: row('skipped', `red-test baseline assert did not produce a verdict: ${assertion.summary.caught}`), assert: assertion, testFiles: classified.tests };
     }
-    return { report: null, assert: assertion, testFiles: classified.tests };
+    const headAssert = assertion.summary.verdict === 'caught'
+      ? await runFocusedBaselineAssert(input, record.dir, classified.tests)
+      : undefined;
+    return { report: null, assert: assertion, headAssert, testFiles: classified.tests };
   } finally {
     cleanupCheckout(record.repo, checkout);
     try {
@@ -191,11 +279,14 @@ export function finishRedTest(baseline: RedTestBaseline, head: AssertGateResult 
   if (baseline.assert.summary.verdict !== 'caught') {
     return row('skipped', `red-test baseline assert was not classifiable as red: ${baseline.assert.summary.caught}`);
   }
+  if (!baseline.headAssert?.summary.proven) {
+    return row('skipped', 'red-test baseline was red, but the changed test was not green at task HEAD');
+  }
   if (!head?.summary.proven) {
     return row('skipped', 'red-test baseline was red, but B8-assert was not green at task HEAD');
   }
   return row(
     'caught',
-    `manager reproduced red at baseSha with only ${baseline.testFiles.join(', ')}, then B8-assert was green at task HEAD`,
+    `manager reproduced red at baseSha including ${baseline.testFiles.join(', ')}, then the changed test and B8-assert were green at task HEAD`,
   );
 }

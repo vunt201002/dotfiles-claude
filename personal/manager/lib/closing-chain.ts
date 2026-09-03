@@ -57,7 +57,7 @@ import {
 } from './prompts';
 import { transportFailed } from './spawn';
 import { finishRedTest, runRedTestBaseline } from './red-test-runner';
-import { parseVerdictCandidates, type AgentVerdict, type GateReport } from './verdict';
+import { NO_PARSEABLE_VERDICT, parseVerdictCandidates, type AgentVerdict, type GateReport } from './verdict';
 import { liveTaskDiff, type TaskWorkdir } from './worktrees';
 
 export type ChainGate = ManagerDispatchGate;
@@ -414,6 +414,12 @@ function transportRow(gate: ChainGate, exitReason: string, output: string): Gate
   };
 }
 
+export function nonTransportExitFailure(exitReason: string, output: string, subject: string): string {
+  if (exitReason === 'success' || transportFailed(exitReason)) return '';
+  const detail = output.trim().slice(0, 200);
+  return `${subject} stopped with "${exitReason}"${detail ? ` — ${detail}` : ''}`;
+}
+
 async function runLlmGate(ctx: ChainContext, gate: ChainGate, prompt: string): Promise<ChainGateRun> {
   const blocked = browserGateBlocked(gate);
   if (blocked) {
@@ -429,6 +435,14 @@ async function runLlmGate(ctx: ChainContext, gate: ChainGate, prompt: string): P
     return { gate, reports: [report], verdict: null, assert: null, costUsd: result.costUsd, unavailable: true };
   }
   const verdict = parseVerdictCandidates(result.outputs, result.output);
+  const stopped = verdict.reason === NO_PARSEABLE_VERDICT
+    ? nonTransportExitFailure(result.exitReason, result.output, gate)
+    : '';
+  if (stopped) {
+    const report: GateReport = { gate, gate_family: 'llm', verdict: 'error', caught: stopped };
+    write(ctx, report, cost);
+    return { gate, reports: [report], verdict: null, assert: null, costUsd: result.costUsd };
+  }
   const report = { ...reportFromVerdict(gate, verdict), family: result.family };
   write(ctx, report, cost);
   return { gate, reports: [report], verdict, assert: null, costUsd: result.costUsd };

@@ -1024,6 +1024,44 @@ describe('blind sampling', () => {
 });
 
 describe('stop and stopall', () => {
+  test('a stopped task ignores an execution verdict that arrives after the stop', async () => {
+    let releaseExecute: () => void = () => undefined;
+    let markExecuteEntered: () => void = () => undefined;
+    const executeEntered = new Promise<void>((resolve) => {
+      markExecuteEntered = resolve;
+    });
+    const executeReleased = new Promise<void>((resolve) => {
+      releaseExecute = resolve;
+    });
+    const lateVerdict = verdictJson({
+      verdict: 'pass',
+      reason: 'late success',
+      root_cause: 'late verdict must not alter a stopped task',
+      assumptions: ['late assumption'],
+    });
+    const { port } = makePort(async (phase) => {
+      if (phase === 'size') return envelopeJson();
+      if (phase === 'execute') {
+        markExecuteEntered();
+        await executeReleased;
+        return lateVerdict;
+      }
+      return PASS_VERDICT;
+    });
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'stop-during-execute', source: 'cli' });
+    await executeEntered;
+    await manager.stop(taskId);
+    releaseExecute();
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('FAILED');
+    expect(task?.failure_reason).toContain('stopped by user');
+    expect(task?.root_cause).toBe('');
+    expect(task?.assumptions).not.toContain('late assumption');
+  });
+
   test('stop counts one human touch and records its kind', async () => {
     const { port } = makePort((phase) => (phase === 'size' ? envelopeJson({ needs_human: true }) : PASS_VERDICT));
     const manager = newOrchestrator(port);
@@ -1491,6 +1529,98 @@ describe('spec-check stays blind through the real driver', () => {
 });
 
 describe('bad agent output', () => {
+  test.each(['error_max_turns', 'exit_code_1'])(
+    'a complete review verdict survives a trailing %s exit reason',
+    async (exitReason) => {
+      const { port: healthy } = makePort(happyReply);
+      let reviewCalls = 0;
+      const port: SpawnPort = {
+        async run(req) {
+          const result = await healthy.run(req);
+          const phase = phaseOf(req);
+          if (phase !== 'spec-check' && phase !== 'tech-review') return result;
+          reviewCalls += 1;
+          return { ...result, exitReason };
+        },
+      };
+      const manager = newOrchestrator(port);
+      const { taskId } = await manager.submit({ project: PROJECT, issue: `${exitReason}-review-with-verdict`, source: 'cli' });
+      await manager.settle(taskId);
+
+      const task = loadTask(taskId);
+      expect(task?.state).toBe('REPORTED');
+      expect(task?.pending_action).toBe('');
+      expect(reviewCalls).toBe(2);
+    },
+  );
+
+  test.each(['error_max_turns', 'budget_exhausted'])(
+    'a complete execution verdict survives a trailing %s exit reason',
+    async (exitReason) => {
+      const { port: healthy } = makePort(happyReply, 0);
+      let executionCalls = 0;
+      const port: SpawnPort = {
+        async run(req) {
+          if (phaseOf(req) !== 'execute') return healthy.run(req);
+          executionCalls += 1;
+          return {
+            output: PASS_VERDICT,
+            outputs: [PASS_VERDICT],
+            exitReason,
+            turnsUsed: 3,
+            costUsd: 0.1,
+            costKnown: true,
+            model: req.modelAlias,
+            sessionId: `${exitReason}-complete-session`,
+            durationMs: 1,
+            worktreeCreated: false,
+          };
+        },
+      };
+      const manager = newOrchestrator(port);
+      const { taskId } = await manager.submit({ project: PROJECT, issue: `${exitReason}-with-verdict`, source: 'cli' });
+      await manager.settle(taskId);
+
+      expect(loadTask(taskId)?.state).toBe('REPORTED');
+      expect(executionCalls).toBe(1);
+    },
+  );
+
+  test.each(['never_started', 'crashed', 'error_max_turns'])(
+    'a %s run with no evidence that an agent started retries to the shared cap',
+    async (exitReason) => {
+      const { port: healthy } = makePort(happyReply, 0);
+      let executionCalls = 0;
+      const port: SpawnPort = {
+        async run(req) {
+          if (phaseOf(req) !== 'execute') return healthy.run(req);
+          executionCalls += 1;
+          return {
+            output: '',
+            outputs: [],
+            exitReason,
+            turnsUsed: 0,
+            costUsd: 0,
+            costKnown: true,
+            model: req.modelAlias,
+            sessionId: '',
+            durationMs: 1,
+            worktreeCreated: false,
+          };
+        },
+      };
+      const manager = newOrchestrator(port);
+      const { taskId } = await manager.submit({ project: PROJECT, issue: `${exitReason}-before-start`, source: 'cli' });
+      await manager.settle(taskId);
+
+      const task = loadTask(taskId);
+      expect(task?.state).toBe('BLOCKED');
+      expect(executionCalls).toBe(3);
+      expect(task?.failure_reason).toContain('retry cap 3 reached');
+      expect(task?.failure_reason).toContain(exitReason);
+    },
+  );
+
   test('a verdict before trailing chatter survives the real execute parse path', async () => {
     const { port } = makePort((phase) => {
       if (phase === 'size') return envelopeJson();
@@ -1602,6 +1732,174 @@ describe('bad agent output', () => {
     await manager.settle(taskId);
 
     expect(loadTask(taskId)?.failure_reason).toContain('execute failed: agent returned no parseable verdict block');
+  });
+
+  test('an over-budget execution without a verdict reports the budget stop and exact spend', async () => {
+    const { port: healthy } = makePort(happyReply, 0);
+    const port: SpawnPort = {
+      async run(req) {
+        if (phaseOf(req) !== 'execute') return healthy.run(req);
+        return {
+          output: 'Still investigating the failing lifecycle test.',
+          outputs: ['Still investigating the failing lifecycle test.'],
+          exitReason: 'budget_exhausted',
+          turnsUsed: 17,
+          costUsd: 10.28522,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: 'budget-stopped-session',
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'budget-stop-without-verdict', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('budget exhausted');
+    expect(task?.failure_reason).toContain('$10.29 of $10.00');
+    expect(task?.failure_reason).not.toContain('parseable verdict');
+  });
+
+  test('an aborted execution keeps the transport retry policy and reports the abort', async () => {
+    const { port: healthy } = makePort(happyReply, 0);
+    let executionCalls = 0;
+    const port: SpawnPort = {
+      async run(req) {
+        if (phaseOf(req) !== 'execute') return healthy.run(req);
+        executionCalls += 1;
+        return {
+          output: 'Stopped before the final verdict.',
+          outputs: ['Stopped before the final verdict.'],
+          exitReason: 'aborted',
+          turnsUsed: 2,
+          costUsd: 0.25,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: 'aborted-session',
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'abort-without-verdict', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(executionCalls).toBe(3);
+    expect(task?.failure_reason).toContain('retry cap 3 reached');
+    expect(task?.failure_reason).toContain('aborted');
+    expect(task?.failure_reason).not.toContain('parseable verdict');
+  });
+
+  test('a codex timeout keeps the transport retry policy and reports the timeout', async () => {
+    const { port: healthy } = makePort(happyReply, 0);
+    let executionCalls = 0;
+    const port: SpawnPort = {
+      async run(req) {
+        if (phaseOf(req) !== 'execute') return healthy.run(req);
+        executionCalls += 1;
+        return {
+          output: 'Codex runner wall clock expired.',
+          outputs: ['Codex runner wall clock expired.'],
+          exitReason: 'codex_timeout',
+          turnsUsed: 2,
+          costUsd: 0.25,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: 'codex-timeout-session',
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'codex-timeout-without-verdict', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(executionCalls).toBe(3);
+    expect(task?.failure_reason).toContain('retry cap 3 reached');
+    expect(task?.failure_reason).toContain('codex_timeout');
+    expect(task?.failure_reason).not.toContain('parseable verdict');
+  });
+
+  test('a timed-out execution without a verdict reports the timeout', async () => {
+    const { port: healthy } = makePort(happyReply, 0);
+    const port: SpawnPort = {
+      async run(req) {
+        if (phaseOf(req) !== 'execute') return healthy.run(req);
+        return {
+          output: 'Still working when the wall clock expired.',
+          outputs: ['Still working when the wall clock expired.'],
+          exitReason: 'timeout',
+          turnsUsed: 4,
+          costUsd: 0.5,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: 'timed-out-session',
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: 'timeout-without-verdict', source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(task?.failure_reason).toContain('timed out');
+    expect(task?.failure_reason).not.toContain('parseable verdict');
+  });
+
+  test.each([
+    'crashed',
+    'pane_closed',
+    'blocked_on_permission',
+    'needs_input',
+    'fleet_unreadable',
+    'never_started',
+    'exit_code_1',
+    'future_exit_reason',
+  ])('a non-transport execution stopped by %s names its own exit reason', async (exitReason) => {
+    const { port: healthy } = makePort(happyReply, 0);
+    let executionCalls = 0;
+    const output = `transport detail for ${exitReason}`;
+    const port: SpawnPort = {
+      async run(req) {
+        if (phaseOf(req) !== 'execute') return healthy.run(req);
+        executionCalls += 1;
+        return {
+          output,
+          outputs: [output],
+          exitReason,
+          turnsUsed: 2,
+          costUsd: 0.25,
+          costKnown: true,
+          model: req.modelAlias,
+          sessionId: `${exitReason}-session`,
+          durationMs: 1,
+          worktreeCreated: false,
+        };
+      },
+    };
+    const manager = newOrchestrator(port);
+    const { taskId } = await manager.submit({ project: PROJECT, issue: `${exitReason}-without-verdict`, source: 'cli' });
+    await manager.settle(taskId);
+
+    const task = loadTask(taskId);
+    expect(task?.state).toBe('BLOCKED');
+    expect(executionCalls).toBe(1);
+    expect(task?.failure_reason).toContain(exitReason);
+    expect(task?.failure_reason).toContain(output);
+    expect(task?.failure_reason).not.toContain('parseable verdict');
   });
 
   test('execute failure without a reason names the failure', async () => {

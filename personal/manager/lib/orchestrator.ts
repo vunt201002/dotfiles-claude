@@ -35,6 +35,7 @@ import {
   BROWSER_GATES,
   collectLoggedGates,
   MANAGER_OWNED_GATES,
+  nonTransportExitFailure,
   runReviewChain,
   runVerifyChain,
   VERIFY_CHAIN,
@@ -138,6 +139,15 @@ function transientRunFailure(run: SpawnResult): TransientRunFailure {
   const hasOutput = run.outputs.some((output) => output.trim() !== '');
   if (hasOutput) return null;
   return agentStarted(run) ? 'empty-output' : 'spawn';
+}
+
+function terminalRunFailureReason(phase: 'sizing' | 'execution', run: SpawnResult, task: TaskRecord): string {
+  if (run.exitReason === 'success' || transportFailed(run.exitReason)) return '';
+  if (run.exitReason === 'budget_exhausted') {
+    return `${phase} stopped: budget exhausted after spending $${task.cost_usd_actual.toFixed(2)} of $${task.cost_ceiling_usd.toFixed(2)}`;
+  }
+  if (run.exitReason === 'timeout') return `${phase} timed out before producing a result`;
+  return nonTransportExitFailure(run.exitReason, run.output, phase);
 }
 
 function transientFailureReason(
@@ -300,11 +310,13 @@ export class Orchestrator {
     if (!run) return false;
     const parsed = parseRunEnvelope(run, this.roundTwoFail.has(task.id));
     if (!parsed.ok || !parsed.envelope) {
+      const current = loadTask(task.id) ?? task;
+      const stopped = terminalRunFailureReason('sizing', run, current);
       const reason = withRejectedOutputEvidence(
-        `envelope rejected: ${parsed.errors.join('; ')}`,
-        preserveRejectedOutput(task.id, task.attempt, 'sizing-envelope', run.output),
+        stopped || `envelope rejected: ${parsed.errors.join('; ')}`,
+        preserveRejectedOutput(current.id, current.attempt, 'sizing-envelope', run.output),
       );
-      await this.terminate(task, 'BLOCKED', reason);
+      await this.terminate(current, 'BLOCKED', reason);
       return false;
     }
     const next = loadTask(task.id) ?? task;
@@ -380,6 +392,22 @@ export class Orchestrator {
     if (!run) return false;
     const verdict = parseVerdictCandidates(run.outputs, run.output);
     const current = this.absorbVerdict(loadTask(task.id) ?? task, verdict);
+    if (verdict.reason === NO_PARSEABLE_VERDICT) {
+      const stopped = terminalRunFailureReason('execution', run, current);
+      if (stopped) {
+        const recorded = withRejectedOutputEvidence(
+          stopped,
+          preserveRejectedOutput(
+            current.id,
+            current.attempt,
+            'execution-verdict',
+            rejectedOutputText(run.outputs, run.output),
+          ),
+        );
+        await this.terminate(current, 'BLOCKED', recorded);
+        return false;
+      }
+    }
 
     if (verdict.irreversible.length > 0 && await this.parkIfIrreversible(current, verdict.irreversible)) return false;
     if (verdict.verdict === 'blocked') {
@@ -722,6 +750,8 @@ export class Orchestrator {
         saveTask(current);
       }
       const run = await this.spawn(current, role, prompt(current), port);
+      const persisted = loadTask(current.id) ?? current;
+      if (isTerminal(persisted.state)) return null;
       const transient = transientRunFailure(run);
       if (!transient) return run;
       current = loadTask(current.id) ?? current;

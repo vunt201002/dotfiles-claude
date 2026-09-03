@@ -296,9 +296,63 @@ describe('manager-owned red-test leaves a row', () => {
     const report = chain.reports.find((item) => item.gate === 'red-test');
     expect(report?.verdict).toBe('caught');
     expect(report?.gate_family).toBe('deterministic');
-    expect(report?.caught).toContain('manager reproduced red at baseSha');
+    expect(report?.caught).toContain('manager reproduced red at baseSha including tests/app.test.ts');
+    expect(report?.caught).not.toContain('with only');
     expect(report?.caught).not.toContain(UNVERIFIED_MARK);
-    expect(cwds).toHaveLength(2);
+    expect(cwds).toHaveLength(3);
+    expect(applyEnsembleRule(chain.reports).outcome).toBe('clear');
+  });
+
+  test('red-test runs the changed test instead of an unrelated registered suite', async () => {
+    const record = redRepo();
+    const commands: string[] = [];
+    const exec: ExecFn = async (cmd, cwd) => {
+      commands.push(cmd);
+      if (cwd === record.dir && cmd.includes('tests/app.test.ts')) {
+        return { exitCode: 0, stdout: ' 1 pass\n 0 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false };
+      }
+      if (!cmd.includes('tests/app.test.ts')) {
+        return { exitCode: 0, stdout: GREEN, stderr: '', timedOut: false };
+      }
+      return { exitCode: 1, stdout: ' 0 pass\n 1 fail\nRan 1 test across 1 file.', stderr: 'expected 1, got 0', timedOut: false };
+    };
+    const chain = await runVerifyChain(harness(redContext(record, exec)).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('caught');
+    expect(commands[0]).toContain('tests/app.test.ts');
+    expect(commands[1]).toContain('tests/app.test.ts');
+    expect(commands[2]).toBe('bun run test');
+  });
+
+  test.each([
+    ['npm run test', 'npm run test -- tests/app.test.ts'],
+    ['npx jest --ci', 'npx jest --ci --runTestsByPath tests/app.test.ts'],
+    ['bun test --preload ./setup.ts', 'bun test --preload ./setup.ts tests/app.test.ts'],
+  ])('red-test targets changed files through %s without discarding approved arguments', async (registered, focused) => {
+    const record = redRepo();
+    fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: { path: record.repo, assert: [registered] } }));
+    approveCommands(PROJECT, [registered]);
+    const commands: string[] = [];
+    const exec: ExecFn = async (cmd, cwd) => {
+      commands.push(cmd);
+      return cwd === record.dir
+        ? { exitCode: 0, stdout: ' 1 pass\n 0 fail\nRan 1 test across 1 file.', stderr: '', timedOut: false }
+        : { exitCode: 1, stdout: ' 0 pass\n 1 fail\nRan 1 test across 1 file.', stderr: 'expected 1, got 0', timedOut: false };
+    };
+    const chain = await runVerifyChain(harness(redContext(record, exec)).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('caught');
+    expect(commands).toEqual([focused, focused, registered]);
+  });
+
+  test('a registered suite with unknown file-selection semantics skips loudly without blocking the task', async () => {
+    const record = redRepo();
+    fs.writeFileSync(projectsFile(), JSON.stringify({ [PROJECT]: { path: record.repo, assert: ['go test ./...'] } }));
+    approveCommands(PROJECT, ['go test ./...']);
+    const chain = await runVerifyChain(harness(redContext(record, redExec())).ctx);
+    const report = chain.reports.find((item) => item.gate === 'red-test');
+    expect(report?.verdict).toBe('skipped');
+    expect(report?.caught).toContain('cannot target changed test files');
     expect(applyEnsembleRule(chain.reports).outcome).toBe('clear');
   });
 
@@ -351,7 +405,7 @@ describe('manager-owned red-test leaves a row', () => {
     const chain = await runVerifyChain(harness(redContext(record, alwaysRed)).ctx);
     const report = chain.reports.find((item) => item.gate === 'red-test');
     expect(report?.verdict).toBe('skipped');
-    expect(report?.caught).toContain('B8-assert was not green');
+    expect(report?.caught).toContain('changed test was not green at task HEAD');
     expect(chain.proven).toBe(false);
   });
 
@@ -551,6 +605,39 @@ describe('what lands in the gate log', () => {
     expect(row?.caught).toContain('endpoint nobody asked for');
     expect(chain.advisories.join(' ')).toContain('naming could be better');
     expect(chain.reports.find((r) => r.gate === 'spec-check')?.caught).not.toContain('naming');
+  });
+
+  test.each([
+    'budget_exhausted',
+    'timeout',
+    'crashed',
+    'pane_closed',
+    'blocked_on_permission',
+    'needs_input',
+    'fleet_unreadable',
+    'never_started',
+    'exit_code_1',
+    'future_exit_reason',
+  ])('a gate stopped by %s preserves the transport explanation', async (exitReason) => {
+    const output = `transport detail for ${exitReason}`;
+    const { ctx } = harness({
+      envelope: envelope({ lane: 'bug-nho' }),
+      spawn: async () => ({
+        output,
+        outputs: [output],
+        costUsd: 0.05,
+        costKnown: true,
+        exitReason,
+        model: 'test',
+        family: 'test',
+      }),
+    });
+    const chain = await runReviewChain(ctx);
+    const report = chain.reports.find((row) => row.gate === 'spec-check');
+    expect(report?.verdict).toBe('error');
+    expect(report?.caught).toContain(exitReason);
+    expect(report?.caught).toContain(output);
+    expect(report?.caught).not.toContain('parseable verdict');
   });
 
   test('the gate name comes from the manager, not from the answer', () => {
