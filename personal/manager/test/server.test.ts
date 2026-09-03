@@ -179,20 +179,20 @@ describe('task routes', () => {
 
   test('POST /task without project or issue is 400', async () => {
     const { handle } = makeHandler();
-    expect((await handle(request('POST', '/task', { issue: 't1' }))).status).toBe(400);
-    expect((await handle(request('POST', '/task', { project: PROJECT }))).status).toBe(400);
+    expect((await handle(request('POST', '/task', { issue: 't1', source: 'cli' }))).status).toBe(400);
+    expect((await handle(request('POST', '/task', { project: PROJECT, source: 'cli' }))).status).toBe(400);
   });
 
   test('POST /task for an unregistered project is 400 with the reason', async () => {
     const { handle } = makeHandler();
-    const response = await handle(request('POST', '/task', { project: 'ghost', issue: 't1' }));
+    const response = await handle(request('POST', '/task', { project: 'ghost', issue: 't1', source: 'cli' }));
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain('unknown project');
   });
 
   test('GET /tasks lists what was submitted', async () => {
     const { handle, manager } = makeHandler();
-    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1' }));
+    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1', source: 'cli' }));
     const { taskId } = (await created.json()) as { taskId: string };
     await manager.settle(taskId);
 
@@ -203,7 +203,7 @@ describe('task routes', () => {
 
   test('GET /task/:id returns the record, unknown ids are 404', async () => {
     const { handle, manager } = makeHandler();
-    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1' }));
+    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1', source: 'cli' }));
     const { taskId } = (await created.json()) as { taskId: string };
     await manager.settle(taskId);
 
@@ -215,16 +215,16 @@ describe('task routes', () => {
 
   test('approve, answer and stop all work over HTTP', async () => {
     const { handle, manager } = makeHandler();
-    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1' }));
+    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1', source: 'cli' }));
     const { taskId } = (await created.json()) as { taskId: string };
     await manager.settle(taskId);
     expect(loadTask(taskId)?.state).toBe('APPROVAL');
 
-    const answered = await handle(request('POST', `/task/${taskId}/answer`, { text: 'go ahead' }));
+    const answered = await handle(request('POST', `/task/${taskId}/answer`, { text: 'go ahead', source: 'cli' }));
     expect(answered.status).toBe(200);
     expect(loadTask(taskId)?.human_touches).toBe(1);
 
-    const approved = await handle(request('POST', `/task/${taskId}/approve`, { approved: true }));
+    const approved = await handle(request('POST', `/task/${taskId}/approve`, { approved: true, source: 'cli' }));
     expect(approved.status).toBe(200);
     await manager.settle(taskId);
     expect(loadTask(taskId)?.state).toBe('REPORTED');
@@ -235,10 +235,10 @@ describe('task routes', () => {
 
   test('approve without a boolean is 400', async () => {
     const { handle, manager } = makeHandler();
-    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1' }));
+    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1', source: 'cli' }));
     const { taskId } = (await created.json()) as { taskId: string };
     await manager.settle(taskId);
-    expect((await handle(request('POST', `/task/${taskId}/approve`, { approved: 'yes' }))).status).toBe(400);
+    expect((await handle(request('POST', `/task/${taskId}/approve`, { approved: 'yes', source: 'cli' }))).status).toBe(400);
   });
 
   test('a GET on an action route is 405', async () => {
@@ -250,8 +250,8 @@ describe('task routes', () => {
 describe('stopall and cost', () => {
   test('POST /stopall reports the count', async () => {
     const { handle, manager } = makeHandler();
-    const a = await handle(request('POST', '/task', { project: PROJECT, issue: 'a' }));
-    const b = await handle(request('POST', '/task', { project: PROJECT, issue: 'b' }));
+    const a = await handle(request('POST', '/task', { project: PROJECT, issue: 'a', source: 'cli' }));
+    const b = await handle(request('POST', '/task', { project: PROJECT, issue: 'b', source: 'cli' }));
     await manager.settle(((await a.json()) as { taskId: string }).taskId);
     await manager.settle(((await b.json()) as { taskId: string }).taskId);
 
@@ -261,7 +261,7 @@ describe('stopall and cost', () => {
 
   test('GET /cost returns the three documented keys', async () => {
     const { handle, manager } = makeHandler();
-    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1' }));
+    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1', source: 'cli' }));
     await manager.settle(((await created.json()) as { taskId: string }).taskId);
 
     const response = await handle(request('GET', '/cost?window=today'));
@@ -281,7 +281,7 @@ describe('stopall and cost', () => {
 describe('brainstorm', () => {
   test('POST /prompt answers without creating a task', async () => {
     const { handle } = makeHandler();
-    const response = await handle(request('POST', '/prompt', { text: 'what should I do next' }));
+    const response = await handle(request('POST', '/prompt', { text: 'what should I do next', source: 'cli' }));
     expect(((await response.json()) as { reply: string }).reply).toContain('what should I do next');
     const tasks = (await (await handle(request('GET', '/tasks'))).json()) as unknown[];
     expect(tasks).toHaveLength(0);
@@ -289,7 +289,7 @@ describe('brainstorm', () => {
 
   test('POST /prompt without text is 400', async () => {
     const { handle } = makeHandler();
-    expect((await handle(request('POST', '/prompt', {}))).status).toBe(400);
+    expect((await handle(request('POST', '/prompt', { source: 'cli' }))).status).toBe(400);
   });
 });
 
@@ -362,19 +362,21 @@ describe('a real listener', () => {
   });
 });
 
-describe('source travels on every state-changing route', () => {
+describe('source provenance on recorded routes', () => {
   test('POST /prompt carries the caller source through to brainstorm', async () => {
     const { handle, brainstormCalls } = makeHandler();
     await handle(request('POST', '/prompt', { text: 'from the phone', source: 'telegram' }));
-    await handle(request('POST', '/prompt', { text: 'from the shell' }));
+    await handle(request('POST', '/prompt', { text: 'from the shell', source: 'cli' }));
     await handle(request('POST', '/prompt', { text: 'legacy spelling', source: 'http' }));
     expect(brainstormCalls.map((c) => c.source)).toEqual(['telegram', 'cli', 'api']);
   });
 
-  test('an unknown source falls back to cli rather than being trusted', async () => {
+  test('an absent or unknown source is rejected rather than recorded as false provenance', async () => {
     const { handle, brainstormCalls } = makeHandler();
-    await handle(request('POST', '/prompt', { text: 'x', source: 'root' }));
-    expect(brainstormCalls[0].source).toBe('cli');
+    const missing = await handle(request('POST', '/prompt', { text: 'missing' }));
+    const unknown = await handle(request('POST', '/prompt', { text: 'x', source: 'root' }));
+    expect([missing.status, unknown.status]).toEqual([400, 400]);
+    expect(brainstormCalls).toEqual([]);
   });
 
   test('POST /task records the source on the task', async () => {
@@ -387,7 +389,7 @@ describe('source travels on every state-changing route', () => {
 
   test('an answer from Telegram is marked as such in the record', async () => {
     const { handle, manager } = makeHandler();
-    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1' }));
+    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1', source: 'cli' }));
     const { taskId } = (await created.json()) as { taskId: string };
     await manager.settle(taskId);
     await handle(request('POST', `/task/${taskId}/answer`, { text: 'yes', source: 'telegram' }));
@@ -403,7 +405,7 @@ describe('GET /task/:id/diff', () => {
 
   test('a scope that is not a git work tree is 409, not a silent empty diff', async () => {
     const { handle, manager } = makeHandler();
-    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1' }));
+    const created = await handle(request('POST', '/task', { project: PROJECT, issue: 't1', source: 'cli' }));
     const { taskId } = (await created.json()) as { taskId: string };
     await manager.settle(taskId);
     const response = await handle(request('GET', `/task/${taskId}/diff`));

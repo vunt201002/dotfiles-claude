@@ -1,13 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createBot, type Bot } from './bot';
+import { createBot, OutboxCapacityWarning, type Bot } from './bot';
 import { loadConfig } from './config';
 import { Outbox } from './outbox';
 import { PendingStore } from './pending';
 import { UpdateLog } from './update-log';
-import { decodeFrame } from './manager-client';
+import { decodeFrame, ManagerClient } from './manager-client';
 import { chunkText, TelegramApi } from './telegram-api';
 
 let tmp: string;
@@ -74,17 +74,57 @@ describe('Outbox — hàng đợi outbound sống sót qua restart', () => {
     expect(Outbox.load(file).size).toBe(0);
   });
 
-  test('đếm số lần thử và giữ nguyên thứ tự FIFO', () => {
+  test('tin lỗi lui về cuối hàng mà không mất lịch sử thử', () => {
     const file = path.join(tmp, 'outbox.json');
     const outbox = Outbox.load(file);
-    const first = outbox.enqueue({ chatId: '1', kind: 'report', text: 'một' });
-    outbox.enqueue({ chatId: '1', kind: 'report', text: 'hai' });
+    const first = outbox.enqueue({ chatId: '1', kind: 'approval', text: 'một' });
+    outbox.enqueue({ chatId: '1', kind: 'approval', text: 'hai' });
     outbox.fail(first.id);
     outbox.fail(first.id);
 
     const reloaded = Outbox.load(file);
-    expect(reloaded.peek()?.attempts).toBe(2);
-    expect(reloaded.peek()?.text).toBe('một');
+    expect(reloaded.peek()?.text).toBe('hai');
+    expect(reloaded.list().map((item) => item.text)).toEqual(['hai', 'một']);
+    expect(reloaded.list().find((item) => item.id === first.id)?.attempts).toBe(2);
+  });
+
+  test('30 lần lỗi toàn hàng đợi giữ backoff 26 phút dù có 50 tin xoay vòng', async () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: '8123456789:AAH1yQxK9zL0mNoPqRsTuVwXyZabcdefghi',
+      TELEGRAM_ALLOWED_CHAT_IDS: '424242',
+      GSTACK_HOME: tmp,
+      TELEGRAM_OUTBOX_MAX: '100',
+    });
+    const bot = createBot(config, {
+      api: {
+        sendMessage: async () => {
+          throw new Error('telegram down');
+        },
+      } as unknown as TelegramApi,
+    });
+    const internal = bot as unknown as {
+      outbox: Outbox;
+      flushOnce(): Promise<void>;
+      kickFlush(delay: number): void;
+    };
+    for (let index = 0; index < 50; index += 1) {
+      internal.outbox.enqueue({ chatId: '1', kind: 'approval', text: `gật ${index}` });
+    }
+
+    const delays: number[] = [];
+    internal.kickFlush = (delay) => delays.push(delay);
+    const random = spyOn(Math, 'random').mockReturnValue(0);
+    const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      for (let index = 0; index < 30; index += 1) await internal.flushOnce();
+    } finally {
+      random.mockRestore();
+      stderr.mockRestore();
+      await bot.stop();
+    }
+
+    expect(delays.slice(0, 6)).toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 60_000]);
+    expect(delays.reduce((total, delay) => total + delay, 0)).toBe(1_562_000);
   });
 
   test('khi tràn thì bỏ report/notice trước, không bao giờ bỏ approval hay question', () => {
@@ -103,10 +143,96 @@ describe('Outbox — hàng đợi outbound sống sót qua restart', () => {
     expect(outbox.list().map((i) => i.kind)).toEqual(['approval', 'question', 'report']);
   });
 
+  test('hàng đợi toàn approval có thể vượt ngưỡng mà không làm mất tin', () => {
+    const file = path.join(tmp, 'outbox.json');
+    const outbox = Outbox.load(file, 2);
+    const evicted: string[] = [];
+    outbox.onEvict = (items) => evicted.push(...items.map((item) => item.text));
+
+    outbox.enqueue({ chatId: '1', kind: 'approval', text: 'gật một' });
+    outbox.enqueue({ chatId: '1', kind: 'approval', text: 'gật hai' });
+    outbox.enqueue({ chatId: '1', kind: 'approval', text: 'gật ba' });
+
+    expect(outbox.size).toBe(3);
+    expect(outbox.list().map((item) => item.text)).toEqual(['gật một', 'gật hai', 'gật ba']);
+    expect(evicted).toEqual([]);
+    expect(Outbox.load(file, 2).list().map((item) => item.text)).toEqual(['gật một', 'gật hai', 'gật ba']);
+  });
+
+  test('tràn ngưỡng tin được cảnh báo một lần mỗi đợt thay vì im lặng hoặc spam', () => {
+    const warning = new OutboxCapacityWarning();
+    expect(warning.update(2, 2)).toBe('');
+    expect(warning.update(3, 2)).toContain('3/2');
+    expect(warning.update(4, 2)).toBe('');
+    expect(warning.update(2, 2)).toBe('');
+    expect(warning.update(3, 2)).toContain('3/2');
+  });
+
+  test('bot cảnh báo outbox đã vượt ngưỡng ngay khi khởi động lại', async () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: '8123456789:AAH1yQxK9zL0mNoPqRsTuVwXyZabcdefghi',
+      TELEGRAM_ALLOWED_CHAT_IDS: '424242',
+      GSTACK_HOME: tmp,
+      TELEGRAM_OUTBOX_MAX: '2',
+    });
+    const outbox = Outbox.load(config.paths.outboxFile, config.outboxMaxItems);
+    for (let index = 0; index < 3; index += 1) {
+      outbox.enqueue({ chatId: '1', kind: 'approval', text: `gật ${index}` });
+    }
+    const warnings: string[] = [];
+    const stderr = spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const overflowBot = createBot(config, {
+      api: { getUpdates: async () => [] } as unknown as TelegramApi,
+      manager: {
+        events: async function* () {},
+      } as unknown as ManagerClient,
+    });
+    try {
+      overflowBot.start();
+      await overflowBot.stop();
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+
+    expect(warnings.filter((line) => line.includes('vượt ngưỡng mềm 3/2'))).toHaveLength(1);
+  });
+
   test('outbox không đọc được thì không bị coi là không có tin để gửi', () => {
     const file = path.join(tmp, 'outbox.json');
     fs.writeFileSync(file, '{ không phải json');
     expect(() => Outbox.load(file)).toThrow('cannot read Telegram outbox');
+  });
+});
+
+describe('ManagerClient source policy', () => {
+  test('client gắn source telegram vào body của mọi POST thay đổi trạng thái', async () => {
+    const portFile = path.join(tmp, 'manager-port');
+    const tokenFile = path.join(tmp, 'manager-token');
+    fs.writeFileSync(portFile, '43123');
+    fs.writeFileSync(tokenFile, 'manager-secret');
+    const calls: Array<{ pathname: string; body: unknown }> = [];
+    const client = new ManagerClient({ portFile, tokenFile }, async (input, init) => {
+      calls.push({
+        pathname: new URL(String(input)).pathname,
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json({ ok: true, stopped: 0, taskId: 't1', reply: 'ok' });
+    });
+
+    await client.createTask('project', 'issue');
+    await client.approve('t1', true);
+    await client.answer('t1', 'yes');
+    await client.stop('t1');
+    await client.stopAll();
+    await client.prompt('next');
+
+    expect(calls).toHaveLength(6);
+    expect(calls.every((call) => (call.body as { source?: string }).source === 'telegram')).toBe(true);
   });
 });
 

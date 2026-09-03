@@ -200,20 +200,20 @@ export class ManagerClient {
   }
 
   approve(taskId: string, approved: boolean): Promise<{ ok: boolean }> {
-    return this.request('POST', `/task/${encodeURIComponent(taskId)}/approve`, { approved });
+    return this.request('POST', `/task/${encodeURIComponent(taskId)}/approve`, { approved, source: 'telegram' });
   }
 
   answer(taskId: string, text: string): Promise<{ ok: boolean }> {
-    return this.request('POST', `/task/${encodeURIComponent(taskId)}/answer`, { text });
+    return this.request('POST', `/task/${encodeURIComponent(taskId)}/answer`, { text, source: 'telegram' });
   }
 
   stop(taskId: string): Promise<{ ok: boolean }> {
-    return this.request('POST', `/task/${encodeURIComponent(taskId)}/stop`, {});
+    return this.request('POST', `/task/${encodeURIComponent(taskId)}/stop`, { source: 'telegram' });
   }
 
   /** Kill switch. Short timeout on purpose: it must answer while the manager is busy. */
   stopAll(timeoutMs = 8_000): Promise<{ stopped: number }> {
-    return this.request('POST', '/stopall', {}, timeoutMs);
+    return this.request('POST', '/stopall', { source: 'telegram' }, timeoutMs);
   }
 
   cost(window: 'today' | 'all'): Promise<CostReport> {
@@ -221,7 +221,7 @@ export class ManagerClient {
   }
 
   prompt(text: string, timeoutMs = 120_000): Promise<{ reply: string }> {
-    return this.request('POST', '/prompt', { text }, timeoutMs);
+    return this.request('POST', '/prompt', { text, source: 'telegram' }, timeoutMs);
   }
 
   /** Yields decoded `/events` frames until the stream ends or the signal aborts. */

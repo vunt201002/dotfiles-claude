@@ -23,6 +23,10 @@ const EVICTABLE: ReadonlySet<OutboundKind> = new Set<OutboundKind>(['report', 'n
 /**
  * Disk-backed FIFO of messages owed to Telegram. Survives restarts so a
  * Telegram outage never strands a task waiting on an approval or a question.
+ * The size limit is soft when every queued item is protected: approvals and
+ * questions remain durable until delivery instead of being silently evicted.
+ * A failed head rotates behind its peers so one permanently bad payload cannot
+ * prevent every later protected item from being attempted.
  */
 export class Outbox {
   private items: OutboundItem[];
@@ -83,9 +87,13 @@ export class Outbox {
   }
 
   fail(id: string): void {
-    const item = this.items.find((entry) => entry.id === id);
-    if (!item) return;
+    const index = this.items.findIndex((entry) => entry.id === id);
+    if (index < 0) return;
+    const item = this.items[index]!;
     item.attempts += 1;
+    if (index === 0 && this.items.length > 1) {
+      this.items.push(...this.items.splice(0, 1));
+    }
     this.persist();
   }
 
@@ -94,8 +102,8 @@ export class Outbox {
     const evicted: OutboundItem[] = [];
     while (this.items.length > this.maxItems) {
       const index = this.items.findIndex((item) => EVICTABLE.has(item.kind));
-      const target = index >= 0 ? index : 0;
-      const [removed] = this.items.splice(target, 1);
+      if (index < 0) break;
+      const [removed] = this.items.splice(index, 1);
       if (removed) evicted.push(removed);
     }
     return evicted;

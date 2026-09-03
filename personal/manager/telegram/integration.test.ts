@@ -224,6 +224,7 @@ describe('bot <-> manager giả', () => {
 
     const call = managerCalls.find((entry) => entry.pathname === '/stopall')!;
     expect(call.method).toBe('POST');
+    expect(call.body).toEqual({ source: 'telegram' });
     await waitFor(() => sent.some((message) => message.text.includes('Đã dừng 2 task')), 'bot xác nhận stopall');
   });
 
@@ -277,7 +278,7 @@ describe('bot <-> manager giả', () => {
       'manager nhận câu trả lời',
     );
     const call = managerCalls.find((entry) => entry.pathname === '/task/kivora-t105-01/answer')!;
-    expect(call.body).toEqual({ text: 'áp cho phần regular' });
+    expect(call.body).toEqual({ text: 'áp cho phần regular', source: 'telegram' });
   });
 
   test('loại tin 3 — approval có inline keyboard, [Xem diff] và [Gật] đi đúng endpoint', async () => {
@@ -323,7 +324,7 @@ describe('bot <-> manager giả', () => {
       'manager nhận approve',
     );
     const approve = managerCalls.find((entry) => entry.pathname === '/task/kivora-t105-01/approve')!;
-    expect(approve.body).toEqual({ approved: true });
+    expect(approve.body).toEqual({ approved: true, source: 'telegram' });
 
     const beforeSecond = managerCalls.filter((call) => call.pathname === '/task/kivora-t105-01/approve').length;
     deliver({
@@ -343,7 +344,7 @@ describe('bot <-> manager giả', () => {
     deliver(textUpdate(10, OWNER, 'chia lane cho joy thế nào?'));
     await waitFor(() => managerCalls.some((call) => call.pathname === '/prompt'), 'manager nhận /prompt');
     const call = managerCalls.find((entry) => entry.pathname === '/prompt')!;
-    expect(call.body).toEqual({ text: 'chia lane cho joy thế nào?' });
+    expect(call.body).toEqual({ text: 'chia lane cho joy thế nào?', source: 'telegram' });
     await waitFor(() => sent.some((message) => message.text === 'manager đã đọc'), 'bot trả lời của manager');
   });
 

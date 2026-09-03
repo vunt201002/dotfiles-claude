@@ -2,17 +2,17 @@
  * Local HTTP API (§6.1). The Telegram bot is coded against this contract, so
  * the routes and payloads below are fixed.
  *
- *   POST /task              {project, issue, source}   -> {taskId}
+ *   POST /task              {project, issue, source required} -> {taskId}
  *   GET  /tasks                                        -> TaskRecord[]
  *   GET  /task/:id                                     -> TaskRecord
- *   POST /task/:id/approve  {approved, source}         -> {ok}
- *   POST /task/:id/answer   {text, source}              -> {ok}
+ *   POST /task/:id/approve  {approved, source required} -> {ok}
+ *   POST /task/:id/answer   {text, source required}     -> {ok}
  *   POST /task/:id/stop                                -> {ok}
  *   GET  /task/:id/diff                                -> text/plain
  *   POST /stopall                                      -> {stopped}
  *   GET  /cost?window=today|all                        -> {usd, byLane, byProject}
  *   GET  /fleet                                        -> FleetReport
- *   POST /prompt            {text, source}             -> {reply}
+ *   POST /prompt            {text, source required}    -> {reply}
  *   GET  /events            SSE                        -> report | question | approval
  *
  * Binds loopback only, never 0.0.0.0: anyone who can reach this port can start
@@ -50,16 +50,18 @@ const SOURCES: readonly TaskSource[] = ['cli', 'api', 'telegram'];
 const SERVE_IDLE_TIMEOUT_SEC = 255;
 
 /**
- * `source` travels on every state-changing route, not just POST /task.
- * A tighter policy has to key off where the request came from; keying off the
- * endpoint instead leaves free text from a phone — the widest surface there
- * is — running under the loose one. 'http' is accepted as a legacy spelling
- * of 'api'. Absent means 'cli'.
+ * `source` is required and recorded by task, prompt, approve, and answer.
+ * Stop and stopall deliberately do not claim provenance yet because the
+ * orchestrator methods they call cannot record it; their Telegram request
+ * bodies carry source, but attribution remains deferred at that boundary.
+ * 'http' is accepted as a legacy spelling of 'api'. Missing or unknown
+ * provenance is rejected instead of being recorded as a source that did not
+ * actually make the request.
  */
-function readSource(body: Record<string, unknown>): TaskSource {
+function readSource(body: Record<string, unknown>): TaskSource | null {
   const raw = typeof body.source === 'string' ? body.source : '';
   if (raw === 'http') return 'api';
-  return SOURCES.includes(raw as TaskSource) ? (raw as TaskSource) : 'cli';
+  return SOURCES.includes(raw as TaskSource) ? (raw as TaskSource) : null;
 }
 
 export function mintToken(): string {
@@ -130,6 +132,7 @@ export function buildFetchHandler(deps: HandlerDeps): (req: Request) => Promise<
       const issue = typeof body.issue === 'string' ? body.issue.trim() : '';
       const source = readSource(body);
       if (!project || !issue) return json({ error: 'project and issue are required' }, 400);
+      if (!source) return json({ error: 'source must be cli, api, telegram, or legacy http' }, 400);
       const result = await orchestrator.submit({ project, issue, source });
       if (!result.accepted) return json({ error: result.error }, 400);
       return json({ taskId: result.taskId });
@@ -156,8 +159,10 @@ export function buildFetchHandler(deps: HandlerDeps): (req: Request) => Promise<
     if (req.method === 'POST' && pathname === '/prompt') {
       const body = await readJsonBody(req);
       const text = typeof body.text === 'string' ? body.text.trim() : '';
+      const source = readSource(body);
       if (!text) return json({ error: 'text is required' }, 400);
-      const result = await brainstormFn(text, readSource(body));
+      if (!source) return json({ error: 'source must be cli, api, telegram, or legacy http' }, 400);
+      const result = await brainstormFn(text, source);
       return json({ reply: result.reply });
     }
 
@@ -190,14 +195,18 @@ export function buildFetchHandler(deps: HandlerDeps): (req: Request) => Promise<
       if (action === 'approve') {
         const body = await readJsonBody(req);
         if (typeof body.approved !== 'boolean') return json({ error: 'approved must be a boolean' }, 400);
-        const result = await orchestrator.approve(id, body.approved, readSource(body));
+        const source = readSource(body);
+        if (!source) return json({ error: 'source must be cli, api, telegram, or legacy http' }, 400);
+        const result = await orchestrator.approve(id, body.approved, source);
         return result.ok ? json({ ok: true }) : json({ ok: false, error: result.error }, 400);
       }
       if (action === 'answer') {
         const body = await readJsonBody(req);
         const text = typeof body.text === 'string' ? body.text.trim() : '';
+        const source = readSource(body);
         if (!text) return json({ error: 'text is required' }, 400);
-        const result = await orchestrator.answer(id, text, readSource(body));
+        if (!source) return json({ error: 'source must be cli, api, telegram, or legacy http' }, 400);
+        const result = await orchestrator.answer(id, text, source);
         return result.ok ? json({ ok: true }) : json({ ok: false, error: result.error }, 404);
       }
       const result = await orchestrator.stop(id);

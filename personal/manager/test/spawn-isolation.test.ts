@@ -7,8 +7,18 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-spawn-isolation-'));
 process.env.MANAGER_HOME = HOME;
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import { DEFAULT_CONFIG } from '../config';
-import { isolateSpawnRequest, type SpawnRequest } from '../lib/spawn';
+import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { runAgentSdkTest, type QueryProvider } from '../../../test/helpers/agent-sdk-runner';
+import { DEFAULT_CONFIG, SPAWN_RUNNERS } from '../config';
+import {
+  agentSdkRunOptions,
+  isolateSpawnRequest,
+  SDK_SCOPED_WRITE_TOOLS,
+  SPAWN_WRITE_FENCES,
+  sdkPermissionOptions,
+  spawnPortForRunner,
+  type SpawnRequest,
+} from '../lib/spawn';
 
 function git(args: string[], cwd: string): void {
   const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
@@ -65,6 +75,73 @@ afterAll(() => {
 });
 
 describe('production spawn isolation', () => {
+  test('SDK settings stay hermetic and Edit/Write cannot escape the task scope', async () => {
+    const scope = path.join(HOME, 'manager-sdk-scope');
+    const outside = path.join(HOME, 'manager-sdk-outside');
+    fs.mkdirSync(scope, { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, path.join(scope, 'linked-outside'));
+    const options = sdkPermissionOptions(scope);
+    const permission = options.canUseTool!;
+    const context = { signal: new AbortController().signal, toolUseID: 'scope-check' };
+
+    expect(options.settingSources).toEqual([]);
+    expect((await permission('Write', { file_path: path.join(scope, 'inside.ts') }, context)).behavior).toBe('allow');
+    expect((await permission('Edit', { file_path: '../outside.ts' }, context)).behavior).toBe('deny');
+    expect((await permission('Write', { file_path: `${scope}-sibling/file.ts` }, context)).behavior).toBe('deny');
+    expect((await permission('Write', { file_path: path.join(scope, 'linked-outside/file.ts') }, context)).behavior).toBe('deny');
+    expect((await permission('Write', {}, context)).behavior).toBe('deny');
+    expect((await permission('AskUserQuestion', { questions: [] }, context)).behavior).toBe('deny');
+    expect((await permission('Bash', { command: 'pwd' }, context)).behavior).toBe('allow');
+  });
+
+  test('production SDK wiring keeps writes available but removes their auto-allow rules', async () => {
+    const captured: Options[] = [];
+    const queryProvider: QueryProvider = (params) => {
+      if (params.options) captured.push(params.options);
+      const stream = (async function* (): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'result',
+          subtype: 'success',
+          total_cost_usd: 0,
+          num_turns: 1,
+        } as unknown as SDKMessage;
+      })();
+      return stream as ReturnType<QueryProvider>;
+    };
+    const req = request(path.join(HOME, 'sdk-wiring-scope'), 'sdk-wiring');
+
+    await runAgentSdkTest(agentSdkRunOptions(req, DEFAULT_CONFIG, queryProvider));
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.tools).toEqual(DEFAULT_CONFIG.spawn.cli.allowedTools);
+    expect(captured[0]!.allowedTools).toEqual([]);
+    expect(captured[0]!.tools).toContain('Write');
+    expect(captured[0]!.tools).not.toContain('AskUserQuestion');
+    expect(captured[0]!.allowedTools).not.toContain('Write');
+    expect(typeof captured[0]!.canUseTool).toBe('function');
+    expect(
+      DEFAULT_CONFIG.spawn.cli.allowedTools.filter(
+        (tool) => tool !== 'TodoWrite' && /edit|write|patch/i.test(tool),
+      ),
+    ).toEqual([...SDK_SCOPED_WRITE_TOOLS]);
+  });
+
+  test('every selectable spawn runner declares its write-fence status', () => {
+    expect(Object.keys(SPAWN_WRITE_FENCES).sort()).toEqual([...SPAWN_RUNNERS].sort());
+    expect(SPAWN_WRITE_FENCES).toEqual({
+      sdk: 'sdk-permission',
+      cli: 'unfenced',
+      cmux: 'pre-tool-use-hook',
+    });
+  });
+
+  test('the manager refuses to select a runner declared unfenced', () => {
+    expect(() => spawnPortForRunner('cli')).toThrow('manager spawn runner "cli" is unfenced');
+    expect(spawnPortForRunner('sdk')).toBeDefined();
+    expect(spawnPortForRunner('cmux')).toBeDefined();
+  });
+
   test('two concurrent isolateSpawnRequest calls each receive a real working node_modules tree', () => {
     const source = repo();
     const cfg = {

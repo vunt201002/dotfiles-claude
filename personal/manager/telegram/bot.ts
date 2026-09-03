@@ -40,9 +40,38 @@ import { classifyProvenance, wrapUntrusted } from './untrusted';
 
 const CALLBACK_RE = /^ap:([A-Za-z0-9_-]{1,32}):(y|n|d)$/;
 
-function backoffMs(attempt: number): number {
+function backoffMs(attempt: number, random: () => number = Math.random): number {
   const base = Math.min(1000 * 2 ** Math.max(0, attempt - 1), 60_000);
-  return base + Math.floor(Math.random() * 250);
+  return base + Math.floor(random() * 250);
+}
+
+/** Queue-wide failure streak, independent of which fair-queued item failed. */
+class FlushRetryBackoff {
+  private failures = 0;
+
+  fail(random: () => number = Math.random): number {
+    this.failures += 1;
+    return backoffMs(this.failures + 1, random);
+  }
+
+  reset(): void {
+    this.failures = 0;
+  }
+}
+
+/** Emits once per soft-cap incident and rearms after the queue recovers. */
+export class OutboxCapacityWarning {
+  private active = false;
+
+  update(size: number, maxItems: number): string {
+    if (size <= maxItems) {
+      this.active = false;
+      return '';
+    }
+    if (this.active) return '';
+    this.active = true;
+    return `hàng đợi outbound vượt ngưỡng mềm ${size}/${maxItems}; approval và question vẫn được giữ`;
+  }
 }
 
 function describeError(err: unknown): string {
@@ -64,6 +93,8 @@ export class Bot {
   private readonly pending: PendingStore;
   private readonly updateLog: UpdateLog;
   private readonly limiter: RateLimiter;
+  private readonly flushRetryBackoff = new FlushRetryBackoff();
+  private readonly outboxCapacityWarning = new OutboxCapacityWarning();
   private readonly abort = new AbortController();
   private readonly pendingSleeps = new Set<{ timer: ReturnType<typeof setTimeout>; resolve: () => void }>();
   private readonly approvalsInFlight = new Set<string>();
@@ -96,6 +127,7 @@ export class Bot {
   start(): void {
     log(`bot khởi động · allowlist ${this.config.allowedChatIds.size} chat · state ${this.config.paths.stateDir}`);
     if (this.outbox.size > 0) log(`còn ${this.outbox.size} tin chưa gửi từ lần chạy trước`);
+    this.warnIfOutboxOverCapacity();
     this.loops = [this.pollLoop(), this.eventsLoop()];
     this.kickFlush(0);
   }
@@ -148,7 +180,13 @@ export class Bot {
         ...(last && meta ? { meta } : {}),
       });
     });
+    this.warnIfOutboxOverCapacity();
     this.kickFlush(0);
+  }
+
+  private warnIfOutboxOverCapacity(): void {
+    const message = this.outboxCapacityWarning.update(this.outbox.size, this.config.outboxMaxItems);
+    if (message) warn(message);
   }
 
   private notifyOwner(text: string): void {
@@ -177,12 +215,15 @@ export class Bot {
             item.replyMarkup as InlineKeyboardMarkup | undefined,
           );
           this.outbox.resolve(item.id);
+          this.flushRetryBackoff.reset();
+          this.warnIfOutboxOverCapacity();
           this.afterSend(item, sent);
           if (this.config.sendGapMs > 0) await this.sleep(this.config.sendGapMs);
         } catch (err) {
           this.outbox.fail(item.id);
           const retryAfter = err instanceof TelegramError ? err.retryAfterSec : undefined;
-          const delay = retryAfter ? retryAfter * 1000 : backoffMs(item.attempts + 1);
+          const fallbackDelay = this.flushRetryBackoff.fail();
+          const delay = retryAfter ? retryAfter * 1000 : fallbackDelay;
           warn(`gửi Telegram thất bại (${describeError(err)}), thử lại sau ${Math.round(delay / 1000)}s`);
           this.kickFlush(delay);
           break;

@@ -12,8 +12,13 @@
  * static tripwire in test/tripwire.test.ts fails CI if that changes.
  */
 
+import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentSdkResult } from '../../../test/helpers/agent-sdk-runner';
+import type {
+  AgentSdkResult,
+  QueryProvider,
+  RunAgentSdkOptions,
+} from '../../../test/helpers/agent-sdk-runner';
 import {
   loadConfig,
   type ManagerConfig,
@@ -208,6 +213,92 @@ export function scopeDirective(req: SpawnRequest): string {
   return lines.join('\n');
 }
 
+export const SDK_SCOPED_WRITE_TOOLS = ['Edit', 'Write'] as const;
+export const SDK_UNATTENDED_DENIED_TOOLS = ['AskUserQuestion'] as const;
+
+const SDK_SCOPED_WRITE_TOOL_SET: ReadonlySet<string> = new Set(SDK_SCOPED_WRITE_TOOLS);
+const SDK_UNATTENDED_DENIED_TOOL_SET: ReadonlySet<string> = new Set(SDK_UNATTENDED_DENIED_TOOLS);
+
+/**
+ * Pins the runner's hermetic settings default and intentionally moves SDK runs
+ * from bypassPermissions to default mode so scoped writes can reach the
+ * callback. The query boundary leaves allowedTools empty so every available
+ * tool reaches this callback without the SDK's shadowed-callback warning, and
+ * removes AskUserQuestion because an unattended manager run cannot answer it.
+ *
+ * This is a path fence, not the full operator hook. It does not reproduce the
+ * hook's sensitive-file globs, Bash command tiers, or caught-event audit log.
+ */
+export function sdkPermissionOptions(
+  scope: string,
+): Pick<RunAgentSdkOptions, 'settingSources' | 'canUseTool'> {
+  const resolvedScope = path.resolve(scope);
+  const canonicalScope = canonicalPath(resolvedScope);
+  return {
+    settingSources: [],
+    canUseTool: async (toolName, input) => {
+      if (SDK_UNATTENDED_DENIED_TOOL_SET.has(toolName)) {
+        return { behavior: 'deny', message: `${toolName} has no interactive responder in a manager SDK run` };
+      }
+      if (!SDK_SCOPED_WRITE_TOOL_SET.has(toolName)) {
+        return { behavior: 'allow', updatedInput: input };
+      }
+      const filePath = typeof input.file_path === 'string' ? input.file_path : '';
+      if (!filePath) {
+        return { behavior: 'deny', message: `${toolName} requires a file_path inside ${resolvedScope}` };
+      }
+      const target = path.resolve(resolvedScope, filePath);
+      const canonicalTarget = canonicalPath(target);
+      const relative = canonicalScope && canonicalTarget ? path.relative(canonicalScope, canonicalTarget) : '..';
+      const inside =
+        relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+      return inside
+        ? { behavior: 'allow', updatedInput: input }
+        : { behavior: 'deny', message: `${toolName} outside manager scope is blocked: ${target}` };
+    },
+  };
+}
+
+function canonicalPath(candidate: string): string | null {
+  const tail: string[] = [];
+  let cursor = candidate;
+  for (;;) {
+    try {
+      return path.resolve(fs.realpathSync(cursor), ...tail);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      try {
+        fs.lstatSync(cursor);
+        return null;
+      } catch (statErr) {
+        if ((statErr as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return null;
+      tail.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+/**
+ * Leaves operational tools available to the model, removes unattended user
+ * interaction, and forces every invocation through canUseTool.
+ */
+export function sdkPermissionQuery(queryProvider: QueryProvider): QueryProvider {
+  return (params) => {
+    const tools = params.options?.tools;
+    return queryProvider({
+      ...params,
+      options: {
+        ...params.options,
+        tools: Array.isArray(tools) ? tools.filter((tool) => !SDK_UNATTENDED_DENIED_TOOL_SET.has(tool)) : tools,
+        allowedTools: [],
+      },
+    });
+  };
+}
+
 /**
  * A per-request allowlist REPLACES the source policy's; a per-request denylist
  * is added to it and can never shed one.
@@ -236,6 +327,31 @@ function childEnv(req: SpawnRequest): Record<string, string> {
     GSTACK_MANAGER_SCOPE: path.resolve(req.scope),
     GSTACK_MANAGER_SOURCE: req.source,
     GSTACK_MANAGER_ROLE: req.role,
+  };
+}
+
+export function agentSdkRunOptions(
+  req: SpawnRequest,
+  cfg: ManagerConfig,
+  queryProvider: QueryProvider,
+): RunAgentSdkOptions {
+  const policy = cfg.spawn[req.source] ?? cfg.spawn.cli;
+  const tools = toolsFor(req, policy);
+  return {
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: scopeDirective(req) },
+    userPrompt: req.prompt,
+    workingDirectory: path.resolve(req.scope),
+    model: resolveModelId(req.modelAlias),
+    maxTurns: req.maxTurns ?? cfg.maxTurns[req.role],
+    maxBudgetUsd: req.maxBudgetUsd,
+    allowedTools: tools.allowedTools,
+    disallowedTools: tools.disallowedTools,
+    env: childEnv(req),
+    requiresOperatorCredentials: true,
+    ...sdkPermissionOptions(req.scope),
+    queryProvider: sdkPermissionQuery(queryProvider),
+    testName: `${req.taskId}:${req.role}`,
+    signal: req.signal,
   };
 }
 
@@ -298,22 +414,13 @@ export const agentSdkSpawnPort: SpawnPort = {
     const isolation = isolateSpawnRequest(req, cfg);
     if (!isolation.ok) return isolationFailure(req, isolation.reason);
     req = isolation.req;
-    const policy = cfg.spawn[req.source] ?? cfg.spawn.cli;
-    const { runAgentSdkTest } = await agentSdkRunner();
-    const tools = toolsFor(req, policy);
+    const [{ runAgentSdkTest }, { query }] = await Promise.all([
+      agentSdkRunner(),
+      import('@anthropic-ai/claude-agent-sdk'),
+    ]);
     const result = await runAgentSdkTest({
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: scopeDirective(req) },
-      userPrompt: req.prompt,
-      workingDirectory: path.resolve(req.scope),
-      model: resolveModelId(req.modelAlias),
-      maxTurns: req.maxTurns ?? cfg.maxTurns[req.role],
-      maxBudgetUsd: req.maxBudgetUsd,
-      allowedTools: tools.allowedTools,
-      disallowedTools: tools.disallowedTools,
-      env: childEnv(req),
+      ...agentSdkRunOptions(req, cfg, query),
       requiresOperatorCredentials: true,
-      testName: `${req.taskId}:${req.role}`,
-      signal: req.signal,
     });
     const cost = runCost(result.costUsd, usageFromEvents(result), req.modelAlias);
     return {
@@ -331,7 +438,12 @@ export const agentSdkSpawnPort: SpawnPort = {
   },
 };
 
-/** `claude -p` subprocess path. Same contract, different transport. */
+/**
+ * `claude -p` subprocess path. This legacy runner has no mechanical path
+ * fence: it skips permissions under a hermetic config and its harness accepts
+ * only an allowlist, not source-policy denials. The SDK runner is the default;
+ * cmux independently requires the operator's PreToolUse guard.
+ */
 export const cliSpawnPort: SpawnPort = {
   async run(req) {
     const cfg = loadConfig();
@@ -491,6 +603,13 @@ export const spawnRunners: Record<string, SpawnPort> = {
   cmux: cmuxLazyPort,
 };
 
+/** Mechanical write boundary available on each selectable manager runner. */
+export const SPAWN_WRITE_FENCES: Record<SpawnRunner, 'sdk-permission' | 'pre-tool-use-hook' | 'unfenced'> = {
+  sdk: 'sdk-permission',
+  cli: 'unfenced',
+  cmux: 'pre-tool-use-hook',
+};
+
 /**
  * Env beats config so one daemon can be tried on a different runner without
  * changing what every other entry point does. An unrecognised name falls back
@@ -504,6 +623,13 @@ export function resolveSpawnRunner(): SpawnRunner {
   return SPAWN_RUNNERS.includes(fromConfig) ? fromConfig : 'sdk';
 }
 
+export function spawnPortForRunner(runner: SpawnRunner): SpawnPort {
+  if (SPAWN_WRITE_FENCES[runner] === 'unfenced') {
+    throw new Error(`manager spawn runner "${runner}" is unfenced and cannot run tasks`);
+  }
+  return spawnRunners[runner] ?? agentSdkSpawnPort;
+}
+
 export function defaultSpawnPort(): SpawnPort {
-  return spawnRunners[resolveSpawnRunner()] ?? agentSdkSpawnPort;
+  return spawnPortForRunner(resolveSpawnRunner());
 }
